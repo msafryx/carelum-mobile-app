@@ -1,16 +1,43 @@
-# Welcome to your Expo app 👋
+# Carelum - Frontend
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+A cross-platform mobile application for connecting parents with verified babysitters, built with Expo React Native.
 
-## Get started
+## 🚀 Quick Start
 
-1. Install dependencies
+### Prerequisites
+
+- Node.js (v18 or higher)
+- npm or yarn
+- Expo CLI (`npm install -g expo-cli`)
+- Firebase project (for backend services)
+
+### Setup
+
+1. **Install dependencies**
 
    ```bash
    npm install
    ```
 
-2. Start the app
+2. **Configure environment variables**
+
+   ```bash
+   cp .env.example .env
+   ```
+
+   Edit `.env` and add your Firebase credentials:
+   ```env
+   EXPO_PUBLIC_FIREBASE_API_KEY=your_api_key
+   EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN=your_auth_domain
+   EXPO_PUBLIC_FIREBASE_PROJECT_ID=your_project_id
+   EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET=your_storage_bucket
+   EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=your_sender_id
+   EXPO_PUBLIC_FIREBASE_APP_ID=your_app_id
+   ```
+
+   > ⚠️ **Important**: Never commit your `.env` file to version control!
+
+3. **Start the development server**
 
    ```bash
    npx expo start
@@ -35,16 +62,49 @@ npm run reset-project
 
 This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
 
-## Learn more
+## 📁 Project Structure
 
-To learn more about developing your project with Expo, look at the following resources:
+```
+frontend/
+├── app/                    # Expo Router screens
+│   ├── (auth)/            # Authentication screens
+│   ├── (parent)/          # Parent user screens
+│   ├── (sitter)/          # Babysitter screens
+│   └── (admin)/           # Admin screens
+├── src/
+│   ├── components/        # Reusable UI components
+│   ├── config/           # Configuration files
+│   ├── hooks/            # Custom React hooks
+│   ├── services/         # API and service layers
+│   ├── types/             # TypeScript type definitions
+│   └── utils/             # Utility functions
+└── assets/                # Images, fonts, etc.
+```
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+## 🔐 Security
 
-## Join the community
+See [SECURITY.md](./SECURITY.md) for detailed information about:
+- Environment variable setup
+- API key management
+- Best practices for handling secrets
 
-Join our community of developers creating universal apps.
+## 🛠️ Development
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+### Available Scripts
+
+- `npm start` - Start Expo development server
+- `npm run android` - Run on Android emulator/device
+- `npm run ios` - Run on iOS simulator/device
+- `npm run web` - Run in web browser
+- `npm run lint` - Run ESLint
+
+### Environment Variables
+
+All sensitive configuration is managed through environment variables. See `.env.example` for required variables.
+
+## 📚 Learn more
+
+- [Expo documentation](https://docs.expo.dev/)
+- [Expo Router](https://docs.expo.dev/router/introduction/)
+- [React Native](https://reactnative.dev/)
+- [Firebase](https://firebase.google.com/docs)
