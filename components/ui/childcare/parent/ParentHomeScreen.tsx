@@ -9,6 +9,7 @@ import {
   View,
 } from "react-native";
 import TopBar from "../../TopBar";
+import HamburgerMenu from "./HamburgerMenu";
 
 export default function ParentHomeScreen({ navigation }: any) {
   const [menuVisible, setMenuVisible] = useState(false);
@@ -18,7 +19,10 @@ export default function ParentHomeScreen({ navigation }: any) {
   };
   return (
     <View style={{ flex: 1 }}>
-      <TouchableOpacity style={styles.burgerButton} onPress={handleMenuPress}>
+      <TouchableOpacity
+        style={styles.burgerButton}
+        onPress={() => setMenuVisible(true)}
+      >
         <Ionicons name="menu" size={30} color="black" />
       </TouchableOpacity>
       <TopBar navigation={navigation} onMenuPress={() => {}} />
@@ -74,6 +78,11 @@ export default function ParentHomeScreen({ navigation }: any) {
       <TouchableOpacity style={styles.emergencyButton} onPress={() => {}}>
         <Ionicons name="call" size={26} color="#fff" />
       </TouchableOpacity>
+      <HamburgerMenu
+        visible={menuVisible}
+        onClose={() => setMenuVisible(false)}
+        navigation={navigation}
+      />
     </View>
   );
 }

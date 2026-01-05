@@ -102,7 +102,7 @@ export default function LandingScreen({ navigation }: any) {
 
         <TouchableOpacity
           style={styles.getStarted}
-          onPress={() => navigation.navigate("Home")}
+          onPress={() => navigation.navigate("Login")}
         >
           <Text style={styles.getStartedText}>Get Started</Text>
         </TouchableOpacity>

@@ -1,0 +1,63 @@
+// Error type definitions
+
+export enum ErrorCode {
+  // Network errors
+  NETWORK_ERROR = 'NETWORK_ERROR',
+  TIMEOUT_ERROR = 'TIMEOUT_ERROR',
+  CONNECTION_ERROR = 'CONNECTION_ERROR',
+  
+  // Authentication errors
+  AUTH_ERROR = 'AUTH_ERROR',
+  INVALID_EMAIL = 'INVALID_EMAIL',
+  INVALID_PASSWORD = 'INVALID_PASSWORD',
+  USER_NOT_FOUND = 'USER_NOT_FOUND',
+  EMAIL_ALREADY_EXISTS = 'EMAIL_ALREADY_EXISTS',
+  WEAK_PASSWORD = 'WEAK_PASSWORD',
+  
+  // Firestore errors
+  FIRESTORE_ERROR = 'FIRESTORE_ERROR',
+  DOCUMENT_NOT_FOUND = 'DOCUMENT_NOT_FOUND',
+  PERMISSION_DENIED = 'PERMISSION_DENIED',
+  
+  // Storage errors
+  STORAGE_ERROR = 'STORAGE_ERROR',
+  FILE_TOO_LARGE = 'FILE_TOO_LARGE',
+  INVALID_FILE_TYPE = 'INVALID_FILE_TYPE',
+  UPLOAD_FAILED = 'UPLOAD_FAILED',
+  
+  // Validation errors
+  VALIDATION_ERROR = 'VALIDATION_ERROR',
+  REQUIRED_FIELD = 'REQUIRED_FIELD',
+  INVALID_FORMAT = 'INVALID_FORMAT',
+  
+  // API errors
+  API_ERROR = 'API_ERROR',
+  SERVER_ERROR = 'SERVER_ERROR',
+  BAD_REQUEST = 'BAD_REQUEST',
+  
+  // Location errors
+  LOCATION_ERROR = 'LOCATION_ERROR',
+  LOCATION_PERMISSION_DENIED = 'LOCATION_PERMISSION_DENIED',
+  LOCATION_UNAVAILABLE = 'LOCATION_UNAVAILABLE',
+  
+  // Audio errors
+  AUDIO_ERROR = 'AUDIO_ERROR',
+  AUDIO_PERMISSION_DENIED = 'AUDIO_PERMISSION_DENIED',
+  AUDIO_RECORDING_FAILED = 'AUDIO_RECORDING_FAILED',
+  
+  // Unknown errors
+  UNKNOWN_ERROR = 'UNKNOWN_ERROR',
+}
+
+export interface AppError {
+  code: ErrorCode;
+  message: string;
+  details?: any;
+  originalError?: Error;
+}
+
+export interface ServiceResult<T = any> {
+  success: boolean;
+  data?: T;
+  error?: AppError;
+}
