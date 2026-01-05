@@ -27,10 +27,11 @@ export const VERIFICATION_STATUS = {
 export type VerificationStatus = typeof VERIFICATION_STATUS[keyof typeof VERIFICATION_STATUS];
 
 export const SESSION_STATUS = {
-  REQUESTED: 'REQUESTED',
-  ACTIVE: 'ACTIVE',
-  COMPLETED: 'COMPLETED',
-  CANCELLED: 'CANCELLED',
+  REQUESTED: 'requested',
+  ACCEPTED: 'accepted',
+  ACTIVE: 'active',
+  COMPLETED: 'completed',
+  CANCELLED: 'cancelled',
 } as const;
 
 export type SessionStatus = typeof SESSION_STATUS[keyof typeof SESSION_STATUS];

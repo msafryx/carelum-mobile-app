@@ -23,8 +23,9 @@ export interface UploadOptions {
  * Upload a file to Firebase Storage
  */
 export async function uploadFile(
-  file: Blob | Uint8Array | ArrayBuffer,
   path: string,
+  file: Blob | Uint8Array | ArrayBuffer,
+  contentType?: string,
   options: UploadOptions = {}
 ): Promise<ServiceResult<string>> {
   try {

@@ -7,7 +7,8 @@ import {
 import { auth, firestore } from '@/src/config/firebase';
 import { doc, setDoc, getDoc } from 'firebase/firestore';
 import { ServiceResult, AppError } from '@/src/types/error.types';
-import { User, UserRole, Language } from '@/src/types/user.types';
+import { User } from '@/src/types/user.types';
+import { UserRole, Language } from '@/src/config/constants';
 import { COLLECTIONS, LANGUAGES, USER_ROLES } from '@/src/config/constants';
 import {
   handleAuthError,
@@ -34,6 +35,26 @@ export interface SignInData {
  */
 export async function signUp(data: SignUpData): Promise<ServiceResult<FirebaseUser>> {
   try {
+    if (!auth) {
+      return {
+        success: false,
+        error: {
+          code: ErrorCode.AUTH_ERROR,
+          message: 'Firebase Auth is not configured',
+        },
+      };
+    }
+
+    if (!firestore) {
+      return {
+        success: false,
+        error: {
+          code: ErrorCode.AUTH_ERROR,
+          message: 'Firestore is not configured',
+        },
+      };
+    }
+
     // Create auth user
     const userCredential = await createUserWithEmailAndPassword(
       auth,
@@ -69,6 +90,16 @@ export async function signIn(
   data: SignInData
 ): Promise<ServiceResult<FirebaseUser>> {
   try {
+    if (!auth) {
+      return {
+        success: false,
+        error: {
+          code: ErrorCode.AUTH_ERROR,
+          message: 'Firebase Auth is not configured',
+        },
+      };
+    }
+
     const userCredential = await signInWithEmailAndPassword(
       auth,
       data.email,
@@ -88,6 +119,16 @@ export async function signIn(
  */
 export async function signOut(): Promise<ServiceResult<void>> {
   try {
+    if (!auth) {
+      return {
+        success: false,
+        error: {
+          code: ErrorCode.AUTH_ERROR,
+          message: 'Firebase Auth is not configured',
+        },
+      };
+    }
+
     await firebaseSignOut(auth);
     return { success: true };
   } catch (error: any) {
@@ -103,6 +144,26 @@ export async function signOut(): Promise<ServiceResult<void>> {
  */
 export async function getCurrentUserProfile(): Promise<ServiceResult<User>> {
   try {
+    if (!auth) {
+      return {
+        success: false,
+        error: {
+          code: ErrorCode.AUTH_ERROR,
+          message: 'Firebase Auth is not configured',
+        },
+      };
+    }
+
+    if (!firestore) {
+      return {
+        success: false,
+        error: {
+          code: ErrorCode.AUTH_ERROR,
+          message: 'Firestore is not configured',
+        },
+      };
+    }
+
     const currentUser = auth.currentUser;
     if (!currentUser) {
       return {
@@ -149,6 +210,26 @@ export async function updateUserProfile(
   updates: Partial<Omit<User, 'id' | 'createdAt'>>
 ): Promise<ServiceResult<void>> {
   try {
+    if (!auth) {
+      return {
+        success: false,
+        error: {
+          code: ErrorCode.AUTH_ERROR,
+          message: 'Firebase Auth is not configured',
+        },
+      };
+    }
+
+    if (!firestore) {
+      return {
+        success: false,
+        error: {
+          code: ErrorCode.AUTH_ERROR,
+          message: 'Firestore is not configured',
+        },
+      };
+    }
+
     const currentUser = auth.currentUser;
     if (!currentUser) {
       return {

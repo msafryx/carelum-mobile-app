@@ -60,6 +60,16 @@ export async function getDocument<T = DocumentData>(
   documentId: string
 ): Promise<ServiceResult<T>> {
   try {
+    if (!firestore) {
+      return {
+        success: false,
+        error: {
+          code: 'FIREBASE_NOT_CONFIGURED' as any,
+          message: 'Firestore is not configured',
+        },
+      };
+    }
+
     const docRef = doc(firestore, collectionName, documentId);
     const docSnap = await retryWithBackoff(() => getDoc(docRef));
 
@@ -91,6 +101,16 @@ export async function getCollection<T = DocumentData>(
   constraints: QueryConstraint[] = []
 ): Promise<ServiceResult<T[]>> {
   try {
+    if (!firestore) {
+      return {
+        success: false,
+        error: {
+          code: 'FIREBASE_NOT_CONFIGURED' as any,
+          message: 'Firestore is not configured',
+        },
+      };
+    }
+
     const collectionRef = collection(firestore, collectionName);
     const q = query(collectionRef, ...constraints);
     const querySnapshot = await retryWithBackoff(() => getDocs(q));

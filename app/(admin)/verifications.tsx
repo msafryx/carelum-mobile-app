@@ -11,7 +11,7 @@ export default function VerificationsScreen() {
     <View style={[styles.container, { backgroundColor: colors.background }]}>
       <Header showLogo={true} title="Verification Queue" />
       <EmptyState
-        icon="document-check-outline"
+        icon="document-outline"
         title="No Pending Verifications"
         message="All verification requests have been processed"
       />
