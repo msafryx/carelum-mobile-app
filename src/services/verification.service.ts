@@ -187,13 +187,50 @@ export async function updateVerificationStatus(
   rejectionReason?: string
 ): Promise<ServiceResult<void>> {
   try {
-    const requestRef = doc(firestore!, COLLECTION_NAME, requestId);
+    if (!firestore) {
+      return {
+        success: false,
+        error: {
+          code: 'FIREBASE_NOT_CONFIGURED',
+          message: 'Firestore is not configured',
+        },
+      };
+    }
+
+    const requestRef = doc(firestore, COLLECTION_NAME, requestId);
+    
+    // Get the request to update sitter's user profile
+    const requestSnap = await getDoc(requestRef);
+    if (!requestSnap.exists()) {
+      return {
+        success: false,
+        error: {
+          code: 'NOT_FOUND',
+          message: 'Verification request not found',
+        },
+      };
+    }
+
+    const requestData = requestSnap.data();
+    const sitterId = requestData.sitterId;
+
+    // Update verification request
     await retryWithBackoff(async () => {
       await updateDoc(requestRef, {
         status,
         reviewedBy,
         reviewedAt: Timestamp.now(),
         rejectionReason: status === 'rejected' ? rejectionReason : null,
+        updatedAt: Timestamp.now(),
+      });
+    });
+
+    // Update sitter's user profile
+    const sitterRef = doc(firestore, 'users', sitterId);
+    await retryWithBackoff(async () => {
+      await updateDoc(sitterRef, {
+        isVerified: status === 'approved',
+        verificationStatus: status === 'approved' ? 'approved' : 'rejected',
         updatedAt: Timestamp.now(),
       });
     });

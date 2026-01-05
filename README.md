@@ -81,6 +81,13 @@ frontend/
 └── assets/                # Images, fonts, etc.
 ```
 
+## 📚 Documentation
+
+- [SECURITY.md](./SECURITY.md) - Security guidelines and best practices
+- [ADMIN.md](./ADMIN.md) - Admin system guide (account creation, features, usage)
+- [DATABASE_GUIDE.md](./DATABASE_GUIDE.md) - Database architecture and usage
+- [HYBRID_ARCHITECTURE.md](./HYBRID_ARCHITECTURE.md) - Hybrid database architecture details
+
 ## 🔐 Security
 
 See [SECURITY.md](./SECURITY.md) for detailed information about:
