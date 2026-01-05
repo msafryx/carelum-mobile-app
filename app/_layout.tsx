@@ -7,6 +7,8 @@ export default function RootLayout() {
     <ThemeProvider>
       <ErrorBoundary>
         <Stack screenOptions={{ headerShown: false }}>
+          <Stack.Screen name="splash" />
+          <Stack.Screen name="landing" />
           <Stack.Screen name="(auth)" />
           <Stack.Screen name="(parent)" />
           <Stack.Screen name="(sitter)" />

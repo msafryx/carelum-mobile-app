@@ -126,7 +126,7 @@ export default function Header({
                 style={[styles.logo, { marginLeft: showBack ? 0 : 30 }]}
                 resizeMode="contain"
               />
-              <Text style={styles.logoText}>Carelum</Text>
+              <Text style={[styles.logoText, { color: colors.primaryDark }]}>Carelum</Text>
             </View>
             {title && (
               <Text style={[styles.pageTitle, { color: colors.textDark, marginTop: 12 }]}>

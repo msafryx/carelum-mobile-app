@@ -1,17 +1,14 @@
 import React, { useState } from 'react';
-import { View, StyleSheet, ScrollView, Text, TouchableOpacity } from 'react-native';
+import { View, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/src/config/theme';
 import Header from '@/src/components/ui/Header';
 import Card from '@/src/components/ui/Card';
 import EmptyState from '@/src/components/ui/EmptyState';
 import SitterHamburgerMenu from '@/src/components/ui/SitterHamburgerMenu';
-import Badge from '@/src/components/ui/Badge';
-import { useRouter } from 'expo-router';
 
-export default function SitterRequestsScreen() {
-  const { colors, spacing } = useTheme();
-  const router = useRouter();
+export default function SitterMessagesScreen() {
+  const { colors } = useTheme();
   const [menuVisible, setMenuVisible] = useState(false);
 
   return (
@@ -22,15 +19,13 @@ export default function SitterRequestsScreen() {
       >
         <Ionicons name="menu" size={30} color={colors.text} />
       </TouchableOpacity>
-      <Header showLogo={true} title="Session Requests" showBack={true} />
+      <Header showLogo={true} title="Messages" showBack={true} />
       <ScrollView contentContainerStyle={styles.content}>
         <Card>
           <EmptyState
-            icon="mail-outline"
-            title="No Requests"
-            message="You don't have any session requests at the moment. Complete your profile to start receiving requests."
-            actionLabel="Complete Profile"
-            onAction={() => router.push('/(sitter)/profile-setup')}
+            icon="chatbubble-ellipses-outline"
+            title="No messages"
+            message="Your messages with parents will appear here"
           />
         </Card>
       </ScrollView>
