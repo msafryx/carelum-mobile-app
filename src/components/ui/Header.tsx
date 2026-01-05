@@ -1,8 +1,8 @@
-import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Image } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/src/config/theme';
+import { Ionicons } from '@expo/vector-icons';
 import { useRouter, useSegments } from 'expo-router';
+import React from 'react';
+import { Image, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 interface HeaderProps {
   title?: string;
@@ -18,7 +18,7 @@ export default function Header({
   showLogo = false,
 }: HeaderProps) {
   const theme = useTheme();
-  const { colors, spacing } = theme;
+  const { colors, spacing, isDark } = theme;
   const router = useRouter();
   const segments = useSegments();
   
@@ -100,7 +100,7 @@ export default function Header({
           styles.header,
           {
             backgroundColor: colors.white,
-            paddingTop: safeSpacing.xl + 20,
+            paddingTop: safeSpacing.lg + 10,
             paddingBottom: safeSpacing.md,
             paddingHorizontal: safeSpacing.md,
             borderBottomColor: colors.border,
@@ -126,7 +126,10 @@ export default function Header({
                 style={[styles.logo, { marginLeft: showBack ? 0 : 30 }]}
                 resizeMode="contain"
               />
-              <Text style={[styles.logoText, { color: colors.primaryDark }]}>Carelum</Text>
+              <Text style={[
+                styles.logoText,
+                { color: isDark ? '#ff8c42' : colors.primaryDark }
+              ]}>Carelum</Text>
             </View>
             {title && (
               <Text style={[styles.pageTitle, { color: colors.textDark, marginTop: 12 }]}>
@@ -141,7 +144,11 @@ export default function Header({
           </Text>
         )}
       </View>
-      {rightComponent && <View style={styles.rightSection}>{rightComponent}</View>}
+      {rightComponent && (
+        <View style={[styles.rightSection, showLogo && styles.rightSectionAligned]}>
+          {rightComponent}
+        </View>
+      )}
     </View>
   );
 }
@@ -194,5 +201,11 @@ const styles = StyleSheet.create({
   rightSection: {
     marginLeft: 12,
     marginTop: 2,
+    justifyContent: 'center',
+  },
+  rightSectionAligned: {
+    marginTop: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
 });

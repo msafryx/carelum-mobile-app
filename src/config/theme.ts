@@ -33,6 +33,7 @@ export const colors = {
     success: '#51cf66',
     warning: '#ffd43b',
     info: '#74c0fc',
+    orange: '#ff8c42', // Orange color for logo in dark mode
   },
 };
 

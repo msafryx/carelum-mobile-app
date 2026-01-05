@@ -6,15 +6,15 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Redirect, useRouter } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
 import {
-    Dimensions,
-    FlatList,
-    Image,
-    ImageBackground,
-    StatusBar,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View,
+  Dimensions,
+  FlatList,
+  Image,
+  ImageBackground,
+  StatusBar,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from 'react-native';
 
 const HAS_SEEN_LANDING_KEY = '@carelum:has_seen_landing';
@@ -47,7 +47,7 @@ export default function LandingScreen() {
   const [currentIndex, setCurrentIndex] = useState(0);
   const flatListRef = useRef<FlatList>(null);
   const router = useRouter();
-  const { colors } = useTheme();
+  const { colors, isDark } = useTheme();
   const { user, userProfile, initialized, loading } = useAuth();
 
   // Set up carousel auto-scroll effect (always call, even if we return early)
@@ -104,7 +104,10 @@ export default function LandingScreen() {
           style={styles.logoImage}
           resizeMode="contain"
         />
-        <Text style={styles.logoText}>Carelum</Text>
+        <Text style={[
+          styles.logoText,
+          { color: isDark ? '#ff8c42' : '#fff' }
+        ]}>Carelum</Text>
       </View>
       <FlatList
         data={slides}
@@ -148,7 +151,7 @@ export default function LandingScreen() {
             router.replace('/(auth)/login');
           }}
         >
-          <Text style={[styles.loginText, { color: colors.darkGreen }]}>Log In</Text>
+          <Text style={[styles.loginText, { color: '#fff' }]}>Log In</Text>
         </TouchableOpacity>
       </View>
     </View>

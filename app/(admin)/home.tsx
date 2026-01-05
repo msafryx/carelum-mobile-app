@@ -1,14 +1,14 @@
-import React, { useState, useEffect } from 'react';
-import { View, StyleSheet, ScrollView, Text, TouchableOpacity } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
-import { useTheme } from '@/src/config/theme';
-import Header from '@/src/components/ui/Header';
-import Card from '@/src/components/ui/Card';
-import Button from '@/src/components/ui/Button';
 import AdminHamburgerMenu from '@/src/components/ui/AdminHamburgerMenu';
-import { useRouter } from 'expo-router';
-import { getAdminStats } from '@/src/services/admin.service';
+import Button from '@/src/components/ui/Button';
+import Card from '@/src/components/ui/Card';
+import Header from '@/src/components/ui/Header';
 import LoadingSpinner from '@/src/components/ui/LoadingSpinner';
+import { useTheme } from '@/src/config/theme';
+import { getAdminStats } from '@/src/services/admin.service';
+import { Ionicons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
+import React, { useEffect, useState } from 'react';
+import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 export default function AdminHomeScreen() {
   const { colors, spacing } = useTheme();
@@ -49,13 +49,19 @@ export default function AdminHomeScreen() {
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
-      <TouchableOpacity
-        style={styles.burgerButton}
-        onPress={() => setMenuVisible(true)}
-      >
-        <Ionicons name="menu" size={30} color={colors.text} />
-      </TouchableOpacity>
-      <Header showLogo={true} showBack={false} />
+      <Header 
+        showLogo={true} 
+        showBack={false}
+        rightComponent={
+          <TouchableOpacity
+            onPress={() => setMenuVisible(true)}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="menu" size={30} color={colors.text} />
+          </TouchableOpacity>
+        }
+      />
       {loading ? (
         <LoadingSpinner />
       ) : (
@@ -187,13 +193,6 @@ export default function AdminHomeScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-  },
-  burgerButton: {
-    position: 'absolute',
-    top: 60,
-    right: 10,
-    zIndex: 1000,
-    padding: 8,
   },
   content: {
     padding: 16,

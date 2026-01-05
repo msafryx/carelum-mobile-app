@@ -11,7 +11,7 @@ import { validateEmail } from '@/src/utils/validators';
 import { AppError } from '@/src/types/error.types';
 
 export default function LoginScreen() {
-  const { colors, spacing } = useTheme();
+  const { colors, spacing, isDark } = useTheme();
   const router = useRouter();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -64,7 +64,10 @@ export default function LoginScreen() {
             style={styles.logo}
             resizeMode="contain"
           />
-          <Text style={styles.logoText}>Carelum</Text>
+          <Text style={[
+            styles.logoText,
+            { color: isDark ? '#ff8c42' : 'rgb(86, 28, 161)' }
+          ]}>Carelum</Text>
         </View>
         <View style={styles.form}>
           <Input
