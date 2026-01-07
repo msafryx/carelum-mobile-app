@@ -3,15 +3,130 @@ import EmptyState from '@/src/components/ui/EmptyState';
 import HamburgerMenu from '@/src/components/ui/HamburgerMenu';
 import Header from '@/src/components/ui/Header';
 import { useTheme } from '@/src/config/theme';
+import { useAuth } from '@/src/hooks/useAuth';
+import { syncToLocalDB } from '@/src/services/db-sync-server.service';
+import { COLLECTIONS } from '@/src/services/firebase-collections.service';
+import { getAll, save, STORAGE_KEYS } from '@/src/services/local-storage.service';
+import { syncFromFirebase } from '@/src/services/storage-sync.service';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import React, { useState } from 'react';
-import { ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { Alert, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 
 export default function ParentHomeScreen() {
   const { colors, spacing } = useTheme();
   const router = useRouter();
+  const { user, userProfile } = useAuth();
   const [menuVisible, setMenuVisible] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+
+  // Auto-sync on screen load (only once)
+  useEffect(() => {
+    handleSync();
+  }, []);
+  
+  // Sync current user from Firebase to AsyncStorage if not already there
+  useEffect(() => {
+    if (user && userProfile) {
+      syncUserToLocal();
+    }
+  }, [user, userProfile]);
+  
+  const syncUserToLocal = async () => {
+    try {
+      if (!user || !userProfile) return;
+      
+      // Check if user already in AsyncStorage
+      const usersResult = await getAll(STORAGE_KEYS.USERS);
+      const existingUser = usersResult.data?.find((u: any) => u.id === user.uid);
+      
+      if (!existingUser) {
+        // Sync from Firebase to AsyncStorage
+        const syncResult = await syncFromFirebase(
+          COLLECTIONS.USERS,
+          user.uid,
+          STORAGE_KEYS.USERS
+        );
+        
+        if (syncResult.success) {
+          console.log('✅ User synced from Firebase to AsyncStorage');
+        } else {
+          // If sync fails, save user profile directly
+          const { id, ...profileWithoutId } = userProfile;
+          await save(STORAGE_KEYS.USERS, {
+            id: user.uid,
+            ...profileWithoutId,
+            createdAt: userProfile.createdAt instanceof Date 
+              ? userProfile.createdAt.getTime() 
+              : Date.now(),
+            updatedAt: Date.now(),
+          });
+          console.log('✅ User saved to AsyncStorage');
+        }
+      }
+    } catch (error: any) {
+      console.error('❌ Failed to sync user to local:', error.message);
+    }
+  };
+
+  const handleSync = async () => {
+    setSyncing(true);
+    try {
+      // First, check what's in AsyncStorage
+      const usersResult = await getAll(STORAGE_KEYS.USERS);
+      const usersCount = usersResult.data?.length || 0;
+      console.log(`📊 Users in AsyncStorage: ${usersCount}`);
+      
+      if (usersCount === 0) {
+        console.log('⚠️ No data in AsyncStorage. Data might be in Firebase only.');
+        console.log('💡 Tip: Make sure you\'re logged in and data syncs from Firebase to local storage.');
+      }
+      
+      // Then sync to MySQL
+      const result = await syncToLocalDB();
+      if (result.success) {
+        console.log('✅ Synced to MySQL successfully!');
+        // Don't show alert on auto-sync, only on manual sync
+      } else {
+        console.error('❌ Sync failed:', result.error?.message);
+      }
+    } catch (error: any) {
+      console.error('❌ Sync error:', error.message);
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  const handleManualSync = async () => {
+    setSyncing(true);
+    try {
+      // Check AsyncStorage first
+      const usersResult = await getAll(STORAGE_KEYS.USERS);
+      const usersCount = usersResult.data?.length || 0;
+      
+      if (usersCount === 0) {
+        Alert.alert(
+          'No Data to Sync',
+          'AsyncStorage is empty. Make sure you\'re logged in and data has synced from Firebase to local storage.',
+          [{ text: 'OK' }]
+        );
+        setSyncing(false);
+        return;
+      }
+      
+      // Sync to MySQL
+      const result = await syncToLocalDB();
+      if (result.success) {
+        Alert.alert('Success', `Synced ${usersCount} user(s) to MySQL!`);
+      } else {
+        Alert.alert('Sync Failed', result.error?.message || 'Unknown error');
+      }
+    } catch (error: any) {
+      Alert.alert('Error', error.message || 'Failed to sync');
+    } finally {
+      setSyncing(false);
+    }
+  };
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
@@ -101,6 +216,24 @@ export default function ParentHomeScreen() {
       </TouchableOpacity>
 
       <TouchableOpacity
+        style={[
+          styles.syncButton, 
+          { 
+            backgroundColor: syncing ? colors.textSecondary : colors.success,
+            opacity: syncing ? 0.7 : 1
+          }
+        ]}
+        onPress={handleManualSync}
+        disabled={syncing}
+      >
+        <Ionicons 
+          name={syncing ? "sync" : "cloud-upload-outline"} 
+          size={24} 
+          color="#fff"
+        />
+      </TouchableOpacity>
+
+      <TouchableOpacity
         style={[styles.emergencyButton, { backgroundColor: colors.emergency }]}
         onPress={() => {}}
       >
@@ -159,6 +292,21 @@ const styles = StyleSheet.create({
     width: 60,
     height: 60,
     borderRadius: 30,
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+  },
+  syncButton: {
+    position: 'absolute',
+    bottom: 100,
+    right: 20,
+    width: 50,
+    height: 50,
+    borderRadius: 25,
     alignItems: 'center',
     justifyContent: 'center',
     elevation: 4,

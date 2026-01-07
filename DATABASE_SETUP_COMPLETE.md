@@ -186,7 +186,22 @@ The server runs on `http://localhost:3001` and provides:
 
 ## Sync Data from App
 
+### Why MySQL Might Be Empty?
+
+MySQL is empty because **data sync is manual** - you need to:
+1. ✅ Start the sync server (see Step 2 above)
+2. ✅ Call `syncToLocalDB()` from your app
+3. ✅ Data will then appear in MySQL
+
+**Note**: Data must exist in AsyncStorage first. If you just registered, your user data is in Firebase. The app automatically syncs from Firebase to AsyncStorage when you log in, then you can sync to MySQL.
+
 ### In Your React Native App
+
+**Option A: Automatic Sync (Already Implemented)**
+
+The Parent Home screen automatically syncs when you open it. Just make sure you're logged in.
+
+**Option B: Manual Sync**
 
 ```typescript
 import { syncToLocalDB } from '@/src/services/db-sync-server.service';
@@ -205,6 +220,10 @@ This syncs all collections:
 - Alerts
 - Chat Messages
 - GPS Tracking
+
+**Option C: Sync Button**
+
+A green sync button is available on the Parent Home screen. Tap it to manually sync.
 
 ### Sync Server URL
 
@@ -226,6 +245,60 @@ Find your IP:
 - Linux: `hostname -I`
 - macOS: `ipconfig getifaddr en0`
 - Windows: `ipconfig`
+
+### Sync Flow
+
+```
+┌─────────────────┐
+│  React Native   │
+│      App        │
+│                 │
+│  AsyncStorage   │ ──┐
+│  (Local Data)   │   │
+└─────────────────┘   │
+                      │
+                      │ syncToLocalDB()
+                      │
+                      ▼
+┌─────────────────┐
+│  Sync Server    │
+│  localhost:3001 │
+│                 │
+│  POST /sync     │ ──┐
+└─────────────────┘   │
+                      │
+                      │ INSERT INTO
+                      │
+                      ▼
+┌─────────────────┐
+│     MySQL       │
+│ carelum_local   │
+│                 │
+│  users table   │
+│  sessions table │
+│  etc.           │
+└─────────────────┘
+```
+
+### Troubleshooting Sync
+
+**"Total synced: 0 items"**
+
+This means AsyncStorage is empty. To fix:
+1. Make sure you're logged in
+2. The app automatically syncs from Firebase to AsyncStorage when you log in
+3. Check console logs: `📊 Users in AsyncStorage: 1`
+4. Then sync to MySQL
+
+**"Connection refused" error?**
+
+- Sync server is not running
+- Start it: `cd scripts && node db-sync-server.js`
+
+**"Network request failed"?**
+
+- For mobile devices, use your computer's IP instead of `localhost`
+- Update `SYNC_SERVER_URL` in `db-sync-server.service.ts`
 
 ---
 
@@ -419,4 +492,29 @@ curl http://localhost:3001/health
 
 - **[LOCAL_DATABASE_GUIDE.md](./LOCAL_DATABASE_GUIDE.md)** - How to check AsyncStorage (local storage)
 - **[LOCAL_DB_SOLUTIONS.md](./LOCAL_DB_SOLUTIONS.md)** - Alternative solutions for database inspection
+- **[APP_FEATURES_STATUS.md](./APP_FEATURES_STATUS.md)** - Complete app features and status
 - **[README.md](./README.md)** - Project overview and quick start
+
+---
+
+## 📝 Changelog & Updates
+
+### Latest Updates
+
+1. **MySQL Database Setup**
+   - Complete SQL schema with 9 tables
+   - Fixed reserved keyword issues (`read`, `status`, `type`, `timestamp`)
+   - Added password support for MySQL connections
+   - Created automated setup scripts
+
+2. **Sync Server**
+   - Node.js sync server with async/await
+   - Column name escaping for reserved keywords
+   - Password support via environment variables
+   - Automatic sync from Firebase to AsyncStorage on login
+
+3. **Fixes Applied**
+   - SQL syntax errors (reserved keywords)
+   - Sync server callback issues (replaced with async/await)
+   - MySQL connection methods (sudo, password, no password)
+   - Auto-sync from Firebase to AsyncStorage

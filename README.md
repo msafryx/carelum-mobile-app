@@ -44,18 +44,12 @@ A cross-platform mobile application for connecting parents with verified babysit
 
 ### Essential Documentation
 
-- **[DATABASE_SETUP_COMPLETE.md](./DATABASE_SETUP_COMPLETE.md)** - Complete MySQL database setup guide (start here!)
+- **[APP_FEATURES_STATUS.md](./APP_FEATURES_STATUS.md)** - Complete app features, UI screens, and implementation status
+- **[DATABASE_SETUP_COMPLETE.md](./DATABASE_SETUP_COMPLETE.md)** - Complete MySQL database setup guide (includes sync instructions)
 - **[LOCAL_DATABASE_GUIDE.md](./LOCAL_DATABASE_GUIDE.md)** - How to check and inspect AsyncStorage (local storage)
 - **[ADMIN.md](./ADMIN.md)** - Admin system guide (account creation, features, usage)
 - **[SECURITY.md](./SECURITY.md)** - Security guidelines and best practices
-
-### Database Setup
-
-For local database inspection with MySQL:
-
-1. **Setup MySQL and Sync Server**: See [DATABASE_SETUP_COMPLETE.md](./DATABASE_SETUP_COMPLETE.md)
-2. **Check Local Storage**: See [LOCAL_DATABASE_GUIDE.md](./LOCAL_DATABASE_GUIDE.md)
-3. **Alternative Solutions**: See [LOCAL_DB_SOLUTIONS.md](./LOCAL_DB_SOLUTIONS.md)
+- **[LOCAL_DB_SOLUTIONS.md](./LOCAL_DB_SOLUTIONS.md)** - Alternative database inspection solutions
 
 ## 🗄️ Database System
 
