@@ -1,16 +1,46 @@
 /**
  * Local Database Service (SQLite)
  * Handles all local database operations
+ * Note: SQLite requires a development build, not available in Expo Go
  */
-import * as SQLite from 'expo-sqlite';
-import { ServiceResult } from '@/src/types/error.types';
+import { ErrorCode, ServiceResult } from '@/src/types/error.types';
 
-let db: SQLite.SQLiteDatabase | null = null;
+// Dynamically import SQLite to handle cases where it's not available (Expo Go)
+let SQLite: any = null;
+let db: any = null;
+let isSQLiteAvailable = false;
+
+// Try to load SQLite module
+try {
+  SQLite = require('expo-sqlite');
+  isSQLiteAvailable = true;
+} catch (error) {
+  console.warn('⚠️ expo-sqlite not available. Local database features disabled. Use a development build for full functionality.');
+  isSQLiteAvailable = false;
+}
+
+/**
+ * Check if SQLite is available
+ */
+export function isSQLiteSupported(): boolean {
+  return isSQLiteAvailable;
+}
 
 /**
  * Initialize database and create tables
  */
 export async function initDatabase(): Promise<ServiceResult<void>> {
+  // Check if SQLite is available
+  if (!isSQLiteAvailable || !SQLite) {
+    return {
+      success: false,
+      error: {
+        code: ErrorCode.DB_NOT_AVAILABLE,
+        message: 'SQLite is not available. This feature requires a development build. The app will work with Firebase only.',
+      },
+    };
+  }
+
   try {
     db = await SQLite.openDatabaseAsync('carelum.db');
     
@@ -22,10 +52,21 @@ export async function initDatabase(): Promise<ServiceResult<void>> {
     
     return { success: true };
   } catch (error: any) {
+    // Check if it's the native module error
+    if (error.message?.includes('Cannot find native module') || error.message?.includes('ExpoSQLite')) {
+      return {
+        success: false,
+        error: {
+          code: ErrorCode.DB_NOT_AVAILABLE,
+          message: 'SQLite requires a development build. Use "npx expo prebuild" or EAS Build. The app will work with Firebase only.',
+        },
+      };
+    }
+    
     return {
       success: false,
       error: {
-        code: 'DB_INIT_ERROR',
+        code: ErrorCode.DB_INIT_ERROR,
         message: `Failed to initialize database: ${error.message}`,
       },
     };
@@ -202,6 +243,16 @@ export async function insert<T extends { id: string }>(
   table: string,
   data: T
 ): Promise<ServiceResult<T>> {
+  if (!isSQLiteAvailable) {
+    return {
+      success: false,
+      error: {
+        code: ErrorCode.DB_NOT_AVAILABLE,
+        message: 'SQLite is not available. Use Firebase services instead.',
+      },
+    };
+  }
+
   try {
     if (!db) {
       const initResult = await initDatabase();
@@ -222,7 +273,7 @@ export async function insert<T extends { id: string }>(
     return {
       success: false,
       error: {
-        code: 'DB_INSERT_ERROR',
+        code: ErrorCode.DB_INSERT_ERROR,
         message: `Failed to insert into ${table}: ${error.message}`,
       },
     };
@@ -237,6 +288,16 @@ export async function select<T>(
   whereClause?: string,
   params?: any[]
 ): Promise<ServiceResult<T[]>> {
+  if (!isSQLiteAvailable) {
+    return {
+      success: false,
+      error: {
+        code: ErrorCode.DB_NOT_AVAILABLE,
+        message: 'SQLite is not available. Use Firebase services instead.',
+      },
+    };
+  }
+
   try {
     if (!db) {
       const initResult = await initDatabase();
@@ -253,7 +314,7 @@ export async function select<T>(
     return {
       success: false,
       error: {
-        code: 'DB_SELECT_ERROR',
+        code: ErrorCode.DB_SELECT_ERROR,
         message: `Failed to select from ${table}: ${error.message}`,
       },
     };
@@ -268,6 +329,16 @@ export async function update(
   id: string,
   data: Partial<any>
 ): Promise<ServiceResult<void>> {
+  if (!isSQLiteAvailable) {
+    return {
+      success: false,
+      error: {
+        code: ErrorCode.DB_NOT_AVAILABLE,
+        message: 'SQLite is not available. Use Firebase services instead.',
+      },
+    };
+  }
+
   try {
     if (!db) {
       const initResult = await initDatabase();
@@ -287,7 +358,7 @@ export async function update(
     return {
       success: false,
       error: {
-        code: 'DB_UPDATE_ERROR',
+        code: ErrorCode.DB_UPDATE_ERROR,
         message: `Failed to update ${table}: ${error.message}`,
       },
     };
@@ -301,6 +372,16 @@ export async function remove(
   table: string,
   id: string
 ): Promise<ServiceResult<void>> {
+  if (!isSQLiteAvailable) {
+    return {
+      success: false,
+      error: {
+        code: ErrorCode.DB_NOT_AVAILABLE,
+        message: 'SQLite is not available. Use Firebase services instead.',
+      },
+    };
+  }
+
   try {
     if (!db) {
       const initResult = await initDatabase();
@@ -315,7 +396,7 @@ export async function remove(
     return {
       success: false,
       error: {
-        code: 'DB_DELETE_ERROR',
+        code: ErrorCode.DB_DELETE_ERROR,
         message: `Failed to delete from ${table}: ${error.message}`,
       },
     };
@@ -326,6 +407,16 @@ export async function remove(
  * Execute raw SQL
  */
 export async function execute(sql: string, params?: any[]): Promise<ServiceResult<any>> {
+  if (!isSQLiteAvailable) {
+    return {
+      success: false,
+      error: {
+        code: ErrorCode.DB_NOT_AVAILABLE,
+        message: 'SQLite is not available. Use Firebase services instead.',
+      },
+    };
+  }
+
   try {
     if (!db) {
       const initResult = await initDatabase();
@@ -338,7 +429,7 @@ export async function execute(sql: string, params?: any[]): Promise<ServiceResul
     return {
       success: false,
       error: {
-        code: 'DB_EXECUTE_ERROR',
+        code: ErrorCode.DB_EXECUTE_ERROR,
         message: `Failed to execute SQL: ${error.message}`,
       },
     };
@@ -348,6 +439,6 @@ export async function execute(sql: string, params?: any[]): Promise<ServiceResul
 /**
  * Get database instance
  */
-export function getDatabase(): SQLite.SQLiteDatabase | null {
+export function getDatabase(): any {
   return db;
 }

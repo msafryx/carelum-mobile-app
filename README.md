@@ -21,11 +21,8 @@ A cross-platform mobile application for connecting parents with verified babysit
 
 2. **Configure environment variables**
 
-   ```bash
-   cp .env.example .env
-   ```
+   Create a `.env` file in the project root:
 
-   Edit `.env` and add your Firebase credentials:
    ```env
    EXPO_PUBLIC_FIREBASE_API_KEY=your_api_key
    EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN=your_auth_domain
@@ -40,27 +37,37 @@ A cross-platform mobile application for connecting parents with verified babysit
 3. **Start the development server**
 
    ```bash
-   npx expo start
+   npm start
    ```
 
-In the output, you'll find options to open the app in a
+## 📚 Documentation
 
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
+### Essential Documentation
 
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
+- **[DATABASE_SETUP_COMPLETE.md](./DATABASE_SETUP_COMPLETE.md)** - Complete MySQL database setup guide (start here!)
+- **[LOCAL_DATABASE_GUIDE.md](./LOCAL_DATABASE_GUIDE.md)** - How to check and inspect AsyncStorage (local storage)
+- **[ADMIN.md](./ADMIN.md)** - Admin system guide (account creation, features, usage)
+- **[SECURITY.md](./SECURITY.md)** - Security guidelines and best practices
 
-## Get a fresh project
+### Database Setup
 
-When you're ready, run:
+For local database inspection with MySQL:
 
-```bash
-npm run reset-project
-```
+1. **Setup MySQL and Sync Server**: See [DATABASE_SETUP_COMPLETE.md](./DATABASE_SETUP_COMPLETE.md)
+2. **Check Local Storage**: See [LOCAL_DATABASE_GUIDE.md](./LOCAL_DATABASE_GUIDE.md)
+3. **Alternative Solutions**: See [LOCAL_DB_SOLUTIONS.md](./LOCAL_DB_SOLUTIONS.md)
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+## 🗄️ Database System
+
+The app uses a **hybrid database architecture**:
+
+- **Local Storage (AsyncStorage)**: All data stored locally for offline support
+- **Firebase**: Real-time features (active sessions, GPS, chat, alerts)
+- **Auto-Sync**: Automatic synchronization between local and Firebase
+
+**Collections are created automatically** - no manual setup needed!
+
+See [DATABASE_SETUP_COMPLETE.md](./DATABASE_SETUP_COMPLETE.md) for complete setup instructions.
 
 ## 📁 Project Structure
 
@@ -76,24 +83,14 @@ frontend/
 │   ├── config/           # Configuration files
 │   ├── hooks/            # Custom React hooks
 │   ├── services/         # API and service layers
+│   │   ├── local-storage.service.ts    # Local storage operations
+│   │   ├── firebase-collections.service.ts  # Firebase collections
+│   │   └── storage-sync.service.ts    # Sync service
 │   ├── types/             # TypeScript type definitions
 │   └── utils/             # Utility functions
+│       └── checkLocalStorage.ts  # Local DB inspection utilities
 └── assets/                # Images, fonts, etc.
 ```
-
-## 📚 Documentation
-
-- [SECURITY.md](./SECURITY.md) - Security guidelines and best practices
-- [ADMIN.md](./ADMIN.md) - Admin system guide (account creation, features, usage)
-- [DATABASE_GUIDE.md](./DATABASE_GUIDE.md) - Database architecture and usage
-- [HYBRID_ARCHITECTURE.md](./HYBRID_ARCHITECTURE.md) - Hybrid database architecture details
-
-## 🔐 Security
-
-See [SECURITY.md](./SECURITY.md) for detailed information about:
-- Environment variable setup
-- API key management
-- Best practices for handling secrets
 
 ## 🛠️ Development
 
@@ -104,14 +101,60 @@ See [SECURITY.md](./SECURITY.md) for detailed information about:
 - `npm run ios` - Run on iOS simulator/device
 - `npm run web` - Run in web browser
 - `npm run lint` - Run ESLint
+- `npm run create-admin` - Create admin account
 
-### Environment Variables
+### Checking Local Database
 
-All sensitive configuration is managed through environment variables. See `.env.example` for required variables.
+To inspect local storage data:
 
-## 📚 Learn more
+```typescript
+import { printStorageStats, getStorageStats, inspectLocalStorage } from '@/src/utils/checkLocalStorage';
+
+// Print statistics to console
+await printStorageStats();
+
+// Get statistics object
+const stats = await getStorageStats();
+console.log(stats);
+
+// Get all data
+const allData = await inspectLocalStorage();
+console.log(allData);
+```
+
+See [LOCAL_DATABASE_GUIDE.md](./LOCAL_DATABASE_GUIDE.md) for complete guide.
+
+## 🔐 Security
+
+See [SECURITY.md](./SECURITY.md) for detailed information about:
+- Environment variable setup
+- API key management
+- Best practices for handling secrets
+
+## 📚 Learn More
 
 - [Expo documentation](https://docs.expo.dev/)
 - [Expo Router](https://docs.expo.dev/router/introduction/)
 - [React Native](https://reactnative.dev/)
 - [Firebase](https://firebase.google.com/docs)
+
+## 🆘 Troubleshooting
+
+### Database Issues
+
+- **Local storage not working**: Check [LOCAL_DATABASE_GUIDE.md](./LOCAL_DATABASE_GUIDE.md)
+- **Firebase not connecting**: Check [DATABASE_SETUP_COMPLETE.md](./DATABASE_SETUP_COMPLETE.md)
+
+### Common Issues
+
+1. **"Firebase not configured"** → Check `.env` file exists with correct credentials
+2. **"Cannot find native module"** → See [EXPO_GO_LIMITATIONS.md](./EXPO_GO_LIMITATIONS.md)
+3. **Collections not created** → They're created automatically on first use
+
+## 📝 License
+
+[Add your license here]
+
+## 👥 Contributors
+
+[Add contributors here]
