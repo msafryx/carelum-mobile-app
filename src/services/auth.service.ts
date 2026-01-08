@@ -126,7 +126,7 @@ export async function signUp(data: SignUpData): Promise<ServiceResult<any>> {
         const { data: existingProfile } = await supabase
           .from('users')
           .select('id')
-          .eq('id', authData.user.id)
+          .eq('id', authData.user!.id)
           .single();
         
         if (existingProfile) {
@@ -136,7 +136,7 @@ export async function signUp(data: SignUpData): Promise<ServiceResult<any>> {
 
         // Try to create profile (non-blocking, errors are non-critical)
         const { error: rpcError } = await supabase.rpc('create_user_profile', {
-          p_id: authData.user.id,
+          p_id: authData.user!.id,
           p_email: data.email,
           p_display_name: data.displayName,
           p_role: dbRole,
@@ -153,10 +153,10 @@ export async function signUp(data: SignUpData): Promise<ServiceResult<any>> {
 
         if (rpcError) {
           // Try upsert as fallback (non-blocking)
-          await supabase
+          Promise.resolve(supabase
             .from('users')
             .upsert({
-              id: authData.user.id,
+              id: authData.user!.id,
               email: data.email,
               display_name: data.displayName,
               role: dbRole,
@@ -169,11 +169,11 @@ export async function signUp(data: SignUpData): Promise<ServiceResult<any>> {
               verification_status: null,
               hourly_rate: null,
               bio: null,
-            }, { onConflict: 'id' })
+            }, { onConflict: 'id' }))
             .then(() => {
               console.log('✅ Profile created in Supabase (background)');
             })
-            .catch(err => {
+            .catch((err: any) => {
               // Ignore errors - profile will sync later via useRealtimeSync
               console.warn('⚠️ Background profile creation failed (non-critical):', err.message);
             });
@@ -352,12 +352,13 @@ export async function getCurrentUserProfile(): Promise<ServiceResult<User>> {
       const { getAll, STORAGE_KEYS } = await import('./local-storage.service');
       const result = await getAll(STORAGE_KEYS.USERS);
       if (result.success && result.data) {
-        const localUser = result.data.find((u: any) => u.id === user.id);
+        const localUser = result.data.find((u: any) => u.id === user.id) as any;
         if (localUser) {
           const userProfile: User = {
             ...localUser,
             createdAt: new Date(localUser.createdAt || Date.now()),
-          } as User;
+            updatedAt: localUser.updatedAt ? new Date(localUser.updatedAt) : new Date(),
+          };
           console.log('✅ User profile loaded from AsyncStorage (instant)');
           
           // Sync from Supabase in BACKGROUND (non-blocking, don't wait)
@@ -380,16 +381,16 @@ export async function getCurrentUserProfile(): Promise<ServiceResult<User>> {
       displayName: user.user_metadata?.display_name || user.email?.split('@')[0] || 'User',
       role: user.user_metadata?.role || 'parent', // Default to parent
       preferredLanguage: 'en',
-      userNumber: null,
-      phoneNumber: null,
-      profileImageUrl: null,
+      userNumber: undefined,
+      phoneNumber: undefined,
+      profileImageUrl: undefined,
       createdAt: new Date(),
       updatedAt: new Date(),
       theme: 'auto',
       isVerified: false,
-      verificationStatus: null,
-      hourlyRate: null,
-      bio: null,
+      verificationStatus: undefined,
+      hourlyRate: undefined,
+      bio: undefined,
     };
     
     // Save minimal profile to AsyncStorage (non-blocking)
@@ -398,7 +399,7 @@ export async function getCurrentUserProfile(): Promise<ServiceResult<User>> {
       save(STORAGE_KEYS.USERS, {
         ...minimalProfile,
         createdAt: minimalProfile.createdAt.getTime(),
-        updatedAt: minimalProfile.updatedAt.getTime(),
+        updatedAt: (minimalProfile.updatedAt || new Date()).getTime(),
       }).catch(() => {});
     } catch (saveError) {
       // Ignore save errors
@@ -421,16 +422,16 @@ export async function getCurrentUserProfile(): Promise<ServiceResult<User>> {
             displayName: user.user_metadata?.display_name || user.email?.split('@')[0] || 'User',
             role: user.user_metadata?.role || 'parent',
             preferredLanguage: 'en',
-            userNumber: null,
-            phoneNumber: null,
-            profileImageUrl: null,
+            userNumber: undefined,
+            phoneNumber: undefined,
+            profileImageUrl: undefined,
             createdAt: new Date(),
             updatedAt: new Date(),
             theme: 'auto',
             isVerified: false,
-            verificationStatus: null,
-            hourlyRate: null,
-            bio: null,
+            verificationStatus: undefined,
+            hourlyRate: undefined,
+            bio: undefined,
           };
           return { success: true, data: minimalProfile };
         }
@@ -467,20 +468,20 @@ async function syncProfileFromSupabase(userId: string): Promise<void> {
         role: appRole as any,
         preferredLanguage: userData.preferred_language || 'en',
         userNumber: userData.user_number,
-        phoneNumber: userData.phone_number,
-        profileImageUrl: userData.photo_url,
+        phoneNumber: userData.phone_number ?? undefined,
+        profileImageUrl: userData.photo_url ?? undefined,
         createdAt: new Date(userData.created_at),
-        updatedAt: new Date(userData.updated_at),
+        updatedAt: userData.updated_at ? new Date(userData.updated_at) : new Date(),
         theme: userData.theme || 'auto',
         isVerified: userData.is_verified || false,
-        verificationStatus: userData.verification_status,
-        hourlyRate: userData.hourly_rate,
-        bio: userData.bio,
+        verificationStatus: userData.verification_status ?? undefined,
+        hourlyRate: userData.hourly_rate ?? undefined,
+        bio: userData.bio ?? undefined,
       };
       await save(STORAGE_KEYS.USERS, {
         ...userProfile,
         createdAt: userProfile.createdAt.getTime(),
-        updatedAt: userProfile.updatedAt.getTime(),
+        updatedAt: (userProfile.updatedAt || new Date()).getTime(),
       });
       console.log('✅ Profile synced from Supabase to AsyncStorage');
     }
@@ -503,13 +504,13 @@ async function createProfileInSupabase(profile: User): Promise<void> {
       role: dbRole,
       preferred_language: profile.preferredLanguage,
       user_number: profile.userNumber,
-      phone_number: profile.phoneNumber,
-      photo_url: profile.profileImageUrl,
-      theme: profile.theme,
-      is_verified: profile.isVerified,
-      verification_status: profile.verificationStatus,
-      hourly_rate: profile.hourlyRate,
-      bio: profile.bio,
+      phone_number: profile.phoneNumber ?? null,
+      photo_url: profile.profileImageUrl ?? null,
+      theme: profile.theme ?? 'auto',
+      is_verified: profile.isVerified ?? false,
+      verification_status: profile.verificationStatus ?? null,
+      hourly_rate: profile.hourlyRate ?? null,
+      bio: profile.bio ?? null,
     });
     console.log('✅ Profile created in Supabase');
   } catch (error) {

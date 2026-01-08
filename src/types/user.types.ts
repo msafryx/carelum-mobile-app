@@ -8,10 +8,16 @@ export interface User {
   preferredLanguage: Language;
   displayName: string;
   createdAt: Date;
+  updatedAt?: Date;
   profileImageUrl?: string;
+  phoneNumber?: string | null;
+  theme?: string;
+  isVerified?: boolean;
+  verificationStatus?: string | null;
+  hourlyRate?: number | null;
+  bio?: string | null;
 }
 
 export interface UserProfile extends User {
-  phoneNumber?: string;
   address?: string;
 }
