@@ -281,3 +281,109 @@ export async function acknowledgeAlert(alertId: string): Promise<ServiceResult<v
     };
   }
 }
+
+/**
+ * Get alerts for a session
+ */
+export async function getSessionAlerts(
+  sessionId: string
+): Promise<ServiceResult<Alert[]>> {
+  try {
+    if (!isSupabaseConfigured() || !supabase) {
+      return {
+        success: false,
+        error: {
+          code: ErrorCode.DB_NOT_AVAILABLE,
+          message: 'Supabase is not configured',
+        },
+      };
+    }
+
+    const { data, error } = await supabase
+      .from('alerts')
+      .select('*')
+      .eq('session_id', sessionId)
+      .order('created_at', { ascending: false })
+      .limit(50);
+
+    if (error) {
+      return {
+        success: false,
+        error: {
+          code: ErrorCode.DB_SELECT_ERROR,
+          message: `Failed to fetch alerts: ${error.message}`,
+        },
+      };
+    }
+
+    const alerts: Alert[] = (data || []).map((row: any) => ({
+      id: row.id,
+      sessionId: row.session_id,
+      childId: row.child_id,
+      parentId: row.parent_id,
+      sitterId: row.sitter_id,
+      type: row.type,
+      severity: row.severity,
+      title: row.title,
+      message: row.message,
+      status: row.status,
+      audioLogId: row.audio_log_id,
+      location: row.location ? (typeof row.location === 'string' ? JSON.parse(row.location) : row.location) : undefined,
+      viewedAt: row.viewed_at ? new Date(row.viewed_at) : undefined,
+      acknowledgedAt: row.acknowledged_at ? new Date(row.acknowledged_at) : undefined,
+      resolvedAt: row.resolved_at ? new Date(row.resolved_at) : undefined,
+      createdAt: new Date(row.created_at),
+    }));
+
+    return { success: true, data: alerts };
+  } catch (error: any) {
+    return {
+      success: false,
+      error: handleUnexpectedError(error),
+    };
+  }
+}
+
+/**
+ * Subscribe to session alerts (real-time)
+ */
+export function subscribeToSessionAlerts(
+  sessionId: string,
+  callback: (alerts: Alert[]) => void
+): () => void {
+  if (!isSupabaseConfigured() || !supabase) {
+    console.warn('⚠️ Supabase not configured, cannot subscribe to alerts');
+    return () => {};
+  }
+
+  // Initial load
+  getSessionAlerts(sessionId).then((result) => {
+    if (result.success && result.data) {
+      callback(result.data);
+    }
+  });
+
+  const channel = supabase
+    .channel(`session-alerts-${sessionId}`)
+    .on(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        table: 'alerts',
+        filter: `session_id=eq.${sessionId}`,
+      },
+      async () => {
+        // Fetch updated alerts
+        const result = await getSessionAlerts(sessionId);
+        if (result.success && result.data) {
+          callback(result.data);
+        }
+      }
+    )
+    .subscribe();
+
+  return () => {
+    supabase.removeChannel(channel);
+  };
+}

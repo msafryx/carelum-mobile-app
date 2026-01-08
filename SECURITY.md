@@ -83,8 +83,15 @@ For production builds, use:
 
 ## Troubleshooting
 
-If Firebase isn't initializing:
+If Supabase isn't initializing:
 1. Check that `.env` file exists and has correct values
 2. Verify all `EXPO_PUBLIC_*` variables are set
 3. Restart Expo development server after changing `.env`
 4. Check console for configuration warnings
+5. For backend: Ensure `.env` is in `backend/` directory and server is restarted
+
+If REST API authentication fails:
+1. Verify Supabase JWT token is valid
+2. Check that token is included in `Authorization: Bearer <token>` header
+3. Verify backend `.env` has correct Supabase credentials
+4. Check server logs for authentication errors

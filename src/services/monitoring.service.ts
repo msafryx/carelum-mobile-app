@@ -258,3 +258,42 @@ export async function getSessionGPSTracking(
     };
   }
 }
+
+/**
+ * Subscribe to GPS updates for a session (real-time)
+ */
+export function subscribeToGPSUpdates(
+  sessionId: string,
+  callback: (location: { latitude: number; longitude: number; timestamp: Date; accuracy?: number }) => void
+): () => void {
+  if (!isSupabaseConfigured() || !supabase) {
+    console.warn('⚠️ Supabase not configured, cannot subscribe to GPS updates');
+    return () => {};
+  }
+
+  const channel = supabase
+    .channel(`gps-tracking-${sessionId}`)
+    .on(
+      'postgres_changes',
+      {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'gps_tracking',
+        filter: `session_id=eq.${sessionId}`,
+      },
+      (payload: any) => {
+        const newLocation = payload.new;
+        callback({
+          latitude: newLocation.latitude,
+          longitude: newLocation.longitude,
+          timestamp: new Date(newLocation.created_at),
+          accuracy: newLocation.accuracy || undefined,
+        });
+      }
+    )
+    .subscribe();
+
+  return () => {
+    supabase.removeChannel(channel);
+  };
+}

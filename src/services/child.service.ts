@@ -110,6 +110,82 @@ export async function getParentChildren(
 }
 
 /**
+ * Get child by ID
+ */
+export async function getChildById(childId: string): Promise<ServiceResult<Child>> {
+  try {
+    // Try AsyncStorage first
+    try {
+      const { getById, STORAGE_KEYS } = await import('./local-storage.service');
+      const result = await getById<Child>(STORAGE_KEYS.CHILDREN, childId);
+      if (result.success && result.data) {
+        const child = result.data;
+        return {
+          success: true,
+          data: {
+            ...child,
+            createdAt: new Date(child.createdAt as any),
+            updatedAt: new Date(child.updatedAt as any),
+            dateOfBirth: child.dateOfBirth ? new Date(child.dateOfBirth as any) : undefined,
+          },
+        };
+      }
+    } catch (localError: any) {
+      console.warn('⚠️ Failed to load from AsyncStorage:', localError.message);
+    }
+
+    // Fallback to Supabase
+    if (!isSupabaseConfigured() || !supabase) {
+      return {
+        success: false,
+        error: {
+          code: ErrorCode.DB_NOT_AVAILABLE,
+          message: 'Supabase is not configured',
+        },
+      };
+    }
+
+    const { data, error } = await supabase
+      .from('children')
+      .select('*')
+      .eq('id', childId)
+      .single();
+
+    if (error || !data) {
+      return {
+        success: false,
+        error: {
+          code: ErrorCode.DOCUMENT_NOT_FOUND,
+          message: 'Child not found',
+        },
+      };
+    }
+
+    const child: Child = {
+      id: data.id,
+      parentId: data.parent_id,
+      name: data.name,
+      age: data.age,
+      dateOfBirth: data.date_of_birth ? new Date(data.date_of_birth) : undefined,
+      gender: data.gender,
+      photoUrl: data.photo_url,
+      childNumber: data.child_number,
+      parentNumber: data.parent_number,
+      sitterNumber: data.sitter_number,
+      createdAt: new Date(data.created_at),
+      updatedAt: new Date(data.updated_at),
+    };
+
+    return { success: true, data: child };
+  } catch (error: any) {
+    return {
+      success: false,
+      error: handleUnexpectedError(error),
+    };
+  }
+}
+
+/**
  * Create or update a child profile
  */
 export async function saveChild(child: Child): Promise<ServiceResult<Child>> {
