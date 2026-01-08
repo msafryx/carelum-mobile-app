@@ -65,6 +65,11 @@ export const API_ENDPOINTS = {
   PREDICT: '/predict',
   BOT_UPDATE: '/bot/update',
   BOT_ASK: '/bot/ask',
+  // User endpoints
+  USER_PROFILE: '/api/users/me',
+  // Admin endpoints
+  ADMIN_USERS: '/api/admin/users',
+  ADMIN_STATS: '/api/admin/stats',
 } as const;
 
 // Audio monitoring constants

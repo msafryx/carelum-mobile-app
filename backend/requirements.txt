@@ -4,6 +4,9 @@ python-multipart==0.0.6
 pydantic==2.5.0
 firebase-admin==6.2.0
 python-dotenv==1.0.0
+supabase==2.3.0
+pyjwt==2.8.0
+httpx>=0.24.0,<0.25.0
 
 # Audio processing (uncomment when implementing)
 # librosa==0.10.1
