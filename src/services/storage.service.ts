@@ -1,11 +1,10 @@
-import { ref, uploadBytesResumable, getDownloadURL, deleteObject } from 'firebase/storage';
-import { storage } from '@/src/config/firebase';
-import { ServiceResult, AppError } from '@/src/types/error.types';
-import {
-  handleStorageError,
-  handleUnexpectedError,
-} from '@/src/utils/errorHandler';
-import { ErrorCode } from '@/src/types/error.types';
+/**
+ * Storage Service - Supabase Storage
+ * Handles file uploads and deletions
+ */
+import { isSupabaseConfigured, supabase } from '@/src/config/supabase';
+import { ErrorCode, ServiceResult } from '@/src/types/error.types';
+import { handleUnexpectedError } from '@/src/utils/errorHandler';
 
 export interface UploadProgress {
   bytesTransferred: number;
@@ -20,7 +19,7 @@ export interface UploadOptions {
 }
 
 /**
- * Upload a file to Firebase Storage
+ * Upload a file to Supabase Storage
  */
 export async function uploadFile(
   path: string,
@@ -29,6 +28,16 @@ export async function uploadFile(
   options: UploadOptions = {}
 ): Promise<ServiceResult<string>> {
   try {
+    if (!isSupabaseConfigured() || !supabase) {
+      return {
+        success: false,
+        error: {
+          code: ErrorCode.STORAGE_ERROR,
+          message: 'Supabase is not configured',
+        },
+      };
+    }
+
     // Validate file size
     if (options.maxSize && file instanceof Blob && file.size > options.maxSize) {
       return {
@@ -40,75 +49,165 @@ export async function uploadFile(
       };
     }
 
-    const storageRef = ref(storage, path);
-    const uploadTask = uploadBytesResumable(storageRef, file);
+    // Determine bucket from path
+    let bucket = 'profile-images';
+    if (path.startsWith('childImages/')) {
+      bucket = 'child-images';
+    } else if (path.startsWith('chat-attachments/')) {
+      bucket = 'chat-attachments';
+    } else if (path.startsWith('verification-documents/')) {
+      bucket = 'verification-documents';
+    }
 
-    return new Promise((resolve) => {
-      uploadTask.on(
-        'state_changed',
-        (snapshot) => {
-          const progress = {
-            bytesTransferred: snapshot.bytesTransferred,
-            totalBytes: snapshot.totalBytes,
-            progress: snapshot.bytesTransferred / snapshot.totalBytes,
-          };
-          options.onProgress?.(progress);
+    // Extract file path (remove bucket prefix)
+    const filePath = path.replace(/^(profile-images|child-images|chat-attachments|verification-documents)\//, '');
+
+    console.log(`📤 Uploading to bucket: ${bucket}, path: ${filePath}`);
+
+    // Upload file
+    const { data, error } = await supabase.storage
+      .from(bucket)
+      .upload(filePath, file, {
+        contentType: contentType || 'image/jpeg',
+        upsert: true, // Overwrite if exists
+      });
+
+    if (error) {
+      console.error('❌ Upload failed:', error);
+      return {
+        success: false,
+        error: {
+          code: ErrorCode.UPLOAD_FAILED,
+          message: `Failed to upload file: ${error.message}`,
         },
-        (error) => {
-          resolve({
-            success: false,
-            error: handleStorageError(error),
-          });
+      };
+    }
+
+    // Get public URL
+    const { data: urlData } = supabase.storage
+      .from(bucket)
+      .getPublicUrl(filePath);
+
+    if (!urlData?.publicUrl) {
+      return {
+        success: false,
+        error: {
+          code: ErrorCode.STORAGE_ERROR,
+          message: 'Failed to get file URL',
         },
-        async () => {
-          try {
-            const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
-            resolve({ success: true, data: downloadURL });
-          } catch (error: any) {
-            resolve({
-              success: false,
-              error: handleUnexpectedError(error),
-            });
-          }
-        }
-      );
-    });
+      };
+    }
+
+    console.log('✅ File uploaded successfully:', urlData.publicUrl);
+    return { success: true, data: urlData.publicUrl };
   } catch (error: any) {
     return {
       success: false,
-      error: handleStorageError(error),
+      error: handleUnexpectedError(error),
     };
   }
 }
 
 /**
- * Delete a file from Firebase Storage
+ * Delete a file from Supabase Storage
  */
 export async function deleteFile(path: string): Promise<ServiceResult<void>> {
   try {
-    const storageRef = ref(storage, path);
-    await deleteObject(storageRef);
+    if (!isSupabaseConfigured() || !supabase) {
+      return {
+        success: false,
+        error: {
+          code: ErrorCode.STORAGE_ERROR,
+          message: 'Supabase is not configured',
+        },
+      };
+    }
+
+    // Determine bucket from path
+    let bucket = 'profile-images';
+    if (path.startsWith('childImages/') || path.includes('child-images')) {
+      bucket = 'child-images';
+    } else if (path.startsWith('chat-attachments/')) {
+      bucket = 'chat-attachments';
+    } else if (path.startsWith('verification-documents/')) {
+      bucket = 'verification-documents';
+    }
+
+    // Extract file path
+    const filePath = path.replace(/^(profile-images|child-images|chat-attachments|verification-documents)\//, '')
+      .replace(/^childImages\//, '');
+
+    const { error } = await supabase.storage
+      .from(bucket)
+      .remove([filePath]);
+
+    if (error) {
+      return {
+        success: false,
+        error: {
+          code: ErrorCode.STORAGE_ERROR,
+          message: `Failed to delete file: ${error.message}`,
+        },
+      };
+    }
+
     return { success: true };
   } catch (error: any) {
     return {
       success: false,
-      error: handleStorageError(error),
+      error: handleUnexpectedError(error),
     };
   }
 }
 
 /**
- * Get download URL for a file
+ * Get public URL for a file
  */
 export async function getFileUrl(path: string): Promise<ServiceResult<string>> {
   try {
-    const storageRef = ref(storage, path);
-    const url = await getDownloadURL(storageRef);
-    return { success: true, data: url };
+    if (!isSupabaseConfigured() || !supabase) {
+      return {
+        success: false,
+        error: {
+          code: ErrorCode.STORAGE_ERROR,
+          message: 'Supabase is not configured',
+        },
+      };
+    }
+
+    // Determine bucket from path
+    let bucket = 'profile-images';
+    if (path.startsWith('childImages/') || path.includes('child-images')) {
+      bucket = 'child-images';
+    } else if (path.startsWith('chat-attachments/')) {
+      bucket = 'chat-attachments';
+    } else if (path.startsWith('verification-documents/')) {
+      bucket = 'verification-documents';
+    }
+
+    // Extract file path
+    const filePath = path.replace(/^(profile-images|child-images|chat-attachments|verification-documents)\//, '')
+      .replace(/^childImages\//, '');
+
+    const { data } = supabase.storage
+      .from(bucket)
+      .getPublicUrl(filePath);
+
+    if (!data?.publicUrl) {
+      return {
+        success: false,
+        error: {
+          code: ErrorCode.STORAGE_ERROR,
+          message: 'Failed to get file URL',
+        },
+      };
+    }
+
+    return { success: true, data: data.publicUrl };
   } catch (error: any) {
     return {
       success: false,
-      error: handleStorageError(error),
+      error: handleUnexpectedError(error),
     };
   }
 }

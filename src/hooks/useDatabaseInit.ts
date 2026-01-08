@@ -1,25 +1,21 @@
 /**
- * Database Initialization Hook
- * Initializes local storage and sync service on app start
+ * Database Initialization Hook - Supabase
+ * Initializes local storage on app start
  */
-import { isFirebaseConfigured } from '@/src/config/firebase';
-import { initializeFirebaseCollections } from '@/src/services/firebase-collections.service';
+import { isSupabaseConfigured } from '@/src/config/supabase';
 import { initLocalStorage } from '@/src/services/local-storage.service';
-import { initializeStorageSync } from '@/src/services/storage-sync.service';
 import { useEffect, useState } from 'react';
 
 interface DatabaseInitState {
   localDbReady: boolean;
-  syncReady: boolean;
-  firebaseConfigured: boolean;
+  supabaseConfigured: boolean;
   error: string | null;
 }
 
 export function useDatabaseInit() {
   const [state, setState] = useState<DatabaseInitState>({
     localDbReady: false,
-    syncReady: false,
-    firebaseConfigured: false,
+    supabaseConfigured: false,
     error: null,
   });
 
@@ -28,14 +24,14 @@ export function useDatabaseInit() {
 
     async function initialize() {
       try {
-        // Check Firebase configuration
-        const firebaseReady = isFirebaseConfigured();
-        setState(prev => ({ ...prev, firebaseConfigured: firebaseReady }));
+        // Check Supabase configuration
+        const supabaseReady = isSupabaseConfigured();
+        setState(prev => ({ ...prev, supabaseConfigured: supabaseReady }));
 
-        if (!firebaseReady) {
-          console.warn('⚠️ Firebase is not configured. Some features may not work.');
+        if (!supabaseReady) {
+          console.warn('⚠️ Supabase is not configured. Some features may not work.');
         } else {
-          console.log('✅ Firebase is configured');
+          console.log('✅ Supabase is configured');
         }
 
         // Initialize local storage (AsyncStorage - works everywhere)
@@ -51,31 +47,6 @@ export function useDatabaseInit() {
             ...prev,
             error: storageResult.error?.message || 'Storage initialization failed',
           }));
-        }
-
-        // Initialize Firebase collections (only if Firebase is configured)
-        if (firebaseReady) {
-          const collectionsResult = await initializeFirebaseCollections();
-          if (!mounted) return;
-
-          if (collectionsResult.success) {
-            console.log('✅ Firebase collections initialized');
-          } else {
-            console.warn('⚠️ Firebase collections initialization failed:', collectionsResult.error?.message);
-            // Don't fail - collections are created on first write
-          }
-
-          // Initialize sync service
-          const syncResult = await initializeStorageSync();
-          if (!mounted) return;
-
-          if (syncResult.success) {
-            console.log('✅ Sync service initialized');
-            setState(prev => ({ ...prev, syncReady: true }));
-          } else {
-            console.warn('⚠️ Sync service initialization failed:', syncResult.error?.message);
-            // Don't set error - sync is optional
-          }
         }
       } catch (error: any) {
         if (!mounted) return;

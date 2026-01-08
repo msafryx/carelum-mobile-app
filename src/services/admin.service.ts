@@ -1,22 +1,10 @@
 /**
- * Admin Service
+ * Admin Service - Supabase
  * Handles admin-specific operations
  */
-import { ServiceResult } from '@/src/types/error.types';
-import { firestore } from '@/src/config/firebase';
-import {
-  collection,
-  query,
-  where,
-  orderBy,
-  limit,
-  getDocs,
-  updateDoc,
-  doc,
-  Timestamp,
-} from 'firebase/firestore';
-import { handleFirestoreError, retryWithBackoff } from '@/src/utils/errorHandler';
-import { COLLECTIONS, USER_ROLES } from '@/src/config/constants';
+import { isSupabaseConfigured, supabase } from '@/src/config/supabase';
+import { ErrorCode, ServiceResult } from '@/src/types/error.types';
+import { handleUnexpectedError } from '@/src/utils/errorHandler';
 import { User } from '@/src/types/user.types';
 
 /**
@@ -27,43 +15,61 @@ export async function getAllUsers(
   limitCount: number = 100
 ): Promise<ServiceResult<User[]>> {
   try {
-    if (!firestore) {
+    if (!isSupabaseConfigured() || !supabase) {
       return {
         success: false,
         error: {
-          code: 'FIREBASE_NOT_CONFIGURED',
-          message: 'Firestore is not configured',
+          code: ErrorCode.DB_NOT_AVAILABLE,
+          message: 'Supabase is not configured',
         },
       };
     }
 
-    let q = query(
-      collection(firestore, COLLECTIONS.USERS),
-      orderBy('createdAt', 'desc'),
-      limit(limitCount)
-    );
+    let query = supabase
+      .from('users')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(limitCount);
 
     if (role) {
-      q = query(q, where('role', '==', role));
+      query = query.eq('role', role);
     }
 
-    const snapshot = await retryWithBackoff(async () => getDocs(q));
-    const users: User[] = [];
+    const { data, error } = await query;
 
-    snapshot.forEach((docSnap) => {
-      const data = docSnap.data();
-      users.push({
-        id: docSnap.id,
-        ...data,
-        createdAt: (data.createdAt as Timestamp)?.toDate() || new Date(),
-      } as User);
-    });
+    if (error) {
+      return {
+        success: false,
+        error: {
+          code: ErrorCode.DB_SELECT_ERROR,
+          message: `Failed to fetch users: ${error.message}`,
+        },
+      };
+    }
+
+    const users: User[] = (data || []).map((row: any) => ({
+      id: row.id,
+      email: row.email,
+      displayName: row.display_name,
+      role: row.role,
+      preferredLanguage: row.preferred_language,
+      userNumber: row.user_number,
+      phoneNumber: row.phone_number,
+      profileImageUrl: row.photo_url,
+      createdAt: new Date(row.created_at),
+      updatedAt: new Date(row.updated_at),
+      theme: row.theme || 'auto',
+      isVerified: row.is_verified || false,
+      verificationStatus: row.verification_status,
+      hourlyRate: row.hourly_rate,
+      bio: row.bio,
+    }));
 
     return { success: true, data: users };
-  } catch (error) {
+  } catch (error: any) {
     return {
       success: false,
-      error: handleFirestoreError(error),
+      error: handleUnexpectedError(error),
     };
   }
 }
@@ -73,42 +79,55 @@ export async function getAllUsers(
  */
 export async function getUserById(userId: string): Promise<ServiceResult<User>> {
   try {
-    if (!firestore) {
+    if (!isSupabaseConfigured() || !supabase) {
       return {
         success: false,
         error: {
-          code: 'FIREBASE_NOT_CONFIGURED',
-          message: 'Firestore is not configured',
+          code: ErrorCode.DB_NOT_AVAILABLE,
+          message: 'Supabase is not configured',
         },
       };
     }
 
-    const userRef = doc(firestore, COLLECTIONS.USERS, userId);
-    const userSnap = await retryWithBackoff(async () => getDocs(query(collection(firestore, COLLECTIONS.USERS), where('__name__', '==', userId))));
+    const { data, error } = await supabase
+      .from('users')
+      .select('*')
+      .eq('id', userId)
+      .single();
 
-    if (userSnap.empty) {
+    if (error || !data) {
       return {
         success: false,
         error: {
-          code: 'NOT_FOUND',
+          code: ErrorCode.DOCUMENT_NOT_FOUND,
           message: 'User not found',
         },
       };
     }
 
-    const data = userSnap.docs[0].data();
-    return {
-      success: true,
-      data: {
-        id: userSnap.docs[0].id,
-        ...data,
-        createdAt: (data.createdAt as Timestamp)?.toDate() || new Date(),
-      } as User,
+    const user: User = {
+      id: data.id,
+      email: data.email,
+      displayName: data.display_name,
+      role: data.role,
+      preferredLanguage: data.preferred_language,
+      userNumber: data.user_number,
+      phoneNumber: data.phone_number,
+      profileImageUrl: data.photo_url,
+      createdAt: new Date(data.created_at),
+      updatedAt: new Date(data.updated_at),
+      theme: data.theme || 'auto',
+      isVerified: data.is_verified || false,
+      verificationStatus: data.verification_status,
+      hourlyRate: data.hourly_rate,
+      bio: data.bio,
     };
-  } catch (error) {
+
+    return { success: true, data: user };
+  } catch (error: any) {
     return {
       success: false,
-      error: handleFirestoreError(error),
+      error: handleUnexpectedError(error),
     };
   }
 }
@@ -121,29 +140,48 @@ export async function updateUser(
   updates: Partial<User>
 ): Promise<ServiceResult<void>> {
   try {
-    if (!firestore) {
+    if (!isSupabaseConfigured() || !supabase) {
       return {
         success: false,
         error: {
-          code: 'FIREBASE_NOT_CONFIGURED',
-          message: 'Firestore is not configured',
+          code: ErrorCode.DB_NOT_AVAILABLE,
+          message: 'Supabase is not configured',
         },
       };
     }
 
-    const userRef = doc(firestore, COLLECTIONS.USERS, userId);
-    await retryWithBackoff(async () => {
-      await updateDoc(userRef, {
-        ...updates,
-        updatedAt: Timestamp.now(),
-      });
-    });
+    const supabaseUpdates: any = {};
+    if (updates.displayName !== undefined) supabaseUpdates.display_name = updates.displayName;
+    if (updates.role !== undefined) supabaseUpdates.role = updates.role;
+    if (updates.preferredLanguage !== undefined) supabaseUpdates.preferred_language = updates.preferredLanguage;
+    if (updates.phoneNumber !== undefined) supabaseUpdates.phone_number = updates.phoneNumber;
+    if (updates.profileImageUrl !== undefined) supabaseUpdates.photo_url = updates.profileImageUrl;
+    if (updates.theme !== undefined) supabaseUpdates.theme = updates.theme;
+    if (updates.isVerified !== undefined) supabaseUpdates.is_verified = updates.isVerified;
+    if (updates.verificationStatus !== undefined) supabaseUpdates.verification_status = updates.verificationStatus;
+    if (updates.hourlyRate !== undefined) supabaseUpdates.hourly_rate = updates.hourlyRate;
+    if (updates.bio !== undefined) supabaseUpdates.bio = updates.bio;
+
+    const { error } = await supabase
+      .from('users')
+      .update(supabaseUpdates)
+      .eq('id', userId);
+
+    if (error) {
+      return {
+        success: false,
+        error: {
+          code: ErrorCode.DB_UPDATE_ERROR,
+          message: `Failed to update user: ${error.message}`,
+        },
+      };
+    }
 
     return { success: true };
-  } catch (error) {
+  } catch (error: any) {
     return {
       success: false,
-      error: handleFirestoreError(error),
+      error: handleUnexpectedError(error),
     };
   }
 }
@@ -184,57 +222,41 @@ export async function getAdminStats(): Promise<ServiceResult<{
   activeSessions: number;
 }>> {
   try {
-    if (!firestore) {
+    if (!isSupabaseConfigured() || !supabase) {
       return {
         success: false,
         error: {
-          code: 'FIREBASE_NOT_CONFIGURED',
-          message: 'Firestore is not configured',
+          code: ErrorCode.DB_NOT_AVAILABLE,
+          message: 'Supabase is not configured',
         },
       };
     }
 
     // Get user counts
-    // Note: Each user is counted only once based on their current role
-    // If a user's role was changed (e.g., parent -> admin), they will only appear in the admin count
-    const [allUsers, parents, sitters, admins] = await Promise.all([
-      getDocs(query(collection(firestore, COLLECTIONS.USERS))),
-      getDocs(query(collection(firestore, COLLECTIONS.USERS), where('role', '==', USER_ROLES.PARENT))),
-      getDocs(query(collection(firestore, COLLECTIONS.USERS), where('role', '==', USER_ROLES.BABYSITTER))),
-      getDocs(query(collection(firestore, COLLECTIONS.USERS), where('role', '==', USER_ROLES.ADMIN))),
+    const [allUsersResult, parentsResult, sittersResult, adminsResult, pendingVerificationsResult, activeSessionsResult] = await Promise.all([
+      supabase.from('users').select('id', { count: 'exact', head: true }),
+      supabase.from('users').select('id', { count: 'exact', head: true }).eq('role', 'parent'),
+      supabase.from('users').select('id', { count: 'exact', head: true }).eq('role', 'babysitter'),
+      supabase.from('users').select('id', { count: 'exact', head: true }).eq('role', 'admin'),
+      supabase.from('verification_requests').select('id', { count: 'exact', head: true }).eq('status', 'pending'),
+      supabase.from('sessions').select('id', { count: 'exact', head: true }).eq('status', 'active'),
     ]);
-
-    // Get pending verifications
-    const pendingVerifications = await getDocs(
-      query(
-        collection(firestore, 'verificationRequests'),
-        where('status', '==', 'pending')
-      )
-    );
-
-    // Get active sessions
-    const activeSessions = await getDocs(
-      query(
-        collection(firestore, COLLECTIONS.SESSIONS),
-        where('status', '==', 'active')
-      )
-    );
 
     return {
       success: true,
       data: {
-        totalUsers: allUsers.size,
-        totalParents: parents.size,
-        totalSitters: sitters.size,
-        totalAdmins: admins.size,
-        pendingVerifications: pendingVerifications.size,
-        activeSessions: activeSessions.size,
+        totalUsers: allUsersResult.count || 0,
+        totalParents: parentsResult.count || 0,
+        totalSitters: sittersResult.count || 0,
+        totalAdmins: adminsResult.count || 0,
+        pendingVerifications: pendingVerificationsResult.count || 0,
+        activeSessions: activeSessionsResult.count || 0,
       },
     };
-  } catch (error) {
+  } catch (error: any) {
     return {
       success: false,
-      error: handleFirestoreError(error),
+      error: handleUnexpectedError(error),
     };
   }
 }

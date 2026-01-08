@@ -1,6 +1,9 @@
 export interface Child {
   id: string;
   parentId: string;
+  childNumber?: string; // Readable ID: c1, c2, c3...
+  parentNumber?: string; // Parent's userNumber: p1, p2, p3...
+  sitterNumber?: string; // Sitter's userNumber: b1, b2, b3... (if assigned)
   name: string;
   age: number;
   dateOfBirth?: Date;

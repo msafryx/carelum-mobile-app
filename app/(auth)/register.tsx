@@ -9,10 +9,12 @@ import { signUp } from '@/src/services/auth.service';
 import { validateEmail, validatePassword } from '@/src/utils/validators';
 import { USER_ROLES } from '@/src/config/constants';
 import { AppError } from '@/src/types/error.types';
+import { useAuth } from '@/src/hooks/useAuth';
 
 export default function RegisterScreen() {
   const { colors, spacing, isDark } = useTheme();
   const router = useRouter();
+  const { userProfile, initialized } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [displayName, setDisplayName] = useState('');
@@ -48,20 +50,37 @@ export default function RegisterScreen() {
     }
 
     setLoading(true);
-    const result = await signUp({
-      email,
-      password,
-      displayName: displayName.trim(),
-      role: role === 'parent' ? USER_ROLES.PARENT : USER_ROLES.BABYSITTER,
-    });
+    try {
+      const result = await signUp({
+        email,
+        password,
+        displayName: displayName.trim(),
+        role: role === 'parent' ? USER_ROLES.PARENT : USER_ROLES.BABYSITTER,
+      });
 
-    if (result.success) {
-      // Navigation will be handled by app/index.tsx based on user role
-      router.replace('/');
-    } else {
-      setError(result.error || null);
+      if (result.success) {
+        // INSTANT NAVIGATION - Like Firebase/MySQL pattern
+        // Don't wait for anything - AsyncStorage already has the data
+        // Supabase sync happens in background
+        setLoading(false);
+        
+        const route = role === 'parent' 
+          ? '/(parent)/home' 
+          : '/(sitter)/home';
+        
+        // Navigate immediately - no delays, no waiting
+        router.replace(route as any);
+      } else {
+        setError(result.error || null);
+        setLoading(false);
+      }
+    } catch (err: any) {
+      setError({
+        code: 'UNKNOWN_ERROR' as any,
+        message: err.message || 'An unexpected error occurred',
+      });
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   return (

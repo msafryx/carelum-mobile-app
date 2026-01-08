@@ -151,7 +151,7 @@ export default function LandingScreen() {
             router.replace('/(auth)/login');
           }}
         >
-          <Text style={[styles.loginText, { color: '#fff' }]}>Log In</Text>
+          <Text style={[styles.loginText, { color: colors.primary }]}>Log In</Text>
         </TouchableOpacity>
       </View>
     </View>

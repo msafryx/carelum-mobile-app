@@ -112,7 +112,7 @@ export default function AdminProfileScreen() {
                   value={email}
                   editable={false}
                   style={[styles.input, { backgroundColor: colors.background + '80', color: colors.textSecondary, borderColor: colors.border }]}
-                  placeholder="Email (cannot be changed)"
+                  placeholder="Email Address (cannot be changed)"
                   placeholderTextColor={colors.textSecondary}
                 />
                 <TextInput

@@ -1,21 +1,13 @@
-import {
-  createUserWithEmailAndPassword,
-  signInWithEmailAndPassword,
-  signOut as firebaseSignOut,
-  User as FirebaseUser,
-} from 'firebase/auth';
-import { auth, firestore } from '@/src/config/firebase';
-import { doc, setDoc, getDoc } from 'firebase/firestore';
-import { ServiceResult, AppError } from '@/src/types/error.types';
+/**
+ * Authentication Service - Supabase
+ * Handles user authentication and profile management
+ */
+import { COLLECTIONS, Language, LANGUAGES, UserRole } from '@/src/config/constants';
+import { isSupabaseConfigured, supabase } from '@/src/config/supabase';
+import { ErrorCode, ServiceResult } from '@/src/types/error.types';
 import { User } from '@/src/types/user.types';
-import { UserRole, Language } from '@/src/config/constants';
-import { COLLECTIONS, LANGUAGES, USER_ROLES } from '@/src/config/constants';
-import {
-  handleAuthError,
-  handleFirestoreError,
-  handleUnexpectedError,
-} from '@/src/utils/errorHandler';
-import { ErrorCode } from '@/src/types/error.types';
+import { handleUnexpectedError } from '@/src/utils/errorHandler';
+import { getNextUserNumber } from './user-number.service';
 
 export interface SignUpData {
   email: string;
@@ -33,52 +25,174 @@ export interface SignInData {
 /**
  * Sign up a new user
  */
-export async function signUp(data: SignUpData): Promise<ServiceResult<FirebaseUser>> {
+export async function signUp(data: SignUpData): Promise<ServiceResult<any>> {
   try {
-    if (!auth) {
+    if (!isSupabaseConfigured() || !supabase) {
       return {
         success: false,
         error: {
           code: ErrorCode.AUTH_ERROR,
-          message: 'Firebase Auth is not configured',
-        },
-      };
-    }
-
-    if (!firestore) {
-      return {
-        success: false,
-        error: {
-          code: ErrorCode.AUTH_ERROR,
-          message: 'Firestore is not configured',
+          message: 'Supabase is not configured',
         },
       };
     }
 
     // Create auth user
-    const userCredential = await createUserWithEmailAndPassword(
-      auth,
-      data.email,
-      data.password
-    );
-    const user = userCredential.user;
+    // Note: Supabase requires email confirmation by default
+    // To disable: Supabase Dashboard → Authentication → Settings → Disable "Enable email confirmations"
+    const { data: authData, error: authError } = await supabase.auth.signUp({
+      email: data.email,
+      password: data.password,
+      options: {
+        emailRedirectTo: undefined, // Optional: set redirect URL after email confirmation
+      },
+    });
 
-    // Create user profile in Firestore
-    const userProfile: Omit<User, 'id'> = {
+    if (authError) {
+      if (authError.message.includes('already registered') || authError.message.includes('already exists')) {
+        return {
+          success: false,
+          error: {
+            code: ErrorCode.EMAIL_ALREADY_EXISTS,
+            message: 'An account with this email already exists. Please sign in instead.',
+          },
+        };
+      }
+      return {
+        success: false,
+        error: {
+          code: ErrorCode.AUTH_ERROR,
+          message: authError.message,
+        },
+      };
+    }
+
+    if (!authData.user) {
+      return {
+        success: false,
+        error: {
+          code: ErrorCode.AUTH_ERROR,
+          message: 'Failed to create user',
+        },
+      };
+    }
+
+    // Generate user number (use local fallback to avoid RLS recursion during sign-up)
+    // During sign-up, we can't query users table due to RLS, so use local generation
+    const userNumber = await (await import('./user-number.service')).getNextUserNumberFromLocal(data.role);
+
+    // Normalize role: 'babysitter' -> 'sitter' for database compatibility
+    const dbRole = data.role === 'babysitter' ? 'sitter' : data.role;
+
+    // ============================================
+    // FIREBASE/MYSQL PATTERN: AsyncStorage FIRST
+    // ============================================
+    // Save to AsyncStorage IMMEDIATELY for instant UI (PRIMARY data source)
+    // This is the PRIMARY data source - instant, no network delays
+    const { save, STORAGE_KEYS } = await import('./local-storage.service');
+    const userData = {
+      id: authData.user.id,
+      userNumber: userNumber,
       email: data.email,
       displayName: data.displayName,
-      role: data.role,
+      role: data.role, // Keep original role (babysitter, not sitter)
       preferredLanguage: data.preferredLanguage || LANGUAGES.ENGLISH,
-      createdAt: new Date(),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      phoneNumber: null,
+      profileImageUrl: null,
+      theme: 'auto',
+      isVerified: false,
+      verificationStatus: null,
+      hourlyRate: null,
+      bio: null,
     };
+    
+    // Save IMMEDIATELY - don't wait (non-blocking)
+    save(STORAGE_KEYS.USERS, userData).catch(err => {
+      console.warn('⚠️ AsyncStorage save failed (non-blocking):', err);
+    });
+    console.log('✅ User profile saved to AsyncStorage (instant UI)');
 
-    await setDoc(doc(firestore, COLLECTIONS.USERS, user.uid), userProfile);
+    // Return success IMMEDIATELY - don't wait for Supabase
+    // Profile creation happens in BACKGROUND (IIFE - runs async, doesn't block)
+    
+    // ============================================
+    // BACKGROUND SYNC: Supabase SECONDARY
+    // ============================================
+    // Create profile in Supabase in BACKGROUND (IIFE - runs async, never blocks)
+    (async () => {
+      try {
+        // Check if profile already exists
+        const { data: existingProfile } = await supabase
+          .from('users')
+          .select('id')
+          .eq('id', authData.user.id)
+          .single();
+        
+        if (existingProfile) {
+          console.log('✅ User profile already exists in Supabase');
+          return;
+        }
 
-    return { success: true, data: user };
+        // Try to create profile (non-blocking, errors are non-critical)
+        const { error: rpcError } = await supabase.rpc('create_user_profile', {
+          p_id: authData.user.id,
+          p_email: data.email,
+          p_display_name: data.displayName,
+          p_role: dbRole,
+          p_preferred_language: data.preferredLanguage || LANGUAGES.ENGLISH,
+          p_user_number: userNumber,
+          p_phone_number: null,
+          p_photo_url: null,
+          p_theme: 'auto',
+          p_is_verified: false,
+          p_verification_status: null,
+          p_hourly_rate: null,
+          p_bio: null,
+        });
+
+        if (rpcError) {
+          // Try upsert as fallback (non-blocking)
+          await supabase
+            .from('users')
+            .upsert({
+              id: authData.user.id,
+              email: data.email,
+              display_name: data.displayName,
+              role: dbRole,
+              preferred_language: data.preferredLanguage || LANGUAGES.ENGLISH,
+              user_number: userNumber,
+              phone_number: null,
+              photo_url: null,
+              theme: 'auto',
+              is_verified: false,
+              verification_status: null,
+              hourly_rate: null,
+              bio: null,
+            }, { onConflict: 'id' })
+            .then(() => {
+              console.log('✅ Profile created in Supabase (background)');
+            })
+            .catch(err => {
+              // Ignore errors - profile will sync later via useRealtimeSync
+              console.warn('⚠️ Background profile creation failed (non-critical):', err.message);
+            });
+        } else {
+          console.log('✅ Profile created in Supabase (background)');
+        }
+      } catch (error) {
+        // Ignore all errors - profile will sync later via useRealtimeSync
+        console.warn('⚠️ Background profile sync failed (non-critical):', error);
+      }
+    })(); // IIFE - runs in background, doesn't block
+
+    // Return success IMMEDIATELY - AsyncStorage has the data, UI can update instantly
+    return { success: true, data: authData.user };
   } catch (error: any) {
     return {
       success: false,
-      error: handleAuthError(error),
+      error: handleUnexpectedError(error),
     };
   }
 }
@@ -88,28 +202,78 @@ export async function signUp(data: SignUpData): Promise<ServiceResult<FirebaseUs
  */
 export async function signIn(
   data: SignInData
-): Promise<ServiceResult<FirebaseUser>> {
+): Promise<ServiceResult<any>> {
   try {
-    if (!auth) {
+    if (!isSupabaseConfigured() || !supabase) {
       return {
         success: false,
         error: {
           code: ErrorCode.AUTH_ERROR,
-          message: 'Firebase Auth is not configured',
+          message: 'Supabase is not configured',
         },
       };
     }
 
-    const userCredential = await signInWithEmailAndPassword(
-      auth,
-      data.email,
-      data.password
-    );
-    return { success: true, data: userCredential.user };
+    const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+      email: data.email,
+      password: data.password,
+    });
+
+    if (authError) {
+      // Check for email confirmation error
+      if (authError.message.includes('Email not confirmed') || authError.message.includes('email not confirmed')) {
+        return {
+          success: false,
+          error: {
+            code: ErrorCode.AUTH_ERROR,
+            message: 'Please check your email and confirm your account before signing in. If you didn\'t receive the email, check your spam folder or contact support.',
+          },
+        };
+      }
+      if (authError.message.includes('Invalid login credentials') || authError.message.includes('wrong password')) {
+        return {
+          success: false,
+          error: {
+            code: ErrorCode.INVALID_PASSWORD,
+            message: 'Invalid email or password',
+          },
+        };
+      }
+      return {
+        success: false,
+        error: {
+          code: ErrorCode.AUTH_ERROR,
+          message: authError.message,
+        },
+      };
+    }
+
+    if (!authData.user) {
+      return {
+        success: false,
+        error: {
+          code: ErrorCode.AUTH_ERROR,
+          message: 'Failed to sign in',
+        },
+      };
+    }
+
+    // Check if email is confirmed
+    if (!authData.user.email_confirmed_at) {
+      return {
+        success: false,
+        error: {
+          code: ErrorCode.AUTH_ERROR,
+          message: 'Please confirm your email address before signing in. Check your inbox for the confirmation email.',
+        },
+      };
+    }
+
+    return { success: true, data: authData.user };
   } catch (error: any) {
     return {
       success: false,
-      error: handleAuthError(error),
+      error: handleUnexpectedError(error),
     };
   }
 }
@@ -119,17 +283,28 @@ export async function signIn(
  */
 export async function signOut(): Promise<ServiceResult<void>> {
   try {
-    if (!auth) {
+    if (!isSupabaseConfigured() || !supabase) {
       return {
         success: false,
         error: {
           code: ErrorCode.AUTH_ERROR,
-          message: 'Firebase Auth is not configured',
+          message: 'Supabase is not configured',
         },
       };
     }
 
-    await firebaseSignOut(auth);
+    const { error } = await supabase.auth.signOut();
+    
+    if (error) {
+      return {
+        success: false,
+        error: {
+          code: ErrorCode.AUTH_ERROR,
+          message: error.message,
+        },
+      };
+    }
+
     return { success: true };
   } catch (error: any) {
     return {
@@ -140,32 +315,23 @@ export async function signOut(): Promise<ServiceResult<void>> {
 }
 
 /**
- * Get current user profile from Firestore
+ * Get current user profile - AsyncStorage FIRST (Firebase/MySQL pattern)
  */
 export async function getCurrentUserProfile(): Promise<ServiceResult<User>> {
   try {
-    if (!auth) {
+    if (!isSupabaseConfigured() || !supabase) {
       return {
         success: false,
         error: {
           code: ErrorCode.AUTH_ERROR,
-          message: 'Firebase Auth is not configured',
+          message: 'Supabase is not configured',
         },
       };
     }
 
-    if (!firestore) {
-      return {
-        success: false,
-        error: {
-          code: ErrorCode.AUTH_ERROR,
-          message: 'Firestore is not configured',
-        },
-      };
-    }
-
-    const currentUser = auth.currentUser;
-    if (!currentUser) {
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    
+    if (authError || !user) {
       return {
         success: false,
         error: {
@@ -175,63 +341,199 @@ export async function getCurrentUserProfile(): Promise<ServiceResult<User>> {
       };
     }
 
-    const userDoc = await getDoc(doc(firestore, COLLECTIONS.USERS, currentUser.uid));
-    
-    if (!userDoc.exists()) {
-      return {
-        success: false,
-        error: {
-          code: ErrorCode.DOCUMENT_NOT_FOUND,
-          message: 'User profile not found',
-        },
-      };
+    // ============================================
+    // FIREBASE/MYSQL PATTERN: AsyncStorage FIRST
+    // ============================================
+    // Try AsyncStorage FIRST - instant, no network delays
+    try {
+      const { getAll, STORAGE_KEYS } = await import('./local-storage.service');
+      const result = await getAll(STORAGE_KEYS.USERS);
+      if (result.success && result.data) {
+        const localUser = result.data.find((u: any) => u.id === user.id);
+        if (localUser) {
+          const userProfile: User = {
+            ...localUser,
+            createdAt: new Date(localUser.createdAt || Date.now()),
+          } as User;
+          console.log('✅ User profile loaded from AsyncStorage (instant)');
+          
+          // Sync from Supabase in BACKGROUND (non-blocking, don't wait)
+          syncProfileFromSupabase(user.id).catch(() => {});
+          
+          // Return IMMEDIATELY - don't wait for Supabase
+          return { success: true, data: userProfile };
+        }
+      }
+    } catch (localError: any) {
+      console.warn('⚠️ Failed to load from AsyncStorage:', localError.message);
     }
-
-    const userData = userDoc.data();
-    const user: User = {
-      id: currentUser.uid,
-      ...userData,
-      createdAt: userData.createdAt?.toDate() || new Date(),
-    } as User;
-
-    return { success: true, data: user };
+    
+    // If not in AsyncStorage, create minimal profile from auth user (instant)
+    // Don't wait for Supabase - return immediately
+    console.log('⚠️ Profile not in AsyncStorage, creating minimal profile (instant)');
+    const minimalProfile: User = {
+      id: user.id,
+      email: user.email || '',
+      displayName: user.user_metadata?.display_name || user.email?.split('@')[0] || 'User',
+      role: user.user_metadata?.role || 'parent', // Default to parent
+      preferredLanguage: 'en',
+      userNumber: null,
+      phoneNumber: null,
+      profileImageUrl: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      theme: 'auto',
+      isVerified: false,
+      verificationStatus: null,
+      hourlyRate: null,
+      bio: null,
+    };
+    
+    // Save minimal profile to AsyncStorage (non-blocking)
+    try {
+      const { save, STORAGE_KEYS } = await import('./local-storage.service');
+      save(STORAGE_KEYS.USERS, {
+        ...minimalProfile,
+        createdAt: minimalProfile.createdAt.getTime(),
+        updatedAt: minimalProfile.updatedAt.getTime(),
+      }).catch(() => {});
+    } catch (saveError) {
+      // Ignore save errors
+    }
+    
+    // Sync from Supabase in BACKGROUND (non-blocking, don't wait)
+    syncProfileFromSupabase(user.id).catch(() => {});
+    
+    // Return minimal profile IMMEDIATELY - don't wait for Supabase
+    return { success: true, data: minimalProfile };
   } catch (error: any) {
+    // Even on error, return minimal profile for instant UI
+    try {
+      if (supabase) {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user) {
+          const minimalProfile: User = {
+            id: user.id,
+            email: user.email || '',
+            displayName: user.user_metadata?.display_name || user.email?.split('@')[0] || 'User',
+            role: user.user_metadata?.role || 'parent',
+            preferredLanguage: 'en',
+            userNumber: null,
+            phoneNumber: null,
+            profileImageUrl: null,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+            theme: 'auto',
+            isVerified: false,
+            verificationStatus: null,
+            hourlyRate: null,
+            bio: null,
+          };
+          return { success: true, data: minimalProfile };
+        }
+      }
+    } catch (fallbackError) {
+      // Ignore fallback errors
+    }
     return {
       success: false,
-      error: handleFirestoreError(error),
+      error: handleUnexpectedError(error),
     };
   }
 }
 
 /**
- * Update user profile
+ * Helper: Sync profile from Supabase in background
+ */
+async function syncProfileFromSupabase(userId: string): Promise<void> {
+  try {
+    if (!supabase) return;
+    const { data: userData } = await supabase
+      .from('users')
+      .select('*')
+      .eq('id', userId)
+      .single();
+    
+    if (userData) {
+      const { save, STORAGE_KEYS } = await import('./local-storage.service');
+      const appRole = userData.role === 'sitter' ? 'babysitter' : userData.role;
+      const userProfile: User = {
+        id: userData.id,
+        email: userData.email,
+        displayName: userData.display_name,
+        role: appRole as any,
+        preferredLanguage: userData.preferred_language || 'en',
+        userNumber: userData.user_number,
+        phoneNumber: userData.phone_number,
+        profileImageUrl: userData.photo_url,
+        createdAt: new Date(userData.created_at),
+        updatedAt: new Date(userData.updated_at),
+        theme: userData.theme || 'auto',
+        isVerified: userData.is_verified || false,
+        verificationStatus: userData.verification_status,
+        hourlyRate: userData.hourly_rate,
+        bio: userData.bio,
+      };
+      await save(STORAGE_KEYS.USERS, {
+        ...userProfile,
+        createdAt: userProfile.createdAt.getTime(),
+        updatedAt: userProfile.updatedAt.getTime(),
+      });
+      console.log('✅ Profile synced from Supabase to AsyncStorage');
+    }
+  } catch (error) {
+    console.warn('⚠️ Background sync failed:', error);
+  }
+}
+
+/**
+ * Helper: Create profile in Supabase in background
+ */
+async function createProfileInSupabase(profile: User): Promise<void> {
+  try {
+    if (!supabase) return;
+    const dbRole = profile.role === 'babysitter' ? 'sitter' : profile.role;
+    await supabase.from('users').upsert({
+      id: profile.id,
+      email: profile.email,
+      display_name: profile.displayName,
+      role: dbRole,
+      preferred_language: profile.preferredLanguage,
+      user_number: profile.userNumber,
+      phone_number: profile.phoneNumber,
+      photo_url: profile.profileImageUrl,
+      theme: profile.theme,
+      is_verified: profile.isVerified,
+      verification_status: profile.verificationStatus,
+      hourly_rate: profile.hourlyRate,
+      bio: profile.bio,
+    });
+    console.log('✅ Profile created in Supabase');
+  } catch (error) {
+    console.warn('⚠️ Failed to create profile in Supabase:', error);
+  }
+}
+
+/**
+ * Update user profile - updates Supabase and AsyncStorage
  */
 export async function updateUserProfile(
   updates: Partial<Omit<User, 'id' | 'createdAt'>>
 ): Promise<ServiceResult<void>> {
   try {
-    if (!auth) {
+    if (!isSupabaseConfigured() || !supabase) {
       return {
         success: false,
         error: {
           code: ErrorCode.AUTH_ERROR,
-          message: 'Firebase Auth is not configured',
+          message: 'Supabase is not configured',
         },
       };
     }
 
-    if (!firestore) {
-      return {
-        success: false,
-        error: {
-          code: ErrorCode.AUTH_ERROR,
-          message: 'Firestore is not configured',
-        },
-      };
-    }
-
-    const currentUser = auth.currentUser;
-    if (!currentUser) {
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    
+    if (authError || !user) {
       return {
         success: false,
         error: {
@@ -241,17 +543,61 @@ export async function updateUserProfile(
       };
     }
 
-    await setDoc(
-      doc(firestore, COLLECTIONS.USERS, currentUser.uid),
-      updates,
-      { merge: true }
-    );
+    // Convert User type to Supabase format
+    const supabaseUpdates: any = {};
+    if (updates.displayName !== undefined) supabaseUpdates.display_name = updates.displayName;
+    if (updates.role !== undefined) supabaseUpdates.role = updates.role;
+    if (updates.preferredLanguage !== undefined) supabaseUpdates.preferred_language = updates.preferredLanguage;
+    if (updates.userNumber !== undefined) supabaseUpdates.user_number = updates.userNumber;
+    if (updates.phoneNumber !== undefined) supabaseUpdates.phone_number = updates.phoneNumber;
+    if (updates.profileImageUrl !== undefined) supabaseUpdates.photo_url = updates.profileImageUrl;
+    if (updates.theme !== undefined) supabaseUpdates.theme = updates.theme;
+    if (updates.isVerified !== undefined) supabaseUpdates.is_verified = updates.isVerified;
+    if (updates.verificationStatus !== undefined) supabaseUpdates.verification_status = updates.verificationStatus;
+    if (updates.hourlyRate !== undefined) supabaseUpdates.hourly_rate = updates.hourlyRate;
+    if (updates.bio !== undefined) supabaseUpdates.bio = updates.bio;
+
+    // Update Supabase
+    const { error: updateError } = await supabase
+      .from('users')
+      .update(supabaseUpdates)
+      .eq('id', user.id);
+
+    if (updateError) {
+      return {
+        success: false,
+        error: {
+          code: ErrorCode.AUTH_ERROR,
+          message: `Failed to update profile: ${updateError.message}`,
+        },
+      };
+    }
+
+    // Update AsyncStorage for offline access
+    try {
+      const { getAll, save, STORAGE_KEYS } = await import('./local-storage.service');
+      const result = await getAll(STORAGE_KEYS.USERS);
+      if (result.success && result.data) {
+        const localUser = result.data.find((u: any) => u.id === user.id);
+        if (localUser) {
+          const updatedUser = {
+            ...localUser,
+            ...updates,
+            updatedAt: Date.now(),
+          };
+          await save(STORAGE_KEYS.USERS, updatedUser);
+          console.log('✅ User profile updated in AsyncStorage');
+        }
+      }
+    } catch (localError: any) {
+      console.warn('⚠️ Failed to update AsyncStorage:', localError.message);
+    }
 
     return { success: true };
   } catch (error: any) {
     return {
       success: false,
-      error: handleFirestoreError(error),
+      error: handleUnexpectedError(error),
     };
   }
 }

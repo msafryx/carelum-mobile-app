@@ -1,6 +1,6 @@
 # Carelum - Frontend
 
-A cross-platform mobile application for connecting parents with verified babysitters, built with Expo React Native.
+A cross-platform mobile application for connecting parents with verified babysitters, built with Expo React Native and Supabase.
 
 ## 🚀 Quick Start
 
@@ -9,7 +9,7 @@ A cross-platform mobile application for connecting parents with verified babysit
 - Node.js (v18 or higher)
 - npm or yarn
 - Expo CLI (`npm install -g expo-cli`)
-- Firebase project (for backend services)
+- Supabase project (for backend services)
 
 ### Setup
 
@@ -21,20 +21,21 @@ A cross-platform mobile application for connecting parents with verified babysit
 
 2. **Configure environment variables**
 
-   Create a `.env` file in the project root:
+   Create a `.env` file in the project root or update `app.config.js`:
 
    ```env
-   EXPO_PUBLIC_FIREBASE_API_KEY=your_api_key
-   EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN=your_auth_domain
-   EXPO_PUBLIC_FIREBASE_PROJECT_ID=your_project_id
-   EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET=your_storage_bucket
-   EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=your_sender_id
-   EXPO_PUBLIC_FIREBASE_APP_ID=your_app_id
+   EXPO_PUBLIC_SUPABASE_URL=your_supabase_url
+   EXPO_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
    ```
 
    > ⚠️ **Important**: Never commit your `.env` file to version control!
 
-3. **Start the development server**
+3. **Set up Supabase database**
+
+   - Run the SQL schema in `scripts/create-supabase-schema.sql` in your Supabase SQL Editor
+   - See `README_SUPABASE.md` for detailed setup instructions
+
+4. **Start the development server**
 
    ```bash
    npm start
@@ -45,110 +46,139 @@ A cross-platform mobile application for connecting parents with verified babysit
 ### Essential Documentation
 
 - **[APP_FEATURES_STATUS.md](./APP_FEATURES_STATUS.md)** - Complete app features, UI screens, and implementation status
-- **[DATABASE_SETUP_COMPLETE.md](./DATABASE_SETUP_COMPLETE.md)** - Complete MySQL database setup guide (includes sync instructions)
-- **[LOCAL_DATABASE_GUIDE.md](./LOCAL_DATABASE_GUIDE.md)** - How to check and inspect AsyncStorage (local storage)
-- **[ADMIN.md](./ADMIN.md)** - Admin system guide (account creation, features, usage)
-- **[SECURITY.md](./SECURITY.md)** - Security guidelines and best practices
-- **[LOCAL_DB_SOLUTIONS.md](./LOCAL_DB_SOLUTIONS.md)** - Alternative database inspection solutions
+- **[ADMIN_GUIDE.md](./ADMIN_GUIDE.md)** - Complete guide for creating and managing admin users
+- **[ADMIN.md](./ADMIN.md)** - Admin system documentation (features and usage)
+- **[README_SUPABASE.md](./README_SUPABASE.md)** - Complete Supabase setup and configuration guide
+- **[DISABLE_EMAIL_CONFIRMATION.md](./DISABLE_EMAIL_CONFIRMATION.md)** - How to disable email confirmation in Supabase
+- **[SECURITY.md](./SECURITY.md)** - Security best practices and guidelines
 
-## 🗄️ Database System
+## 🏗️ Architecture
 
-The app uses a **hybrid database architecture**:
+### Tech Stack
 
-- **Local Storage (AsyncStorage)**: All data stored locally for offline support
-- **Firebase**: Real-time features (active sessions, GPS, chat, alerts)
-- **Auto-Sync**: Automatic synchronization between local and Firebase
+- **Frontend**: React Native (Expo)
+- **Backend**: Supabase (PostgreSQL, Auth, Storage, Realtime)
+- **State Management**: React Hooks + AsyncStorage
+- **Navigation**: Expo Router
+- **Styling**: React Native StyleSheet with theme support
 
-**Collections are created automatically** - no manual setup needed!
+### Data Flow
 
-See [DATABASE_SETUP_COMPLETE.md](./DATABASE_SETUP_COMPLETE.md) for complete setup instructions.
+1. **AsyncStorage (Primary)**: Instant local storage for responsive UI
+2. **Supabase (Secondary)**: Background sync, real-time updates, persistent storage
+3. **Real-time Sync**: Supabase Realtime subscriptions keep AsyncStorage updated
 
-## 📁 Project Structure
+### Key Features
+
+- ✅ Instant UI updates (AsyncStorage-first approach)
+- ✅ Offline support
+- ✅ Real-time synchronization
+- ✅ Role-based access (Parent, Sitter, Admin)
+- ✅ Profile management
+- ✅ Child management
+- ✅ Session management
+- ✅ Verification system
+- ✅ Chat and messaging
+- ✅ GPS tracking
+- ✅ Audio monitoring and cry detection
+
+## 📱 User Roles
+
+### Parent
+- Create and manage child profiles
+- Search and book sitters
+- Manage sessions
+- Receive alerts and notifications
+- Chat with sitters
+
+### Sitter
+- Complete profile setup
+- Submit verification documents
+- Accept/reject session requests
+- Manage active sessions
+- Chat with parents
+
+### Admin
+- User management
+- Verification queue
+- Statistics and analytics
+- System settings
+- Security management
+
+## 🔧 Development
+
+### Project Structure
 
 ```
 frontend/
 ├── app/                    # Expo Router screens
-│   ├── (auth)/            # Authentication screens
-│   ├── (parent)/          # Parent user screens
-│   ├── (sitter)/          # Babysitter screens
-│   └── (admin)/           # Admin screens
+│   ├── (admin)/            # Admin screens
+│   ├── (auth)/             # Authentication screens
+│   ├── (parent)/           # Parent screens
+│   └── (sitter)/           # Sitter screens
 ├── src/
-│   ├── components/        # Reusable UI components
-│   ├── config/           # Configuration files
-│   ├── hooks/            # Custom React hooks
-│   ├── services/         # API and service layers
-│   │   ├── local-storage.service.ts    # Local storage operations
-│   │   ├── firebase-collections.service.ts  # Firebase collections
-│   │   └── storage-sync.service.ts    # Sync service
-│   ├── types/             # TypeScript type definitions
-│   └── utils/             # Utility functions
-│       └── checkLocalStorage.ts  # Local DB inspection utilities
-└── assets/                # Images, fonts, etc.
+│   ├── components/          # Reusable components
+│   ├── config/             # Configuration files
+│   ├── hooks/               # Custom React hooks
+│   ├── services/            # API and service layer
+│   ├── types/               # TypeScript types
+│   └── utils/               # Utility functions
+├── scripts/                 # Database scripts and utilities
+└── assets/                  # Images, fonts, locales
 ```
 
-## 🛠️ Development
+### Key Services
 
-### Available Scripts
+- `auth.service.ts` - Authentication and user management
+- `child.service.ts` - Child profile management
+- `session.service.ts` - Session management
+- `verification.service.ts` - Sitter verification
+- `admin.service.ts` - Admin operations
+- `storage.service.ts` - File uploads (Supabase Storage)
+- `local-storage.service.ts` - AsyncStorage management
 
-- `npm start` - Start Expo development server
-- `npm run android` - Run on Android emulator/device
-- `npm run ios` - Run on iOS simulator/device
-- `npm run web` - Run in web browser
-- `npm run lint` - Run ESLint
-- `npm run create-admin` - Create admin account
+### Scripts
 
-### Checking Local Database
+- `scripts/create-supabase-schema.sql` - Main database schema
+- `scripts/createAdmin.ts` - Admin user creation script
+- `scripts/FIX_RLS_*.sql` - Row Level Security fixes
 
-To inspect local storage data:
+## 🚀 Deployment
 
-```typescript
-import { printStorageStats, getStorageStats, inspectLocalStorage } from '@/src/utils/checkLocalStorage';
+### Building for Production
 
-// Print statistics to console
-await printStorageStats();
+```bash
+# iOS
+npx expo build:ios
 
-// Get statistics object
-const stats = await getStorageStats();
-console.log(stats);
+# Android
+npx expo build:android
 
-// Get all data
-const allData = await inspectLocalStorage();
-console.log(allData);
+# Web
+npx expo build:web
 ```
 
-See [LOCAL_DATABASE_GUIDE.md](./LOCAL_DATABASE_GUIDE.md) for complete guide.
+### Environment Setup
+
+Make sure to set production environment variables:
+- `EXPO_PUBLIC_SUPABASE_URL`
+- `EXPO_PUBLIC_SUPABASE_ANON_KEY`
 
 ## 🔐 Security
 
-See [SECURITY.md](./SECURITY.md) for detailed information about:
-- Environment variable setup
-- API key management
-- Best practices for handling secrets
-
-## 📚 Learn More
-
-- [Expo documentation](https://docs.expo.dev/)
-- [Expo Router](https://docs.expo.dev/router/introduction/)
-- [React Native](https://reactnative.dev/)
-- [Firebase](https://firebase.google.com/docs)
-
-## 🆘 Troubleshooting
-
-### Database Issues
-
-- **Local storage not working**: Check [LOCAL_DATABASE_GUIDE.md](./LOCAL_DATABASE_GUIDE.md)
-- **Firebase not connecting**: Check [DATABASE_SETUP_COMPLETE.md](./DATABASE_SETUP_COMPLETE.md)
-
-### Common Issues
-
-1. **"Firebase not configured"** → Check `.env` file exists with correct credentials
-2. **"Cannot find native module"** → See [EXPO_GO_LIMITATIONS.md](./EXPO_GO_LIMITATIONS.md)
-3. **Collections not created** → They're created automatically on first use
+- Row Level Security (RLS) enabled on all Supabase tables
+- Secure authentication via Supabase Auth
+- Environment variables for sensitive data
+- See `SECURITY.md` for detailed security guidelines
 
 ## 📝 License
 
-[Add your license here]
+[Your License Here]
 
-## 👥 Contributors
+## 🤝 Contributing
 
-[Add contributors here]
+[Your Contributing Guidelines Here]
+
+## 📞 Support
+
+[Your Support Information Here]

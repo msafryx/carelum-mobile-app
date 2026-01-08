@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { View, StyleSheet, ScrollView, KeyboardAvoidingView, Platform, Image, Text } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useTheme } from '@/src/config/theme';
@@ -9,10 +9,13 @@ import LoadingSpinner from '@/src/components/ui/LoadingSpinner';
 import { signIn } from '@/src/services/auth.service';
 import { validateEmail } from '@/src/utils/validators';
 import { AppError } from '@/src/types/error.types';
+import { useAuth } from '@/src/hooks/useAuth';
+import { USER_ROLES } from '@/src/config/constants';
 
 export default function LoginScreen() {
   const { colors, spacing, isDark } = useTheme();
   const router = useRouter();
+  const { userProfile, initialized } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -38,15 +41,29 @@ export default function LoginScreen() {
     }
 
     setLoading(true);
-    const result = await signIn({ email, password });
+    try {
+      const result = await signIn({ email, password });
 
-    if (result.success) {
-      // Navigation will be handled by app/index.tsx based on user role
-      router.replace('/');
-    } else {
-      setError(result.error || null);
+      if (result.success) {
+        // INSTANT NAVIGATION - Like Firebase/MySQL pattern
+        // AsyncStorage already has the data from previous session
+        // If not, useAuth will create minimal profile instantly
+        setLoading(false);
+        
+        // Navigate immediately - useAuth hook will handle profile loading
+        // Don't wait for anything
+        router.replace('/landing'); // Landing will redirect based on auth state
+      } else {
+        setError(result.error || null);
+        setLoading(false);
+      }
+    } catch (err: any) {
+      setError({
+        code: 'UNKNOWN_ERROR' as any,
+        message: err.message || 'An unexpected error occurred',
+      });
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   return (

@@ -1,11 +1,15 @@
 import ErrorBoundary from '@/src/components/ui/ErrorBoundary';
 import { ThemeProvider } from '@/src/components/ui/ThemeProvider';
 import { useDatabaseInit } from '@/src/hooks/useDatabaseInit';
+import { useRealtimeSync } from '@/src/hooks/useRealtimeSync';
 import { Stack } from 'expo-router';
 import { useEffect } from 'react';
 
 export default function RootLayout() {
-  const { localDbReady, firebaseConfigured, error } = useDatabaseInit();
+  const { localDbReady, supabaseConfigured, error } = useDatabaseInit();
+  
+  // Enable real-time sync from Supabase → AsyncStorage
+  useRealtimeSync();
 
   useEffect(() => {
     if (error) {

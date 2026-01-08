@@ -1,24 +1,10 @@
 /**
- * Alert Service
- * Handles alert creation and management
+ * Alert Service - Supabase
+ * Handles alert creation and management with real-time subscriptions
  */
-import { ServiceResult } from '@/src/types/error.types';
-import {
-  collection,
-  doc,
-  getDocs,
-  setDoc,
-  updateDoc,
-  query,
-  where,
-  orderBy,
-  limit,
-  Timestamp,
-} from 'firebase/firestore';
-import { firestore } from '@/src/config/firebase';
-import { handleFirestoreError, retryWithBackoff } from '@/src/utils/errorHandler';
-
-const COLLECTION_NAME = 'alerts';
+import { isSupabaseConfigured, supabase } from '@/src/config/supabase';
+import { ErrorCode, ServiceResult } from '@/src/types/error.types';
+import { handleUnexpectedError } from '@/src/utils/errorHandler';
 
 export interface Alert {
   id?: string;
@@ -47,28 +33,71 @@ export interface Alert {
  */
 export async function createAlert(alertData: Omit<Alert, 'id' | 'createdAt'>): Promise<ServiceResult<Alert>> {
   try {
-    const alertRef = doc(collection(firestore!, COLLECTION_NAME));
-    const newAlert: Alert = {
-      id: alertRef.id,
-      ...alertData,
-      createdAt: new Date(),
+    if (!isSupabaseConfigured() || !supabase) {
+      return {
+        success: false,
+        error: {
+          code: ErrorCode.DB_NOT_AVAILABLE,
+          message: 'Supabase is not configured',
+        },
+      };
+    }
+
+    const { data, error } = await supabase
+      .from('alerts')
+      .insert({
+        session_id: alertData.sessionId || null,
+        child_id: alertData.childId || null,
+        parent_id: alertData.parentId,
+        sitter_id: alertData.sitterId || null,
+        type: alertData.type,
+        severity: alertData.severity,
+        title: alertData.title,
+        message: alertData.message,
+        status: alertData.status,
+        audio_log_id: alertData.audioLogId || null,
+        location: alertData.location ? JSON.stringify(alertData.location) : null,
+        viewed_at: null,
+        acknowledged_at: null,
+        resolved_at: null,
+      })
+      .select()
+      .single();
+
+    if (error) {
+      return {
+        success: false,
+        error: {
+          code: ErrorCode.DB_INSERT_ERROR,
+          message: `Failed to create alert: ${error.message}`,
+        },
+      };
+    }
+
+    const alert: Alert = {
+      id: data.id,
+      sessionId: data.session_id,
+      childId: data.child_id,
+      parentId: data.parent_id,
+      sitterId: data.sitter_id,
+      type: data.type,
+      severity: data.severity,
+      title: data.title,
+      message: data.message,
+      status: data.status,
+      audioLogId: data.audio_log_id,
+      location: data.location ? (typeof data.location === 'string' ? JSON.parse(data.location) : data.location) : undefined,
+      viewedAt: data.viewed_at ? new Date(data.viewed_at) : undefined,
+      acknowledgedAt: data.acknowledged_at ? new Date(data.acknowledged_at) : undefined,
+      resolvedAt: data.resolved_at ? new Date(data.resolved_at) : undefined,
+      createdAt: new Date(data.created_at),
     };
 
-    await retryWithBackoff(async () => {
-      await setDoc(alertRef, {
-        ...newAlert,
-        createdAt: Timestamp.fromDate(newAlert.createdAt),
-        viewedAt: newAlert.viewedAt ? Timestamp.fromDate(newAlert.viewedAt) : null,
-        acknowledgedAt: newAlert.acknowledgedAt ? Timestamp.fromDate(newAlert.acknowledgedAt) : null,
-        resolvedAt: newAlert.resolvedAt ? Timestamp.fromDate(newAlert.resolvedAt) : null,
-      });
-    });
-
-    return { success: true, data: newAlert };
-  } catch (error) {
+    return { success: true, data: alert };
+  } catch (error: any) {
     return {
       success: false,
-      error: handleFirestoreError(error),
+      error: handleUnexpectedError(error),
     };
   }
 }
@@ -108,39 +137,63 @@ export async function getUserAlerts(
   status?: Alert['status']
 ): Promise<ServiceResult<Alert[]>> {
   try {
-    let q = query(
-      collection(firestore!, COLLECTION_NAME),
-      where('parentId', '==', userId),
-      orderBy('createdAt', 'desc'),
-      limit(50)
-    );
-
-    if (status) {
-      q = query(q, where('status', '==', status));
+    if (!isSupabaseConfigured() || !supabase) {
+      return {
+        success: false,
+        error: {
+          code: ErrorCode.DB_NOT_AVAILABLE,
+          message: 'Supabase is not configured',
+        },
+      };
     }
 
-    const snapshot = await retryWithBackoff(async () => getDocs(q));
-    const alerts: Alert[] = [];
+    let query = supabase
+      .from('alerts')
+      .select('*')
+      .eq('parent_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(50);
 
-    snapshot.forEach((doc) => {
-      const data = doc.data();
-      alerts.push({
-        id: doc.id,
-        ...data,
-        createdAt: (data.createdAt as Timestamp)?.toDate() || new Date(),
-        viewedAt: data.viewedAt ? (data.viewedAt as Timestamp)?.toDate() : undefined,
-        acknowledgedAt: data.acknowledgedAt
-          ? (data.acknowledgedAt as Timestamp)?.toDate()
-          : undefined,
-        resolvedAt: data.resolvedAt ? (data.resolvedAt as Timestamp)?.toDate() : undefined,
-      } as Alert);
-    });
+    if (status) {
+      query = query.eq('status', status);
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+      return {
+        success: false,
+        error: {
+          code: ErrorCode.DB_SELECT_ERROR,
+          message: `Failed to fetch alerts: ${error.message}`,
+        },
+      };
+    }
+
+    const alerts: Alert[] = (data || []).map((row: any) => ({
+      id: row.id,
+      sessionId: row.session_id,
+      childId: row.child_id,
+      parentId: row.parent_id,
+      sitterId: row.sitter_id,
+      type: row.type,
+      severity: row.severity,
+      title: row.title,
+      message: row.message,
+      status: row.status,
+      audioLogId: row.audio_log_id,
+      location: row.location ? (typeof row.location === 'string' ? JSON.parse(row.location) : row.location) : undefined,
+      viewedAt: row.viewed_at ? new Date(row.viewed_at) : undefined,
+      acknowledgedAt: row.acknowledged_at ? new Date(row.acknowledged_at) : undefined,
+      resolvedAt: row.resolved_at ? new Date(row.resolved_at) : undefined,
+      createdAt: new Date(row.created_at),
+    }));
 
     return { success: true, data: alerts };
-  } catch (error) {
+  } catch (error: any) {
     return {
       success: false,
-      error: handleFirestoreError(error),
+      error: handleUnexpectedError(error),
     };
   }
 }
@@ -150,19 +203,39 @@ export async function getUserAlerts(
  */
 export async function markAlertAsViewed(alertId: string): Promise<ServiceResult<void>> {
   try {
-    const alertRef = doc(firestore!, COLLECTION_NAME, alertId);
-    await retryWithBackoff(async () => {
-      await updateDoc(alertRef, {
+    if (!isSupabaseConfigured() || !supabase) {
+      return {
+        success: false,
+        error: {
+          code: ErrorCode.DB_NOT_AVAILABLE,
+          message: 'Supabase is not configured',
+        },
+      };
+    }
+
+    const { error } = await supabase
+      .from('alerts')
+      .update({
         status: 'viewed',
-        viewedAt: Timestamp.now(),
-      });
-    });
+        viewed_at: new Date().toISOString(),
+      })
+      .eq('id', alertId);
+
+    if (error) {
+      return {
+        success: false,
+        error: {
+          code: ErrorCode.DB_UPDATE_ERROR,
+          message: `Failed to mark alert as viewed: ${error.message}`,
+        },
+      };
+    }
 
     return { success: true };
-  } catch (error) {
+  } catch (error: any) {
     return {
       success: false,
-      error: handleFirestoreError(error),
+      error: handleUnexpectedError(error),
     };
   }
 }
@@ -172,19 +245,39 @@ export async function markAlertAsViewed(alertId: string): Promise<ServiceResult<
  */
 export async function acknowledgeAlert(alertId: string): Promise<ServiceResult<void>> {
   try {
-    const alertRef = doc(firestore!, COLLECTION_NAME, alertId);
-    await retryWithBackoff(async () => {
-      await updateDoc(alertRef, {
+    if (!isSupabaseConfigured() || !supabase) {
+      return {
+        success: false,
+        error: {
+          code: ErrorCode.DB_NOT_AVAILABLE,
+          message: 'Supabase is not configured',
+        },
+      };
+    }
+
+    const { error } = await supabase
+      .from('alerts')
+      .update({
         status: 'acknowledged',
-        acknowledgedAt: Timestamp.now(),
-      });
-    });
+        acknowledged_at: new Date().toISOString(),
+      })
+      .eq('id', alertId);
+
+    if (error) {
+      return {
+        success: false,
+        error: {
+          code: ErrorCode.DB_UPDATE_ERROR,
+          message: `Failed to acknowledge alert: ${error.message}`,
+        },
+      };
+    }
 
     return { success: true };
-  } catch (error) {
+  } catch (error: any) {
     return {
       success: false,
-      error: handleFirestoreError(error),
+      error: handleUnexpectedError(error),
     };
   }
 }

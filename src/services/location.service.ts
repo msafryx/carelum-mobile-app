@@ -1,9 +1,12 @@
+/**
+ * Location Service - Supabase
+ * Handles location tracking and updates
+ */
 import * as Location from 'expo-location';
-import { ServiceResult } from '@/src/types/error.types';
+import { isSupabaseConfigured, supabase } from '@/src/config/supabase';
+import { LOCATION_UPDATE_INTERVAL } from '@/src/config/constants';
+import { ErrorCode, ServiceResult } from '@/src/types/error.types';
 import { LocationUpdate } from '@/src/types/session.types';
-import { updateDocument } from './firestore.service';
-import { COLLECTIONS, LOCATION_UPDATE_INTERVAL } from '@/src/config/constants';
-import { ErrorCode } from '@/src/types/error.types';
 
 /**
  * Request location permissions
@@ -67,34 +70,63 @@ export async function getCurrentLocation(): Promise<ServiceResult<LocationUpdate
 }
 
 /**
- * Update session location in Firestore
+ * Update session location in Supabase
  */
 export async function updateSessionLocation(
   sessionId: string,
   location: LocationUpdate
 ): Promise<ServiceResult<void>> {
   try {
-    // Get current session
-    const { getDocument } = await import('./firestore.service');
-    const sessionResult = await getDocument(COLLECTIONS.SESSIONS, sessionId);
-    
-    if (!sessionResult.success || !sessionResult.data) {
+    if (!isSupabaseConfigured() || !supabase) {
       return {
         success: false,
         error: {
-          code: 'DOCUMENT_NOT_FOUND' as any,
+          code: ErrorCode.DB_NOT_AVAILABLE,
+          message: 'Supabase is not configured',
+        },
+      };
+    }
+
+    // Get current session to get sitter_id
+    const { data: sessionData, error: sessionError } = await supabase
+      .from('sessions')
+      .select('sitter_id')
+      .eq('id', sessionId)
+      .single();
+
+    if (sessionError || !sessionData) {
+      return {
+        success: false,
+        error: {
+          code: ErrorCode.DOCUMENT_NOT_FOUND,
           message: 'Session not found',
         },
       };
     }
 
-    const session = sessionResult.data as any;
-    const locations = session.location || [];
-    locations.push(location);
+    // Save GPS tracking
+    const { error: trackingError } = await supabase
+      .from('gps_tracking')
+      .insert({
+        session_id: sessionId,
+        latitude: location.latitude,
+        longitude: location.longitude,
+        accuracy: null,
+        speed: null,
+        heading: null,
+      });
 
-    return updateDocument(COLLECTIONS.SESSIONS, sessionId, {
-      location: locations,
-    });
+    if (trackingError) {
+      return {
+        success: false,
+        error: {
+          code: ErrorCode.DB_INSERT_ERROR,
+          message: `Failed to save GPS tracking: ${trackingError.message}`,
+        },
+      };
+    }
+
+    return { success: true };
   } catch (error: any) {
     return {
       success: false,

@@ -1,6 +1,6 @@
 /**
- * Connection Status Component
- * Shows Firebase and Local DB connection status
+ * Connection Status Component - Supabase
+ * Shows Supabase connection status
  */
 import { useTheme } from '@/src/config/theme';
 import { checkAllConnections } from '@/src/utils/checkConnection';
@@ -11,9 +11,7 @@ import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 export default function ConnectionStatus() {
   const { colors } = useTheme();
   const [status, setStatus] = useState<{
-    firebase: any;
-    localDB: any;
-    sync: any;
+    supabase: any;
   } | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -43,42 +41,44 @@ export default function ConnectionStatus() {
 
       <View style={styles.statusRow}>
         <Ionicons
-          name={status.firebase.configured ? 'checkmark-circle' : 'close-circle'}
+          name={status.supabase.configured ? 'checkmark-circle' : 'close-circle'}
           size={20}
-          color={status.firebase.configured ? colors.success : colors.error}
+          color={status.supabase.configured ? colors.success : colors.error}
         />
         <Text style={[styles.statusText, { color: colors.text }]}>
-          Firebase: {status.firebase.configured ? 'Connected' : 'Not Configured'}
+          Supabase: {status.supabase.configured ? 'Connected' : 'Not Configured'}
         </Text>
       </View>
 
-      <View style={styles.statusRow}>
-        <Ionicons
-          name={status.localDB.initialized ? 'checkmark-circle' : 'close-circle'}
-          size={20}
-          color={status.localDB.initialized ? colors.success : colors.error}
-        />
-        <Text style={[styles.statusText, { color: colors.text }]}>
-          Local DB: {status.localDB.initialized ? 'Ready' : 'Not Initialized'}
-        </Text>
-      </View>
-
-      {status.sync && (
+      {status.supabase.database && (
         <View style={styles.statusRow}>
           <Ionicons
-            name={status.sync.status === 'synced' ? 'checkmark-circle' : 'alert-circle'}
+            name={status.supabase.database ? 'checkmark-circle' : 'close-circle'}
             size={20}
-            color={status.sync.status === 'synced' ? colors.success : colors.warning}
+            color={status.supabase.database ? colors.success : colors.error}
           />
           <Text style={[styles.statusText, { color: colors.text }]}>
-            Sync: {status.sync.unsyncedSessions} pending
+            Database: {status.supabase.database ? 'Ready' : 'Not Available'}
           </Text>
         </View>
       )}
 
-      {status.firebase.error && (
+      {status.supabase.auth && (
+        <View style={styles.statusRow}>
+          <Ionicons
+            name={status.supabase.auth ? 'checkmark-circle' : 'close-circle'}
+            size={20}
+            color={status.supabase.auth ? colors.success : colors.error}
+          />
+          <Text style={[styles.statusText, { color: colors.text }]}>
+            Auth: {status.supabase.auth ? 'Ready' : 'Not Available'}
+          </Text>
+        </View>
+      )}
+
+      {status.supabase.error && (
         <Text style={[styles.error, { color: colors.error }]}>
-          {status.firebase.error}
+          {status.supabase.error}
         </Text>
       )}
     </View>

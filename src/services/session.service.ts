@@ -1,28 +1,11 @@
 /**
- * Session Service
- * Handles all session-related Firestore operations
+ * Session Service - Supabase
+ * Handles all session-related operations with real-time support
  */
-import { ServiceResult } from '@/src/types/error.types';
+import { isSupabaseConfigured, supabase } from '@/src/config/supabase';
+import { ErrorCode, ServiceResult } from '@/src/types/error.types';
 import { Session } from '@/src/types/session.types';
-import {
-  collection,
-  doc,
-  getDoc,
-  getDocs,
-  setDoc,
-  updateDoc,
-  query,
-  where,
-  orderBy,
-  limit,
-  onSnapshot,
-  Timestamp,
-  addDoc,
-} from 'firebase/firestore';
-import { firestore } from '@/src/config/firebase';
-import { handleFirestoreError, retryWithBackoff } from '@/src/utils/errorHandler';
-
-const COLLECTION_NAME = 'sessions';
+import { handleUnexpectedError } from '@/src/utils/errorHandler';
 
 /**
  * Create a new session request
@@ -31,29 +14,64 @@ export async function createSessionRequest(
   sessionData: Omit<Session, 'id' | 'createdAt' | 'updatedAt'>
 ): Promise<ServiceResult<Session>> {
   try {
-    const sessionRef = doc(collection(firestore!, COLLECTION_NAME));
-    const newSession: Session = {
-      id: sessionRef.id,
-      ...sessionData,
-      createdAt: new Date(),
-      updatedAt: new Date(),
+    if (!isSupabaseConfigured() || !supabase) {
+      return {
+        success: false,
+        error: {
+          code: ErrorCode.DB_NOT_AVAILABLE,
+          message: 'Supabase is not configured',
+        },
+      };
+    }
+
+    const { data, error } = await supabase
+      .from('sessions')
+      .insert({
+        parent_id: sessionData.parentId,
+        sitter_id: sessionData.sitterId || null,
+        child_id: sessionData.childId,
+        status: sessionData.status || 'pending',
+        start_time: sessionData.startTime.toISOString(),
+        end_time: sessionData.endTime ? sessionData.endTime.toISOString() : null,
+        location: sessionData.location || null,
+        hourly_rate: sessionData.hourlyRate || null,
+        total_amount: sessionData.totalAmount || null,
+        notes: sessionData.notes || null,
+      })
+      .select()
+      .single();
+
+    if (error) {
+      return {
+        success: false,
+        error: {
+          code: ErrorCode.DB_INSERT_ERROR,
+          message: `Failed to create session: ${error.message}`,
+        },
+      };
+    }
+
+    const session: Session = {
+      id: data.id,
+      parentId: data.parent_id,
+      sitterId: data.sitter_id,
+      childId: data.child_id,
+      status: data.status,
+      startTime: new Date(data.start_time),
+      endTime: data.end_time ? new Date(data.end_time) : undefined,
+      location: data.location,
+      hourlyRate: data.hourly_rate,
+      totalAmount: data.total_amount,
+      notes: data.notes,
+      createdAt: new Date(data.created_at),
+      updatedAt: new Date(data.updated_at),
     };
 
-    await retryWithBackoff(async () => {
-      await setDoc(sessionRef, {
-        ...newSession,
-        createdAt: Timestamp.fromDate(newSession.createdAt),
-        updatedAt: Timestamp.fromDate(newSession.updatedAt),
-        startTime: Timestamp.fromDate(sessionData.startTime),
-        endTime: sessionData.endTime ? Timestamp.fromDate(sessionData.endTime) : null,
-      });
-    });
-
-    return { success: true, data: newSession };
-  } catch (error) {
+    return { success: true, data: session };
+  } catch (error: any) {
     return {
       success: false,
-      error: handleFirestoreError(error),
+      error: handleUnexpectedError(error),
     };
   }
 }
@@ -63,35 +81,53 @@ export async function createSessionRequest(
  */
 export async function getSessionById(sessionId: string): Promise<ServiceResult<Session>> {
   try {
-    const sessionRef = doc(firestore!, COLLECTION_NAME, sessionId);
-    const snapshot = await retryWithBackoff(async () => getDoc(sessionRef));
-
-    if (!snapshot.exists()) {
+    if (!isSupabaseConfigured() || !supabase) {
       return {
         success: false,
         error: {
-          code: 'NOT_FOUND',
+          code: ErrorCode.DB_NOT_AVAILABLE,
+          message: 'Supabase is not configured',
+        },
+      };
+    }
+
+    const { data, error } = await supabase
+      .from('sessions')
+      .select('*')
+      .eq('id', sessionId)
+      .single();
+
+    if (error || !data) {
+      return {
+        success: false,
+        error: {
+          code: ErrorCode.DOCUMENT_NOT_FOUND,
           message: 'Session not found',
         },
       };
     }
 
-    const data = snapshot.data();
-    return {
-      success: true,
-      data: {
-        id: snapshot.id,
-        ...data,
-        createdAt: (data.createdAt as Timestamp)?.toDate() || new Date(),
-        updatedAt: (data.updatedAt as Timestamp)?.toDate() || new Date(),
-        startTime: (data.startTime as Timestamp)?.toDate() || new Date(),
-        endTime: data.endTime ? (data.endTime as Timestamp)?.toDate() : undefined,
-      } as Session,
+    const session: Session = {
+      id: data.id,
+      parentId: data.parent_id,
+      sitterId: data.sitter_id,
+      childId: data.child_id,
+      status: data.status,
+      startTime: new Date(data.start_time),
+      endTime: data.end_time ? new Date(data.end_time) : undefined,
+      location: data.location,
+      hourlyRate: data.hourly_rate,
+      totalAmount: data.total_amount,
+      notes: data.notes,
+      createdAt: new Date(data.created_at),
+      updatedAt: new Date(data.updated_at),
     };
-  } catch (error) {
+
+    return { success: true, data: session };
+  } catch (error: any) {
     return {
       success: false,
-      error: handleFirestoreError(error),
+      error: handleUnexpectedError(error),
     };
   }
 }
@@ -105,38 +141,61 @@ export async function getUserSessions(
   status?: Session['status']
 ): Promise<ServiceResult<Session[]>> {
   try {
-    const field = role === 'parent' ? 'parentId' : 'sitterId';
-    let q = query(
-      collection(firestore!, COLLECTION_NAME),
-      where(field, '==', userId),
-      orderBy('startTime', 'desc'),
-      limit(50)
-    );
-
-    if (status) {
-      q = query(q, where('status', '==', status));
+    if (!isSupabaseConfigured() || !supabase) {
+      return {
+        success: false,
+        error: {
+          code: ErrorCode.DB_NOT_AVAILABLE,
+          message: 'Supabase is not configured',
+        },
+      };
     }
 
-    const snapshot = await retryWithBackoff(async () => getDocs(q));
-    const sessions: Session[] = [];
+    const field = role === 'parent' ? 'parent_id' : 'sitter_id';
+    let query = supabase
+      .from('sessions')
+      .select('*')
+      .eq(field, userId)
+      .order('start_time', { ascending: false })
+      .limit(50);
 
-    snapshot.forEach((doc) => {
-      const data = doc.data();
-      sessions.push({
-        id: doc.id,
-        ...data,
-        createdAt: (data.createdAt as Timestamp)?.toDate() || new Date(),
-        updatedAt: (data.updatedAt as Timestamp)?.toDate() || new Date(),
-        startTime: (data.startTime as Timestamp)?.toDate() || new Date(),
-        endTime: data.endTime ? (data.endTime as Timestamp)?.toDate() : undefined,
-      } as Session);
-    });
+    if (status) {
+      query = query.eq('status', status);
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+      return {
+        success: false,
+        error: {
+          code: ErrorCode.DB_SELECT_ERROR,
+          message: `Failed to fetch sessions: ${error.message}`,
+        },
+      };
+    }
+
+    const sessions: Session[] = (data || []).map((row: any) => ({
+      id: row.id,
+      parentId: row.parent_id,
+      sitterId: row.sitter_id,
+      childId: row.child_id,
+      status: row.status,
+      startTime: new Date(row.start_time),
+      endTime: row.end_time ? new Date(row.end_time) : undefined,
+      location: row.location,
+      hourlyRate: row.hourly_rate,
+      totalAmount: row.total_amount,
+      notes: row.notes,
+      createdAt: new Date(row.created_at),
+      updatedAt: new Date(row.updated_at),
+    }));
 
     return { success: true, data: sessions };
-  } catch (error) {
+  } catch (error: any) {
     return {
       success: false,
-      error: handleFirestoreError(error),
+      error: handleUnexpectedError(error),
     };
   }
 }
@@ -150,26 +209,56 @@ export async function updateSessionStatus(
   additionalData?: Partial<Session>
 ): Promise<ServiceResult<void>> {
   try {
-    const sessionRef = doc(firestore!, COLLECTION_NAME, sessionId);
+    if (!isSupabaseConfigured() || !supabase) {
+      return {
+        success: false,
+        error: {
+          code: ErrorCode.DB_NOT_AVAILABLE,
+          message: 'Supabase is not configured',
+        },
+      };
+    }
+
     const updateData: any = {
       status,
-      updatedAt: Timestamp.now(),
-      ...additionalData,
     };
 
     if (additionalData?.endTime) {
-      updateData.endTime = Timestamp.fromDate(additionalData.endTime);
+      updateData.end_time = additionalData.endTime.toISOString();
+    }
+    if (additionalData?.location) {
+      updateData.location = additionalData.location;
+    }
+    if (additionalData?.hourlyRate !== undefined) {
+      updateData.hourly_rate = additionalData.hourlyRate;
+    }
+    if (additionalData?.totalAmount !== undefined) {
+      updateData.total_amount = additionalData.totalAmount;
+    }
+    if (additionalData?.notes !== undefined) {
+      updateData.notes = additionalData.notes;
     }
 
-    await retryWithBackoff(async () => {
-      await updateDoc(sessionRef, updateData);
-    });
+    const { error } = await supabase
+      .from('sessions')
+      .update(updateData)
+      .eq('id', sessionId);
+
+    if (error) {
+      return {
+        success: false,
+        error: {
+          code: ErrorCode.DB_UPDATE_ERROR,
+          message: `Failed to update session: ${error.message}`,
+        },
+      };
+    }
 
     return { success: true };
-  } catch (error) {
+  } catch (error: any) {
     return {
       success: false,
-      error: handleFirestoreError(error),
+      error: handleUnexpectedError(error),
     };
   }
 }
@@ -189,9 +278,7 @@ export async function declineSessionRequest(
   reason?: string
 ): Promise<ServiceResult<void>> {
   return updateSessionStatus(sessionId, 'cancelled', {
-    cancelledBy: 'sitter',
-    cancellationReason: reason,
-    cancelledAt: new Date(),
+    notes: reason,
   } as any);
 }
 
@@ -211,86 +298,89 @@ export async function completeSession(
   review?: string
 ): Promise<ServiceResult<void>> {
   return updateSessionStatus(sessionId, 'completed', {
-    completedAt: new Date(),
     endTime: new Date(),
-    parentRating: rating,
-    parentReview: review,
+    notes: review,
   } as any);
 }
 
 /**
  * Subscribe to session updates (real-time)
+ * Uses Supabase Realtime
  */
 export function subscribeToSession(
   sessionId: string,
   callback: (session: Session | null) => void
 ): () => void {
-  const sessionRef = doc(firestore!, COLLECTION_NAME, sessionId);
+  if (!isSupabaseConfigured() || !supabase) {
+    console.warn('⚠️ Supabase not configured, cannot subscribe to session');
+    return () => {};
+  }
 
-  const unsubscribe = onSnapshot(
-    sessionRef,
-    (snapshot) => {
-      if (snapshot.exists()) {
-        const data = snapshot.data();
-        callback({
-          id: snapshot.id,
-          ...data,
-          createdAt: (data.createdAt as Timestamp)?.toDate() || new Date(),
-          updatedAt: (data.updatedAt as Timestamp)?.toDate() || new Date(),
-          startTime: (data.startTime as Timestamp)?.toDate() || new Date(),
-          endTime: data.endTime ? (data.endTime as Timestamp)?.toDate() : undefined,
-        } as Session);
-      } else {
-        callback(null);
+  const channel = supabase
+    .channel(`session-${sessionId}`)
+    .on(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        table: 'sessions',
+        filter: `id=eq.${sessionId}`,
+      },
+      async (payload: any) => {
+        if (payload.eventType === 'DELETE') {
+          callback(null);
+        } else {
+          // Fetch updated session
+          const result = await getSessionById(sessionId);
+          if (result.success && result.data) {
+            callback(result.data);
+          }
+        }
       }
-    },
-    (error) => {
-      console.error('Session subscription error:', error);
-      callback(null);
-    }
-  );
+    )
+    .subscribe();
 
-  return unsubscribe;
+  return () => {
+    supabase.removeChannel(channel);
+  };
 }
 
 /**
  * Subscribe to user's sessions (real-time)
+ * Uses Supabase Realtime
  */
 export function subscribeToUserSessions(
   userId: string,
   role: 'parent' | 'sitter',
   callback: (sessions: Session[]) => void
 ): () => void {
-  const field = role === 'parent' ? 'parentId' : 'sitterId';
-  const q = query(
-    collection(firestore!, COLLECTION_NAME),
-    where(field, '==', userId),
-    orderBy('startTime', 'desc'),
-    limit(20)
-  );
+  if (!isSupabaseConfigured() || !supabase) {
+    console.warn('⚠️ Supabase not configured, cannot subscribe to sessions');
+    return () => {};
+  }
 
-  const unsubscribe = onSnapshot(
-    q,
-    (snapshot) => {
-      const sessions: Session[] = [];
-      snapshot.forEach((doc) => {
-        const data = doc.data();
-        sessions.push({
-          id: doc.id,
-          ...data,
-          createdAt: (data.createdAt as Timestamp)?.toDate() || new Date(),
-          updatedAt: (data.updatedAt as Timestamp)?.toDate() || new Date(),
-          startTime: (data.startTime as Timestamp)?.toDate() || new Date(),
-          endTime: data.endTime ? (data.endTime as Timestamp)?.toDate() : undefined,
-        } as Session);
-      });
-      callback(sessions);
-    },
-    (error) => {
-      console.error('User sessions subscription error:', error);
-      callback([]);
-    }
-  );
+  const field = role === 'parent' ? 'parent_id' : 'sitter_id';
+  const channel = supabase
+    .channel(`user-sessions-${userId}`)
+    .on(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        table: 'sessions',
+        filter: `${field}=eq.${userId}`,
+      },
+      async () => {
+        // Fetch updated sessions
+        const result = await getUserSessions(userId, role);
+        if (result.success && result.data) {
+          callback(result.data);
+        }
+      }
+    )
+    .subscribe();
 
-  return unsubscribe;
+  return () => {
+    supabase.removeChannel(channel);
+  };
 }

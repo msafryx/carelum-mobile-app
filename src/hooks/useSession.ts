@@ -1,9 +1,11 @@
+/**
+ * Session Hook - Supabase
+ * Manages session state with real-time updates
+ */
 import { useState, useEffect } from 'react';
 import { Session } from '@/src/types/session.types';
 import { SESSION_STATUS } from '@/src/config/constants';
-import { subscribeToDocument } from '@/src/services/firestore.service';
-import { COLLECTIONS } from '@/src/config/constants';
-import { ServiceResult } from '@/src/types/error.types';
+import { getSessionById, subscribeToSession } from '@/src/services/session.service';
 
 export function useSession(sessionId: string | null) {
   const [session, setSession] = useState<Session | null>(null);
@@ -17,19 +19,27 @@ export function useSession(sessionId: string | null) {
       return;
     }
 
-    const unsubscribe = subscribeToDocument<Session>(
-      COLLECTIONS.SESSIONS,
-      sessionId,
-      (result: ServiceResult<Session>) => {
-        if (result.success && result.data) {
-          setSession(result.data);
-          setError(null);
-        } else {
-          setError(result.error?.message || 'Failed to load session');
-        }
-        setLoading(false);
+    // Load initial session
+    getSessionById(sessionId).then((result) => {
+      if (result.success && result.data) {
+        setSession(result.data);
+        setError(null);
+      } else {
+        setError(result.error?.message || 'Failed to load session');
       }
-    );
+      setLoading(false);
+    });
+
+    // Subscribe to real-time updates
+    const unsubscribe = subscribeToSession(sessionId, (updatedSession) => {
+      if (updatedSession) {
+        setSession(updatedSession);
+        setError(null);
+      } else {
+        setError('Session not found');
+      }
+      setLoading(false);
+    });
 
     return unsubscribe;
   }, [sessionId]);
