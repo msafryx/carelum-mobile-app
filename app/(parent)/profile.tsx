@@ -1,7 +1,7 @@
 import Card from '@/src/components/ui/Card';
 import HamburgerMenu from '@/src/components/ui/HamburgerMenu';
 import Header from '@/src/components/ui/Header';
-import { useTheme } from '@/src/config/theme';
+import { useTheme } from '@/src/components/ui/ThemeProvider';
 import { useAuth } from '@/src/hooks/useAuth';
 import { deleteUser } from '@/src/services/admin.service';
 import { signOut, updateUserProfile } from '@/src/services/auth.service';

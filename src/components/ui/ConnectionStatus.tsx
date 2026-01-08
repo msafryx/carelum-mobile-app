@@ -2,7 +2,7 @@
  * Connection Status Component - Supabase
  * Shows Supabase connection status
  */
-import { useTheme } from '@/src/config/theme';
+import { useTheme } from '@/src/components/ui/ThemeProvider';
 import { checkAllConnections } from '@/src/utils/checkConnection';
 import { Ionicons } from '@expo/vector-icons';
 import React, { useEffect, useState } from 'react';

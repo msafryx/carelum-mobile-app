@@ -14,12 +14,14 @@ import {
   TouchableOpacity,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useTheme } from '@/src/config/theme';
+import { useTheme } from '@/src/components/ui/ThemeProvider';
 import Header from '@/src/components/ui/Header';
 import Card from '@/src/components/ui/Card';
 import ErrorDisplay from '@/src/components/ui/ErrorDisplay';
 import GPSMapView from '@/src/components/session/GPSMapView';
+import EnhancedGPSMap from '@/src/components/gps/EnhancedGPSMap';
 import CryDetectionIndicator from '@/src/components/session/CryDetectionIndicator';
+import CryDetectionInterface from '@/src/components/monitoring/CryDetectionInterface';
 import MonitoringControls from '@/src/components/session/MonitoringControls';
 import SessionTimeline from '@/src/components/session/SessionTimeline';
 import { useAuth } from '@/src/hooks/useAuth';
@@ -531,36 +533,55 @@ export default function SitterSessionDetailScreen() {
               isLoading={actionLoading}
             />
 
-            {/* GPS Tracking */}
+            {/* Enhanced GPS Tracking */}
             {gpsTrackingEnabled && (
-              <GPSMapView
+              <EnhancedGPSMap
                 sessionId={id!}
                 currentLocation={currentLocation || undefined}
                 locationHistory={locationHistory}
                 isTracking={isMonitoringActive && gpsTrackingEnabled}
+                geofenceCenter={session.location?.coordinates ? {
+                  latitude: session.location.coordinates.latitude,
+                  longitude: session.location.coordinates.longitude,
+                } : undefined}
+                geofenceRadius={100}
+                onLocationPress={(location) => {
+                  // Handle location press
+                }}
+                onGeofenceViolation={() => {
+                  Alert.alert('Geofence Alert', 'You have left the designated area');
+                }}
               />
             )}
 
-            {/* Cry Detection */}
-            {cryDetectionEnabled && (
-              <CryDetectionIndicator
+            {/* Enhanced Cry Detection Interface */}
+            {cryDetectionEnabled && session.childId && session.parentId && (
+              <CryDetectionInterface
+                sessionId={id!}
+                childId={session.childId}
+                parentId={session.parentId}
+                sitterId={user?.id || ''}
                 isEnabled={cryDetectionEnabled}
-                isActive={isMonitoringActive && isRecording}
-                lastDetection={lastCryDetection}
-                alertCount={cryAlerts.length}
-                recentAlerts={cryAlerts.slice(0, 5)}
-                onToggle={(enabled) => {
-                  if (enabled) {
-                    startCryDetection();
-                  } else {
-                    if (recording) {
-                      recording.stopAndUnloadAsync();
-                      setRecording(null);
-                      setIsRecording(false);
-                    }
-                  }
-                }}
+                onToggle={handleToggleCryDetection}
               />
+            )}
+
+            {/* Chatbot Access */}
+            {session.childId && (
+              <Card style={styles.chatbotCard}>
+                <TouchableOpacity
+                  style={[styles.chatbotButton, { backgroundColor: colors.primary }]}
+                  onPress={() => {
+                    router.push(`/(sitter)/chatbot?sessionId=${id}&childId=${session.childId}`);
+                  }}
+                >
+                  <Ionicons name="chatbubbles" size={24} color={colors.white} />
+                  <Text style={[styles.chatbotButtonText, { color: colors.white }]}>
+                    Ask AI Assistant
+                  </Text>
+                  <Ionicons name="chevron-forward" size={20} color={colors.white} />
+                </TouchableOpacity>
+              </Card>
             )}
 
             {/* End Session Button */}
@@ -691,6 +712,23 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     borderWidth: 1,
     gap: 8,
+  },
+  chatbotCard: {
+    marginBottom: 16,
+  },
+  chatbotButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 16,
+    paddingHorizontal: 20,
+    borderRadius: 12,
+    gap: 12,
+  },
+  chatbotButtonText: {
+    flex: 1,
+    fontSize: 16,
+    fontWeight: '600',
   },
   endSessionText: {
     fontSize: 16,

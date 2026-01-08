@@ -1,4 +1,4 @@
-import { useTheme } from '@/src/config/theme';
+import { useTheme } from '@/src/components/ui/ThemeProvider';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter, useSegments } from 'expo-router';
 import React from 'react';

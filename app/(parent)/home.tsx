@@ -2,7 +2,7 @@ import Card from '@/src/components/ui/Card';
 import EmptyState from '@/src/components/ui/EmptyState';
 import HamburgerMenu from '@/src/components/ui/HamburgerMenu';
 import Header from '@/src/components/ui/Header';
-import { useTheme } from '@/src/config/theme';
+import { useTheme } from '@/src/components/ui/ThemeProvider';
 import { useAuth } from '@/src/hooks/useAuth';
 import { getAll, save, STORAGE_KEYS } from '@/src/services/local-storage.service';
 import { Ionicons } from '@expo/vector-icons';

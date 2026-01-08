@@ -1,6 +1,6 @@
 import LoadingSpinner from '@/src/components/ui/LoadingSpinner';
 import { USER_ROLES } from '@/src/config/constants';
-import { useTheme } from '@/src/config/theme';
+import { useTheme } from '@/src/components/ui/ThemeProvider';
 import { useAuth } from '@/src/hooks/useAuth';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Redirect, useRouter } from 'expo-router';
@@ -66,6 +66,12 @@ export default function LandingScreen() {
   // Now do conditional rendering AFTER all hooks
   // If still loading auth, show loading spinner
   if (!initialized || loading) {
+    return <LoadingSpinner fullScreen />;
+  }
+
+  // If user exists but profile is still loading, wait for it
+  // This prevents routing to wrong role on first login
+  if (user && !userProfile && initialized) {
     return <LoadingSpinner fullScreen />;
   }
 

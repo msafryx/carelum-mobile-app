@@ -3,7 +3,7 @@ import Button from '@/src/components/ui/Button';
 import Card from '@/src/components/ui/Card';
 import Header from '@/src/components/ui/Header';
 import LoadingSpinner from '@/src/components/ui/LoadingSpinner';
-import { useTheme } from '@/src/config/theme';
+import { useTheme } from '@/src/components/ui/ThemeProvider';
 import { getAdminStats } from '@/src/services/admin.service';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';

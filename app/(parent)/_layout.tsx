@@ -1,6 +1,6 @@
 import { Tabs } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { useTheme } from '@/src/config/theme';
+import { useTheme } from '@/src/components/ui/ThemeProvider';
 import ErrorBoundary from '@/src/components/ui/ErrorBoundary';
 
 export default function ParentLayout() {
@@ -86,6 +86,12 @@ export default function ParentLayout() {
         />
         <Tabs.Screen
           name="settings"
+          options={{
+            href: null, // Hide from tabs
+          }}
+        />
+        <Tabs.Screen
+          name="chatbot"
           options={{
             href: null, // Hide from tabs
           }}

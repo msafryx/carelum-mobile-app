@@ -10,14 +10,18 @@ import {
   RefreshControl,
   Alert,
   ActivityIndicator,
+  TouchableOpacity,
+  Text,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useTheme } from '@/src/config/theme';
+import { useTheme } from '@/src/components/ui/ThemeProvider';
 import Header from '@/src/components/ui/Header';
 import Card from '@/src/components/ui/Card';
 import ErrorDisplay from '@/src/components/ui/ErrorDisplay';
 import GPSMapView from '@/src/components/session/GPSMapView';
+import EnhancedGPSMap from '@/src/components/gps/EnhancedGPSMap';
 import CryDetectionIndicator from '@/src/components/session/CryDetectionIndicator';
+import EnhancedAlertsView from '@/src/components/alerts/EnhancedAlertsView';
 import SessionControls from '@/src/components/session/SessionControls';
 import SessionTimeline from '@/src/components/session/SessionTimeline';
 import { useAuth } from '@/src/hooks/useAuth';
@@ -327,13 +331,24 @@ export default function SessionDetailScreen() {
           </View>
         </Card>
 
-        {/* GPS Tracking */}
+        {/* Enhanced GPS Tracking */}
         {session.status === 'active' && (
-          <GPSMapView
+          <EnhancedGPSMap
             sessionId={id!}
             currentLocation={currentLocation || undefined}
             locationHistory={locationHistory}
             isTracking={session.gpsTrackingEnabled}
+            geofenceCenter={session.location?.coordinates ? {
+              latitude: session.location.coordinates.latitude,
+              longitude: session.location.coordinates.longitude,
+            } : undefined}
+            geofenceRadius={100}
+            onLocationPress={(location) => {
+              // Handle location press
+            }}
+            onGeofenceViolation={() => {
+              Alert.alert('Geofence Alert', 'Sitter has left the designated area');
+            }}
           />
         )}
 
@@ -349,6 +364,41 @@ export default function SessionDetailScreen() {
               router.push(`/(parent)/alerts?sessionId=${id}`);
             }}
           />
+        )}
+
+        {/* Enhanced Alerts View */}
+        {alerts.length > 0 && (
+          <View style={styles.alertsSection}>
+            <EnhancedAlertsView
+              sessionId={id!}
+              userId={user?.id || ''}
+              role="parent"
+              onAlertPress={(alert) => {
+                router.push(`/(parent)/alerts?sessionId=${id}&alertId=${alert.id}`);
+              }}
+              onEmergencyAction={(alert) => {
+                handleEmergency();
+              }}
+            />
+          </View>
+        )}
+
+        {/* Chatbot Access */}
+        {session.status === 'active' && child && (
+          <Card style={styles.chatbotCard}>
+            <TouchableOpacity
+              style={[styles.chatbotButton, { backgroundColor: colors.primary }]}
+              onPress={() => {
+                router.push(`/(parent)/chatbot?sessionId=${id}&childId=${child.id}&sitterId=${session.sitterId}`);
+              }}
+            >
+              <Ionicons name="chatbubbles" size={24} color={colors.white} />
+              <Text style={[styles.chatbotButtonText, { color: colors.white }]}>
+                Ask AI Assistant
+              </Text>
+              <Ionicons name="chevron-forward" size={20} color={colors.white} />
+            </TouchableOpacity>
+          </Card>
         )}
 
         {/* Session Controls */}
@@ -396,6 +446,27 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     padding: 16,
+    gap: 16,
+  },
+  alertsSection: {
+    marginTop: 8,
+  },
+  chatbotCard: {
+    marginBottom: 0,
+  },
+  chatbotButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 16,
+    paddingHorizontal: 20,
+    borderRadius: 12,
+    gap: 12,
+  },
+  chatbotButtonText: {
+    flex: 1,
+    fontSize: 16,
+    fontWeight: '600',
   },
   infoCard: {
     marginBottom: 16,

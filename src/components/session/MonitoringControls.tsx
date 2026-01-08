@@ -4,7 +4,7 @@
  */
 import React, { useState } from 'react';
 import { View, StyleSheet, Text, Switch, TouchableOpacity } from 'react-native';
-import { useTheme } from '@/src/config/theme';
+import { useTheme } from '@/src/components/ui/ThemeProvider';
 import Card from '@/src/components/ui/Card';
 import Button from '@/src/components/ui/Button';
 import { Ionicons } from '@expo/vector-icons';

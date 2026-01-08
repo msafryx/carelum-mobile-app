@@ -8,7 +8,7 @@ import {
   RefreshControl,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useTheme } from '@/src/config/theme';
+import { useTheme } from '@/src/components/ui/ThemeProvider';
 import Header from '@/src/components/ui/Header';
 import Card from '@/src/components/ui/Card';
 import AdminHamburgerMenu from '@/src/components/ui/AdminHamburgerMenu';

@@ -4,7 +4,7 @@
  */
 import React from 'react';
 import { View, StyleSheet, Text, ScrollView } from 'react-native';
-import { useTheme } from '@/src/config/theme';
+import { useTheme } from '@/src/components/ui/ThemeProvider';
 import Card from '@/src/components/ui/Card';
 import { Ionicons } from '@expo/vector-icons';
 import { Session } from '@/src/types/session.types';

@@ -1,6 +1,6 @@
 import React from 'react';
 import { View, StyleSheet } from 'react-native';
-import { useTheme } from '@/src/config/theme';
+import { useTheme } from '@/src/components/ui/ThemeProvider';
 import Header from '@/src/components/ui/Header';
 import EmptyState from '@/src/components/ui/EmptyState';
 

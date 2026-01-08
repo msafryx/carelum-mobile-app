@@ -1,7 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import { Animated, StyleSheet, View, Image } from 'react-native';
 import { useRouter } from 'expo-router';
-import { useTheme } from '@/src/config/theme';
+import { useTheme } from '@/src/components/ui/ThemeProvider';
 
 export default function SplashScreen() {
   const fadeAnim = useRef(new Animated.Value(0)).current;

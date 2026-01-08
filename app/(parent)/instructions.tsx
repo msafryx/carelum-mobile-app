@@ -2,7 +2,7 @@ import Button from '@/src/components/ui/Button';
 import Card from '@/src/components/ui/Card';
 import Header from '@/src/components/ui/Header';
 import Input from '@/src/components/ui/Input';
-import { useTheme } from '@/src/config/theme';
+import { useTheme } from '@/src/components/ui/ThemeProvider';
 import { useAuth } from '@/src/hooks/useAuth';
 import { deleteChild, getParentChildren, saveChild, saveChildInstructions } from '@/src/services/child.service';
 import { uploadFile } from '@/src/services/storage.service';

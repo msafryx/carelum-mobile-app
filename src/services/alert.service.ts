@@ -283,6 +283,48 @@ export async function acknowledgeAlert(alertId: string): Promise<ServiceResult<v
 }
 
 /**
+ * Resolve alert
+ */
+export async function resolveAlert(alertId: string): Promise<ServiceResult<void>> {
+  try {
+    if (!isSupabaseConfigured() || !supabase) {
+      return {
+        success: false,
+        error: {
+          code: ErrorCode.DB_NOT_AVAILABLE,
+          message: 'Supabase is not configured',
+        },
+      };
+    }
+
+    const { error } = await supabase
+      .from('alerts')
+      .update({
+        status: 'resolved',
+        resolved_at: new Date().toISOString(),
+      })
+      .eq('id', alertId);
+
+    if (error) {
+      return {
+        success: false,
+        error: {
+          code: ErrorCode.DB_UPDATE_ERROR,
+          message: `Failed to resolve alert: ${error.message}`,
+        },
+      };
+    }
+
+    return { success: true };
+  } catch (error: any) {
+    return {
+      success: false,
+      error: handleUnexpectedError(error),
+    };
+  }
+}
+
+/**
  * Get alerts for a session
  */
 export async function getSessionAlerts(

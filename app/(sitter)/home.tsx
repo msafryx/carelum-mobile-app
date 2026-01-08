@@ -2,7 +2,7 @@ import Card from '@/src/components/ui/Card';
 import EmptyState from '@/src/components/ui/EmptyState';
 import Header from '@/src/components/ui/Header';
 import SitterHamburgerMenu from '@/src/components/ui/SitterHamburgerMenu';
-import { useTheme } from '@/src/config/theme';
+import { useTheme } from '@/src/components/ui/ThemeProvider';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useState } from 'react';

@@ -1,6 +1,6 @@
 import React from 'react';
-import { View, StyleSheet, ViewStyle } from 'react-native';
-import { useTheme } from '@/src/config/theme';
+import { View, StyleSheet, ViewStyle, Platform } from 'react-native';
+import { useTheme } from '@/src/components/ui/ThemeProvider';
 
 interface CardProps {
   children: React.ReactNode;
@@ -18,6 +18,20 @@ export default function Card({
   const { colors, spacing, borderRadius } = useTheme();
   const cardPadding = padding !== undefined ? padding : spacing.md;
 
+  // Platform-specific shadow styles
+  const shadowStyle = Platform.select({
+    web: {
+      boxShadow: `0 ${elevation}px ${elevation * 2}px rgba(0, 0, 0, 0.1)`,
+    },
+    default: {
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: elevation },
+      shadowOpacity: 0.1,
+      shadowRadius: elevation * 2,
+      elevation,
+    },
+  });
+
   return (
     <View
       style={[
@@ -26,11 +40,7 @@ export default function Card({
           backgroundColor: colors.white,
           borderRadius: borderRadius.md,
           padding: cardPadding,
-          elevation,
-          shadowColor: '#000',
-          shadowOffset: { width: 0, height: elevation },
-          shadowOpacity: 0.1,
-          shadowRadius: elevation * 2,
+          ...shadowStyle,
         },
         style,
       ]}

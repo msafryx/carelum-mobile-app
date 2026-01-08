@@ -40,8 +40,8 @@ export const colors = {
 export type ColorScheme = 'light' | 'dark';
 export type Theme = typeof colors.light;
 
-// Re-export useTheme from ThemeProvider
-export { useTheme } from '@/src/components/ui/ThemeProvider';
+// Note: useTheme is exported from ThemeProvider to avoid circular dependency
+// Import it directly: import { useTheme } from '@/src/components/ui/ThemeProvider';
 
 export const spacing = {
   xs: 4,

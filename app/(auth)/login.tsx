@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { View, StyleSheet, ScrollView, KeyboardAvoidingView, Platform, Image, Text } from 'react-native';
 import { useRouter } from 'expo-router';
-import { useTheme } from '@/src/config/theme';
+import { useTheme } from '@/src/components/ui/ThemeProvider';
 import Input from '@/src/components/ui/Input';
 import Button from '@/src/components/ui/Button';
 import ErrorDisplay from '@/src/components/ui/ErrorDisplay';
@@ -15,7 +15,7 @@ import { USER_ROLES } from '@/src/config/constants';
 export default function LoginScreen() {
   const { colors, spacing, isDark } = useTheme();
   const router = useRouter();
-  const { userProfile, initialized } = useAuth();
+  const { userProfile, initialized, refreshProfile } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -45,13 +45,16 @@ export default function LoginScreen() {
       const result = await signIn({ email, password });
 
       if (result.success) {
-        // INSTANT NAVIGATION - Like Firebase/MySQL pattern
-        // AsyncStorage already has the data from previous session
-        // If not, useAuth will create minimal profile instantly
+        // Wait a moment for useAuth hook to load profile via onAuthStateChange
+        // This ensures the profile is loaded before navigation
+        await new Promise(resolve => setTimeout(resolve, 200));
+        
+        // Trigger profile refresh to ensure it's loaded
+        await refreshProfile();
+        
         setLoading(false);
         
-        // Navigate immediately - useAuth hook will handle profile loading
-        // Don't wait for anything
+        // Navigate to landing - it will wait for profile if needed
         router.replace('/landing'); // Landing will redirect based on auth state
       } else {
         setError(result.error || null);

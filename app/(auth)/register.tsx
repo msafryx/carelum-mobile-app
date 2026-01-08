@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { View, StyleSheet, ScrollView, KeyboardAvoidingView, Platform, Image, Text } from 'react-native';
 import { useRouter } from 'expo-router';
-import { useTheme } from '@/src/config/theme';
+import { useTheme } from '@/src/components/ui/ThemeProvider';
 import Input from '@/src/components/ui/Input';
 import Button from '@/src/components/ui/Button';
 import ErrorDisplay from '@/src/components/ui/ErrorDisplay';

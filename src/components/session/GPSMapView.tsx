@@ -4,7 +4,7 @@
  */
 import React, { useEffect, useState } from 'react';
 import { View, StyleSheet, Text, ActivityIndicator } from 'react-native';
-import { useTheme } from '@/src/config/theme';
+import { useTheme } from '@/src/components/ui/ThemeProvider';
 import Card from '@/src/components/ui/Card';
 import { LocationUpdate } from '@/src/types/session.types';
 import { Ionicons } from '@expo/vector-icons';
