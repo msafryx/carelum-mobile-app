@@ -291,7 +291,7 @@ export default function SessionDetailScreen() {
         />
         <HamburgerMenu visible={menuVisible} onClose={() => setMenuVisible(false)} />
         <ErrorDisplay
-          error={{ message: error || 'Session not found' }}
+          error={error || 'Session not found'}
           onRetry={loadSessionData}
         />
       </View>
