@@ -89,6 +89,12 @@ export default function SitterLayout() {
             href: null, // Hide from tabs
           }}
         />
+        <Tabs.Screen
+          name="settings"
+          options={{
+            href: null, // Hide from tabs
+          }}
+        />
       </Tabs>
     </ErrorBoundary>
   );

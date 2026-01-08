@@ -635,6 +635,26 @@ export default function ProfileScreen() {
         </Card>
 
         <Card>
+          <Text style={[styles.sectionTitle, { color: colors.text }]}>Account</Text>
+          <TouchableOpacity
+            style={[styles.menuItem, { borderBottomColor: colors.border }]}
+            onPress={() => router.push('/(parent)/settings')}
+          >
+            <Ionicons name="settings-outline" size={24} color={colors.primary} style={styles.menuIcon} />
+            <Text style={[styles.menuText, { color: colors.text }]}>Settings</Text>
+            <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.menuItem, { borderBottomColor: colors.border }]}
+            onPress={() => router.push('/(parent)/activities')}
+          >
+            <Ionicons name="list-outline" size={24} color={colors.primary} style={styles.menuIcon} />
+            <Text style={[styles.menuText, { color: colors.text }]}>View Sessions</Text>
+            <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} />
+          </TouchableOpacity>
+        </Card>
+
+        <Card>
           <View style={styles.childrenHeader}>
             <Text style={[styles.sectionTitle, { color: colors.text }]}>Children</Text>
             <TouchableOpacity
@@ -1266,5 +1286,18 @@ const styles = StyleSheet.create({
   deleteAccountText: {
     fontSize: 16,
     fontWeight: '600',
+  },
+  menuItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  menuIcon: {
+    marginRight: 12,
+  },
+  menuText: {
+    flex: 1,
+    fontSize: 16,
   },
 });

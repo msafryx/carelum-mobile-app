@@ -124,12 +124,7 @@ export default function HamburgerMenu({ visible, onClose }: Props) {
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.item, { borderBottomColor: colors.border }]}
-                onPress={() => {
-                  onClose();
-                  // Navigate to settings screen if it exists, otherwise stay on profile
-                  // Settings are already on the profile screen, so just close the menu
-                  // In the future, you can create a dedicated settings screen
-                }}
+                onPress={() => go('settings')}
               >
                 <Ionicons
                   name="settings"

@@ -243,6 +243,14 @@ export default function SitterProfileScreen() {
         <Card>
           <TouchableOpacity
             style={[styles.menuItem, { borderBottomColor: colors.border }]}
+            onPress={() => router.push('/(sitter)/settings')}
+          >
+            <Ionicons name="settings-outline" size={24} color={colors.primary} style={styles.menuIcon} />
+            <Text style={[styles.menuText, { color: colors.text }]}>Settings</Text>
+            <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.menuItem, { borderBottomColor: colors.border }]}
             onPress={() => router.push('/(sitter)/profile-setup')}
           >
             <Ionicons name="create-outline" size={24} color={colors.primary} style={styles.menuIcon} />
@@ -255,6 +263,14 @@ export default function SitterProfileScreen() {
           >
             <Ionicons name="shield-checkmark-outline" size={24} color={colors.primary} style={styles.menuIcon} />
             <Text style={[styles.menuText, { color: colors.text }]}>Verification Status</Text>
+            <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.menuItem]}
+            onPress={() => router.push('/(sitter)/activities')}
+          >
+            <Ionicons name="list-outline" size={24} color={colors.primary} style={styles.menuIcon} />
+            <Text style={[styles.menuText, { color: colors.text }]}>View Sessions</Text>
             <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} />
           </TouchableOpacity>
         </Card>

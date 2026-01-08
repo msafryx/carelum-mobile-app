@@ -354,12 +354,15 @@ export async function getCurrentUserProfile(): Promise<ServiceResult<User>> {
       if (result.success && result.data) {
         const localUser = result.data.find((u: any) => u.id === user.id) as any;
         if (localUser) {
+          // Normalize role: 'sitter' -> 'babysitter' for app compatibility
+          const appRole = localUser.role === 'sitter' ? 'babysitter' : localUser.role;
           const userProfile: User = {
             ...localUser,
+            role: appRole as any,
             createdAt: new Date(localUser.createdAt || Date.now()),
             updatedAt: localUser.updatedAt ? new Date(localUser.updatedAt) : new Date(),
           };
-          console.log('✅ User profile loaded from AsyncStorage (instant)');
+          console.log('✅ User profile loaded from AsyncStorage (instant)', userProfile.role);
           
           // Sync from Supabase in BACKGROUND (non-blocking, don't wait)
           syncProfileFromSupabase(user.id).catch(() => {});
@@ -375,11 +378,14 @@ export async function getCurrentUserProfile(): Promise<ServiceResult<User>> {
     // If not in AsyncStorage, create minimal profile from auth user (instant)
     // Don't wait for Supabase - return immediately
     console.log('⚠️ Profile not in AsyncStorage, creating minimal profile (instant)');
+    // Normalize role: 'sitter' -> 'babysitter' for app compatibility
+    const rawRole = user.user_metadata?.role || 'parent';
+    const appRole = rawRole === 'sitter' ? 'babysitter' : rawRole;
     const minimalProfile: User = {
       id: user.id,
       email: user.email || '',
       displayName: user.user_metadata?.display_name || user.email?.split('@')[0] || 'User',
-      role: user.user_metadata?.role || 'parent', // Default to parent
+      role: appRole as any, // Normalized role
       preferredLanguage: 'en',
       userNumber: undefined,
       phoneNumber: undefined,
@@ -416,11 +422,14 @@ export async function getCurrentUserProfile(): Promise<ServiceResult<User>> {
       if (supabase) {
         const { data: { user } } = await supabase.auth.getUser();
         if (user) {
+          // Normalize role: 'sitter' -> 'babysitter' for app compatibility
+          const rawRole = user.user_metadata?.role || 'parent';
+          const appRole = rawRole === 'sitter' ? 'babysitter' : rawRole;
           const minimalProfile: User = {
             id: user.id,
             email: user.email || '',
             displayName: user.user_metadata?.display_name || user.email?.split('@')[0] || 'User',
-            role: user.user_metadata?.role || 'parent',
+            role: appRole as any, // Normalized role
             preferredLanguage: 'en',
             userNumber: undefined,
             phoneNumber: undefined,

@@ -135,7 +135,7 @@ export default function SitterHamburgerMenu({ visible, onClose }: Props) {
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.item, { borderBottomColor: colors.border }]}
-                onPress={() => go('profile')}
+                onPress={() => go('settings')}
               >
                 <Ionicons
                   name="settings"
