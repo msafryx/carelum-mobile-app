@@ -8,19 +8,13 @@ import { getAll, save, STORAGE_KEYS } from '@/src/services/local-storage.service
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
-import { Alert, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 
 export default function ParentHomeScreen() {
   const { colors, spacing } = useTheme();
   const router = useRouter();
   const { user, userProfile } = useAuth();
   const [menuVisible, setMenuVisible] = useState(false);
-  const [syncing, setSyncing] = useState(false);
-
-  // Auto-sync on screen load (only once)
-  useEffect(() => {
-    handleSync();
-  }, []);
   
   // Sync current user to AsyncStorage if not already there
   useEffect(() => {
@@ -56,21 +50,6 @@ export default function ParentHomeScreen() {
     }
   };
 
-  const handleSync = async () => {
-    // Sync is now handled automatically by Supabase real-time subscriptions
-    // This function is kept for backward compatibility but does nothing
-    console.log('ℹ️ Data sync is now handled automatically by Supabase real-time subscriptions');
-  };
-
-  const handleManualSync = async () => {
-    // Data is synced automatically via Supabase real-time
-    // Just refresh the UI if needed
-    Alert.alert(
-      'Info',
-      'Data is automatically synced in real-time via Supabase. No manual sync needed.',
-      [{ text: 'OK' }]
-    );
-  };
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
@@ -160,24 +139,6 @@ export default function ParentHomeScreen() {
       </TouchableOpacity>
 
       <TouchableOpacity
-        style={[
-          styles.syncButton, 
-          { 
-            backgroundColor: syncing ? colors.textSecondary : colors.success,
-            opacity: syncing ? 0.7 : 1
-          }
-        ]}
-        onPress={handleManualSync}
-        disabled={syncing}
-      >
-        <Ionicons 
-          name={syncing ? "sync" : "cloud-upload-outline"} 
-          size={24} 
-          color="#fff"
-        />
-      </TouchableOpacity>
-
-      <TouchableOpacity
         style={[styles.emergencyButton, { backgroundColor: colors.emergency }]}
         onPress={() => {}}
       >
@@ -236,21 +197,6 @@ const styles = StyleSheet.create({
     width: 60,
     height: 60,
     borderRadius: 30,
-    alignItems: 'center',
-    justifyContent: 'center',
-    elevation: 4,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 3.84,
-  },
-  syncButton: {
-    position: 'absolute',
-    bottom: 100,
-    right: 20,
-    width: 50,
-    height: 50,
-    borderRadius: 25,
     alignItems: 'center',
     justifyContent: 'center',
     elevation: 4,
