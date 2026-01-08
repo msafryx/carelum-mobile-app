@@ -19,19 +19,19 @@ Complete guide for the Carelum admin system - account creation, features, and us
 
 **There is NO default admin username/password.** Admin accounts must be created manually.
 
-### Method 1: Firebase Console (Recommended)
+### Method 1: Supabase Dashboard (Recommended)
 
 1. **Register a user account** via the app:
    - Email: `admin@carelum.com` (or your choice)
    - Password: `YourSecurePassword123!`
    - Role: Choose **Parent** (we'll change it)
 
-2. **Change role in Firebase Console:**
-   - Go to [Firebase Console](https://console.firebase.google.com)
-   - Select your project → Firestore Database
-   - Open `users` collection
+2. **Change role in Supabase Dashboard:**
+   - Go to [Supabase Dashboard](https://app.supabase.com)
+   - Select your project → Table Editor
+   - Open `users` table
    - Find the user by email
-   - Edit the document
+   - Edit the row
    - Change `role: 'parent'` → `role: 'admin'`
    - Save
 
@@ -40,7 +40,18 @@ Complete guide for the Carelum admin system - account creation, features, and us
    - Password: `YourSecurePassword123!`
    - You'll be redirected to Admin Dashboard
 
-### Method 2: Using Script
+### Method 2: Using REST API (Admin Endpoint)
+
+If you already have an admin account, you can use the REST API:
+
+```bash
+curl -X PUT http://localhost:8000/api/admin/users/{user_id} \
+  -H "Authorization: Bearer ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"role": "admin"}'
+```
+
+### Method 3: Using Script
 
 1. Install dependencies:
    ```bash
@@ -49,7 +60,7 @@ Complete guide for the Carelum admin system - account creation, features, and us
 
 2. Edit `scripts/createAdmin.ts`:
    - Update `ADMIN_EMAIL` and `ADMIN_PASSWORD`
-   - Update Firebase config (or use `.env`)
+   - Update Supabase config (or use `.env`)
 
 3. Run:
    ```bash
@@ -159,7 +170,7 @@ Sitter submits request → Appears in queue → Admin reviews → Approve/Reject
 
 3. **Access Control:**
    - Only users with `role: 'admin'` can access admin screens
-   - Firebase Security Rules enforce this
+   - Supabase Row Level Security (RLS) policies enforce this
 
 ### Verification Review Process
 
@@ -363,17 +374,17 @@ match /users/{userId} {
 **Solution:** Verify user roles in Firestore. Each user should have only one role.
 
 ### Problem: Admin can't access admin screens
-**Solution:** Verify Firebase Security Rules allow admin access
+**Solution:** Verify Supabase RLS policies allow admin access
 
 ### Problem: Forgot admin password
-**Solution:** Use Firebase Console → Authentication → Reset password
+**Solution:** Use Supabase Dashboard → Authentication → Reset password
 
 ---
 
 ## 📞 Support
 
 For admin-related issues:
-- Check Firebase Console for user roles
+- Check Supabase Dashboard for user roles
 - Verify Security Rules are configured
 - Review `src/services/admin.service.ts` for available functions
 - See `DATABASE_GUIDE.md` for database structure
