@@ -49,7 +49,7 @@ A cross-platform mobile application for connecting parents with verified babysit
 - **[ADMIN_GUIDE.md](./ADMIN_GUIDE.md)** - Complete guide for creating and managing admin users
 - **[ADMIN.md](./ADMIN.md)** - Admin system documentation (features and usage)
 - **[README_SUPABASE.md](./README_SUPABASE.md)** - Complete Supabase setup and configuration guide
-- **[DISABLE_EMAIL_CONFIRMATION.md](./DISABLE_EMAIL_CONFIRMATION.md)** - How to disable email confirmation in Supabase
+- **[DATABASE_ARCHITECTURE.md](./DATABASE_ARCHITECTURE.md)** - Complete database architecture and schema documentation
 - **[SECURITY.md](./SECURITY.md)** - Security best practices and guidelines
 
 ## 🏗️ Architecture
