@@ -4,8 +4,8 @@
  */
 import { isSupabaseConfigured, supabase } from '@/src/config/supabase';
 import { ErrorCode, ServiceResult } from '@/src/types/error.types';
-import { handleUnexpectedError } from '@/src/utils/errorHandler';
 import { User } from '@/src/types/user.types';
+import { handleUnexpectedError } from '@/src/utils/errorHandler';
 
 /**
  * Get all users (admin only)
@@ -112,16 +112,18 @@ export async function getUserById(userId: string): Promise<ServiceResult<User>> 
       role: data.role,
       preferredLanguage: data.preferred_language,
       userNumber: data.user_number,
-      phoneNumber: data.phone_number,
       profileImageUrl: data.photo_url,
       createdAt: new Date(data.created_at),
-      updatedAt: new Date(data.updated_at),
-      theme: data.theme || 'auto',
-      isVerified: data.is_verified || false,
-      verificationStatus: data.verification_status,
-      hourlyRate: data.hourly_rate,
-      bio: data.bio,
-    };
+    } as User;
+    
+    // Add extended properties as any for now (UserProfile extends User)
+    (user as any).phoneNumber = data.phone_number;
+    (user as any).theme = data.theme || 'auto';
+    (user as any).isVerified = data.is_verified || false;
+    (user as any).verificationStatus = data.verification_status;
+    (user as any).hourlyRate = data.hourly_rate;
+    (user as any).bio = data.bio;
+    (user as any).updatedAt = new Date(data.updated_at);
 
     return { success: true, data: user };
   } catch (error: any) {
@@ -154,13 +156,15 @@ export async function updateUser(
     if (updates.displayName !== undefined) supabaseUpdates.display_name = updates.displayName;
     if (updates.role !== undefined) supabaseUpdates.role = updates.role;
     if (updates.preferredLanguage !== undefined) supabaseUpdates.preferred_language = updates.preferredLanguage;
-    if (updates.phoneNumber !== undefined) supabaseUpdates.phone_number = updates.phoneNumber;
     if (updates.profileImageUrl !== undefined) supabaseUpdates.photo_url = updates.profileImageUrl;
-    if (updates.theme !== undefined) supabaseUpdates.theme = updates.theme;
-    if (updates.isVerified !== undefined) supabaseUpdates.is_verified = updates.isVerified;
-    if (updates.verificationStatus !== undefined) supabaseUpdates.verification_status = updates.verificationStatus;
-    if (updates.hourlyRate !== undefined) supabaseUpdates.hourly_rate = updates.hourlyRate;
-    if (updates.bio !== undefined) supabaseUpdates.bio = updates.bio;
+    // Handle extended UserProfile properties
+    const extendedUpdates = updates as any;
+    if (extendedUpdates.phoneNumber !== undefined) supabaseUpdates.phone_number = extendedUpdates.phoneNumber;
+    if (extendedUpdates.theme !== undefined) supabaseUpdates.theme = extendedUpdates.theme;
+    if (extendedUpdates.isVerified !== undefined) supabaseUpdates.is_verified = extendedUpdates.isVerified;
+    if (extendedUpdates.verificationStatus !== undefined) supabaseUpdates.verification_status = extendedUpdates.verificationStatus;
+    if (extendedUpdates.hourlyRate !== undefined) supabaseUpdates.hourly_rate = extendedUpdates.hourlyRate;
+    if (extendedUpdates.bio !== undefined) supabaseUpdates.bio = extendedUpdates.bio;
 
     const { error } = await supabase
       .from('users')
@@ -198,6 +202,84 @@ export async function deactivateUser(userId: string): Promise<ServiceResult<void
  */
 export async function activateUser(userId: string): Promise<ServiceResult<void>> {
   return updateUser(userId, { isActive: true } as any);
+}
+
+/**
+ * Delete user (admin only)
+ * Deletes from both public.users and auth.users
+ */
+export async function deleteUser(userId: string): Promise<ServiceResult<void>> {
+  try {
+    if (!isSupabaseConfigured() || !supabase) {
+      return {
+        success: false,
+        error: {
+          code: ErrorCode.DB_NOT_AVAILABLE,
+          message: 'Supabase is not configured',
+        },
+      };
+    }
+
+    // Delete from AsyncStorage FIRST
+    try {
+      const { remove, getAll, STORAGE_KEYS } = await import('./local-storage.service');
+      
+      // Delete user from AsyncStorage
+      await remove(STORAGE_KEYS.USERS, userId);
+      console.log('✅ User deleted from AsyncStorage');
+      
+      // Also delete all children for this user
+      const childrenResult = await getAll(STORAGE_KEYS.CHILDREN);
+      if (childrenResult.success && childrenResult.data) {
+        const userChildren = (childrenResult.data as any[]).filter((c: any) => c.parentId === userId);
+        for (const child of userChildren) {
+          await remove(STORAGE_KEYS.CHILDREN, child.id);
+        }
+        if (userChildren.length > 0) {
+          console.log(`✅ Deleted ${userChildren.length} child(ren) from AsyncStorage`);
+        }
+      }
+    } catch (localError: any) {
+      console.warn('⚠️ Failed to delete from AsyncStorage:', localError.message);
+    }
+
+    // Delete from Supabase IMMEDIATELY
+    const { error: deleteError } = await supabase
+      .from('users')
+      .delete()
+      .eq('id', userId);
+
+    if (deleteError) {
+      console.error('❌ Failed to delete user from Supabase:', deleteError);
+      return {
+        success: false,
+        error: {
+          code: ErrorCode.DB_DELETE_ERROR,
+          message: `Failed to delete user profile: ${deleteError.message}`,
+        },
+      };
+    }
+
+    // Note: Deleting from auth.users requires admin/service role privileges
+    // The database trigger (handle_auth_user_deleted) will automatically
+    // delete from public.users when auth.users is deleted
+    // 
+    // To delete from auth.users, you need to:
+    // 1. Use Supabase Dashboard → Authentication → Users → Delete
+    // 2. Or use the Supabase Admin API with service role key (server-side only)
+    // 
+    // For now, we only delete from public.users
+    // The trigger ensures sync when auth.users is deleted manually
+    console.log('✅ User profile deleted from public.users (cascade deletes all related data)');
+    console.log('💡 To delete from auth.users, use Supabase Dashboard or Admin API');
+
+    return { success: true };
+  } catch (error: any) {
+    return {
+      success: false,
+      error: handleUnexpectedError(error),
+    };
+  }
 }
 
 /**

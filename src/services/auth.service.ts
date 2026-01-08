@@ -2,12 +2,11 @@
  * Authentication Service - Supabase
  * Handles user authentication and profile management
  */
-import { COLLECTIONS, Language, LANGUAGES, UserRole } from '@/src/config/constants';
+import { Language, LANGUAGES, UserRole } from '@/src/config/constants';
 import { isSupabaseConfigured, supabase } from '@/src/config/supabase';
 import { ErrorCode, ServiceResult } from '@/src/types/error.types';
 import { User } from '@/src/types/user.types';
 import { handleUnexpectedError } from '@/src/utils/errorHandler';
-import { getNextUserNumber } from './user-number.service';
 
 export interface SignUpData {
   email: string;
@@ -283,26 +282,30 @@ export async function signIn(
  */
 export async function signOut(): Promise<ServiceResult<void>> {
   try {
-    if (!isSupabaseConfigured() || !supabase) {
-      return {
-        success: false,
-        error: {
-          code: ErrorCode.AUTH_ERROR,
-          message: 'Supabase is not configured',
-        },
-      };
+    // Clear AsyncStorage FIRST (local data)
+    try {
+      const { clear, STORAGE_KEYS } = await import('./local-storage.service');
+      await clear(STORAGE_KEYS.USERS);
+      await clear(STORAGE_KEYS.CHILDREN);
+      console.log('✅ Cleared AsyncStorage');
+    } catch (clearError: any) {
+      console.warn('⚠️ Failed to clear AsyncStorage:', clearError.message);
+      // Continue anyway - Supabase signOut is more important
     }
 
-    const { error } = await supabase.auth.signOut();
-    
-    if (error) {
-      return {
-        success: false,
-        error: {
-          code: ErrorCode.AUTH_ERROR,
-          message: error.message,
-        },
-      };
+    // Sign out from Supabase
+    if (isSupabaseConfigured() && supabase) {
+      const { error } = await supabase.auth.signOut();
+      
+      if (error) {
+        return {
+          success: false,
+          error: {
+            code: ErrorCode.AUTH_ERROR,
+            message: error.message,
+          },
+        };
+      }
     }
 
     return { success: true };
@@ -549,40 +552,27 @@ export async function updateUserProfile(
     if (updates.role !== undefined) supabaseUpdates.role = updates.role;
     if (updates.preferredLanguage !== undefined) supabaseUpdates.preferred_language = updates.preferredLanguage;
     if (updates.userNumber !== undefined) supabaseUpdates.user_number = updates.userNumber;
-    if (updates.phoneNumber !== undefined) supabaseUpdates.phone_number = updates.phoneNumber;
     if (updates.profileImageUrl !== undefined) supabaseUpdates.photo_url = updates.profileImageUrl;
-    if (updates.theme !== undefined) supabaseUpdates.theme = updates.theme;
-    if (updates.isVerified !== undefined) supabaseUpdates.is_verified = updates.isVerified;
-    if (updates.verificationStatus !== undefined) supabaseUpdates.verification_status = updates.verificationStatus;
-    if (updates.hourlyRate !== undefined) supabaseUpdates.hourly_rate = updates.hourlyRate;
-    if (updates.bio !== undefined) supabaseUpdates.bio = updates.bio;
+    // Handle extended UserProfile properties
+    const extendedUpdates = updates as any;
+    if (extendedUpdates.phoneNumber !== undefined) supabaseUpdates.phone_number = extendedUpdates.phoneNumber;
+    if (extendedUpdates.theme !== undefined) supabaseUpdates.theme = extendedUpdates.theme;
+    if (extendedUpdates.isVerified !== undefined) supabaseUpdates.is_verified = extendedUpdates.isVerified;
+    if (extendedUpdates.verificationStatus !== undefined) supabaseUpdates.verification_status = extendedUpdates.verificationStatus;
+    if (extendedUpdates.hourlyRate !== undefined) supabaseUpdates.hourly_rate = extendedUpdates.hourlyRate;
+    if (extendedUpdates.bio !== undefined) supabaseUpdates.bio = extendedUpdates.bio;
 
-    // Update Supabase
-    const { error: updateError } = await supabase
-      .from('users')
-      .update(supabaseUpdates)
-      .eq('id', user.id);
-
-    if (updateError) {
-      return {
-        success: false,
-        error: {
-          code: ErrorCode.AUTH_ERROR,
-          message: `Failed to update profile: ${updateError.message}`,
-        },
-      };
-    }
-
-    // Update AsyncStorage for offline access
+    // Update AsyncStorage FIRST (optimistic UI)
     try {
       const { getAll, save, STORAGE_KEYS } = await import('./local-storage.service');
       const result = await getAll(STORAGE_KEYS.USERS);
       if (result.success && result.data) {
-        const localUser = result.data.find((u: any) => u.id === user.id);
+        const localUser = (result.data as any[]).find((u: any) => u.id === user.id);
         if (localUser) {
           const updatedUser = {
             ...localUser,
             ...updates,
+            id: user.id, // Ensure ID is present
             updatedAt: Date.now(),
           };
           await save(STORAGE_KEYS.USERS, updatedUser);
@@ -592,6 +582,24 @@ export async function updateUserProfile(
     } catch (localError: any) {
       console.warn('⚠️ Failed to update AsyncStorage:', localError.message);
     }
+
+    // Sync to Supabase in background (non-blocking)
+    (async () => {
+      try {
+        const { error: updateError } = await supabase
+          .from('users')
+          .update(supabaseUpdates)
+          .eq('id', user.id);
+
+        if (updateError) {
+          console.warn('⚠️ Background Supabase update failed:', updateError.message);
+        } else {
+          console.log('✅ User profile updated in Supabase');
+        }
+      } catch (error: any) {
+        console.warn('⚠️ Background Supabase update failed:', error.message);
+      }
+    })(); // IIFE - runs in background
 
     return { success: true };
   } catch (error: any) {

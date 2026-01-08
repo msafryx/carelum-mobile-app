@@ -3,29 +3,33 @@ import HamburgerMenu from '@/src/components/ui/HamburgerMenu';
 import Header from '@/src/components/ui/Header';
 import { useTheme } from '@/src/config/theme';
 import { useAuth } from '@/src/hooks/useAuth';
-import { updateUserProfile } from '@/src/services/auth.service';
+import { deleteUser } from '@/src/services/admin.service';
+import { signOut, updateUserProfile } from '@/src/services/auth.service';
 import { deleteChild, getParentChildren, saveChild } from '@/src/services/child.service';
 import { getAll, STORAGE_KEYS } from '@/src/services/local-storage.service';
 import { uploadFile } from '@/src/services/storage.service';
+import { syncAllDataFromSupabase } from '@/src/services/sync.service';
 import { Child } from '@/src/types/child.types';
+import { calculateAge } from '@/src/utils/formatters';
 import { Ionicons } from '@expo/vector-icons';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import * as ImagePicker from 'expo-image-picker';
 import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
 import {
-  ActivityIndicator,
-  Alert,
-  Image,
-  Modal,
-  Platform,
-  RefreshControl,
-  ScrollView,
-  StyleSheet,
-  Switch,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
+    ActivityIndicator,
+    Alert,
+    Image,
+    Modal,
+    Platform,
+    RefreshControl,
+    ScrollView,
+    StyleSheet,
+    Switch,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    View,
 } from 'react-native';
 
 export default function ProfileScreen() {
@@ -47,16 +51,18 @@ export default function ProfileScreen() {
   const [childForm, setChildForm] = useState({
     name: '',
     age: '',
-    dateOfBirth: '',
+    dateOfBirth: null as Date | null,
     gender: '' as 'male' | 'female' | 'other' | '',
     photoUrl: '',
   });
+  const [showDatePicker, setShowDatePicker] = useState(false);
   const [notifications, setNotifications] = useState({
     booking: true,
     sitter: true,
   });
   const [twoFA, setTwoFA] = useState(false);
   const [menuVisible, setMenuVisible] = useState(false);
+  const [syncing, setSyncing] = useState(false);
 
   // Load profile data from AsyncStorage/Firebase
   useEffect(() => {
@@ -175,7 +181,8 @@ export default function ProfileScreen() {
 
   const handleAddChild = () => {
     setEditingChild(null);
-    setChildForm({ name: '', age: '', dateOfBirth: '', gender: '', photoUrl: '' });
+    setChildForm({ name: '', age: '', dateOfBirth: null, gender: '', photoUrl: '' });
+    setShowDatePicker(false);
     setShowChildModal(true);
   };
 
@@ -184,10 +191,11 @@ export default function ProfileScreen() {
     setChildForm({
       name: child.name,
       age: child.age.toString(),
-      dateOfBirth: child.dateOfBirth?.toISOString().split('T')[0] || '',
+      dateOfBirth: child.dateOfBirth || null,
       gender: child.gender || '',
       photoUrl: child.photoUrl || '',
     });
+    setShowDatePicker(false);
     setShowChildModal(true);
   };
 
@@ -235,8 +243,21 @@ export default function ProfileScreen() {
   const handleSaveChild = async () => {
     if (!user) return;
     
-    if (!childForm.name.trim() || !childForm.age.trim()) {
-      Alert.alert('Error', 'Please fill in name and age');
+    if (!childForm.name.trim()) {
+      Alert.alert('Error', 'Please fill in child\'s name');
+      return;
+    }
+
+    // Calculate age from date of birth if available, otherwise use manual age
+    let calculatedAge = 0;
+    if (childForm.dateOfBirth) {
+      calculatedAge = calculateAge(childForm.dateOfBirth);
+    } else if (childForm.age.trim()) {
+      calculatedAge = parseInt(childForm.age) || 0;
+    }
+    
+    if (calculatedAge <= 0) {
+      Alert.alert('Error', 'Please provide date of birth or age');
       return;
     }
 
@@ -246,33 +267,45 @@ export default function ProfileScreen() {
         id: editingChild?.id || '',
         parentId: user.id,
         name: childForm.name.trim(),
-        age: parseInt(childForm.age) || 0,
-        dateOfBirth: childForm.dateOfBirth ? new Date(childForm.dateOfBirth) : undefined,
+        age: calculatedAge, // Use calculated age
+        dateOfBirth: childForm.dateOfBirth || undefined,
         gender: childForm.gender || undefined,
         photoUrl: childForm.photoUrl || undefined,
         createdAt: editingChild?.createdAt || new Date(),
         updatedAt: new Date(),
       };
 
+      // Save to Supabase (via saveChild service)
+      console.log('💾 Saving child:', { name: childData.name, id: childData.id, parentId: childData.parentId });
       const result = await saveChild(childData);
+      console.log('💾 Save result:', result);
       
       if (result.success && result.data) {
+        console.log('✅ Child saved successfully:', result.data);
         Alert.alert('Success', editingChild ? 'Child updated successfully!' : 'Child added successfully!');
         setShowChildModal(false);
         setEditingChild(null);
-        setChildForm({ name: '', age: '', dateOfBirth: '', gender: '', photoUrl: '' });
+        setChildForm({ name: '', age: '', dateOfBirth: null, gender: '', photoUrl: '' });
+        setShowDatePicker(false);
         await loadChildren();
       } else {
-        Alert.alert('Error', result.error?.message || 'Failed to save child');
+        console.error('❌ Failed to save child:', result.error);
+        Alert.alert('Error', result.error?.message || 'Failed to save child. Please try again.');
       }
     } catch (error: any) {
-      Alert.alert('Error', error.message || 'Failed to save child');
+      console.error('❌ Exception saving child:', error);
+      Alert.alert('Error', error.message || 'Failed to save child. Please try again.');
     } finally {
       setLoading(false);
     }
   };
 
   const handleDeleteChild = async (childId: string, childName: string) => {
+    if (!childId || childId.trim() === '') {
+      Alert.alert('Error', 'Invalid child ID');
+      return;
+    }
+
     Alert.alert(
       'Delete Child',
       `Are you sure you want to delete ${childName}? This action cannot be undone.`,
@@ -282,13 +315,13 @@ export default function ProfileScreen() {
           text: 'Delete',
           style: 'destructive',
           onPress: async () => {
-            console.log('🗑️ Deleting child:', childId);
+            console.log('🗑️ Deleting child:', childId, 'Name:', childName);
             setLoading(true);
             try {
               // Remove from local state immediately for instant UI update
               setChildren(prev => prev.filter(c => c.id !== childId));
               
-              // Then delete from storage/Supabase
+              // Delete from storage/Supabase (syncs immediately)
               const result = await deleteChild(childId);
               console.log('🗑️ Delete result:', result);
               
@@ -370,9 +403,9 @@ export default function ProfileScreen() {
     try {
       const result = await updateUserProfile({
         displayName: name,
-        phoneNumber: phone,
+        phoneNumber: phone || undefined,
         profileImageUrl: profileImage || undefined,
-      });
+      } as any);
       
       if (result.success) {
         Alert.alert('Success', 'Profile updated successfully!');
@@ -389,6 +422,69 @@ export default function ProfileScreen() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleSync = async () => {
+    if (!user) return;
+    
+    setSyncing(true);
+    try {
+      const result = await syncAllDataFromSupabase(user.id);
+      
+      if (result.success && result.data) {
+        const { users, children, instructions, sessions, alerts, messages } = result.data;
+        await loadChildren();
+        await refreshProfile();
+        Alert.alert(
+          'Sync Complete',
+          `Synced:\n• ${users} user profile\n• ${children} children\n• ${instructions} instructions\n• ${sessions} sessions\n• ${alerts} alerts\n• ${messages} messages`
+        );
+      } else {
+        Alert.alert('Sync Error', result.error?.message || 'Failed to sync data');
+      }
+    } catch (error: any) {
+      console.error('❌ Sync error:', error);
+      Alert.alert('Sync Error', error.message || 'Failed to sync data');
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  const handleDeleteAccount = () => {
+    Alert.alert(
+      'Delete Account',
+      'Are you sure you want to delete your account? This will permanently delete:\n\n• Your profile\n• All your children\'s profiles\n• All sessions and bookings\n• All messages and alerts\n\nThis action cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            if (!user) return;
+            
+            setLoading(true);
+            try {
+              // Delete user profile from database
+              const result = await deleteUser(user.id);
+              
+              if (result.success) {
+                // Sign out and navigate to login
+                await signOut();
+                router.replace('/(auth)/login');
+                Alert.alert('Account Deleted', 'Your account has been permanently deleted.');
+              } else {
+                Alert.alert('Error', result.error?.message || 'Failed to delete account. Please try again.');
+              }
+            } catch (error: any) {
+              console.error('❌ Delete account error:', error);
+              Alert.alert('Error', error.message || 'Failed to delete account. Please try again.');
+            } finally {
+              setLoading(false);
+            }
+          },
+        },
+      ]
+    );
   };
 
   return (
@@ -521,6 +617,24 @@ export default function ProfileScreen() {
         </Card>
 
         <Card>
+          <Text style={[styles.sectionTitle, { color: colors.text }]}>Data Sync</Text>
+          <TouchableOpacity
+            onPress={handleSync}
+            style={[styles.syncButton, { backgroundColor: colors.primary }]}
+            disabled={syncing || loading}
+          >
+            {syncing ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <Ionicons name="sync" size={20} color="#fff" />
+            )}
+            <Text style={styles.syncButtonText}>
+              {syncing ? 'Syncing...' : 'Sync All Data'}
+            </Text>
+          </TouchableOpacity>
+        </Card>
+
+        <Card>
           <View style={styles.childrenHeader}>
             <Text style={[styles.sectionTitle, { color: colors.text }]}>Children</Text>
             <TouchableOpacity
@@ -569,14 +683,23 @@ export default function ProfileScreen() {
                 <View style={styles.childInfo}>
                   <Text style={[styles.childName, { color: colors.text }]}>{child.name}</Text>
                   <View style={styles.childDetails}>
-                    {child.age && (
+                    {child.dateOfBirth ? (
                       <Text style={[styles.childDetail, { color: colors.textSecondary }]}>
-                        Age: {child.age}
+                        Age: {calculateAge(child.dateOfBirth)} years
+                      </Text>
+                    ) : child.age ? (
+                      <Text style={[styles.childDetail, { color: colors.textSecondary }]}>
+                        Age: {child.age} years
+                      </Text>
+                    ) : null}
+                    {child.dateOfBirth && (
+                      <Text style={[styles.childDetail, { color: colors.textSecondary }]}>
+                        • Born: {child.dateOfBirth.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })}
                       </Text>
                     )}
                     {child.gender && (
                       <Text style={[styles.childDetail, { color: colors.textSecondary }]}>
-                        • {child.gender}
+                        • {child.gender.charAt(0).toUpperCase() + child.gender.slice(1)}
                       </Text>
                     )}
                   </View>
@@ -611,6 +734,19 @@ export default function ProfileScreen() {
           )}
         </Card>
 
+        {/* Delete Account - At the bottom */}
+        <Card>
+          <Text style={[styles.sectionTitle, { color: colors.text }]}>Account</Text>
+          <TouchableOpacity
+            onPress={handleDeleteAccount}
+            style={[styles.deleteAccountButton, { borderColor: colors.error }]}
+            disabled={loading}
+          >
+            <Ionicons name="trash-outline" size={20} color={colors.error} />
+            <Text style={[styles.deleteAccountText, { color: colors.error }]}>Delete Account</Text>
+          </TouchableOpacity>
+        </Card>
+
         {/* Add/Edit Child Modal */}
         <Modal
           visible={showChildModal}
@@ -619,7 +755,8 @@ export default function ProfileScreen() {
           onRequestClose={() => {
             setShowChildModal(false);
             setEditingChild(null);
-            setChildForm({ name: '', age: '', dateOfBirth: '', gender: '', photoUrl: '' });
+            setChildForm({ name: '', age: '', dateOfBirth: null, gender: '', photoUrl: '' });
+            setShowDatePicker(false);
           }}
         >
           <View style={styles.modalOverlay}>
@@ -632,7 +769,8 @@ export default function ProfileScreen() {
                   onPress={() => {
                     setShowChildModal(false);
                     setEditingChild(null);
-                    setChildForm({ name: '', age: '', dateOfBirth: '', gender: '', photoUrl: '' });
+                    setChildForm({ name: '', age: '', dateOfBirth: null, gender: '', photoUrl: '' });
+                    setShowDatePicker(false);
                   }}
                 >
                   <Ionicons name="close" size={28} color={colors.text} />
@@ -664,20 +802,94 @@ export default function ProfileScreen() {
                   style={[styles.modalInput, { backgroundColor: colors.background, color: colors.text, borderColor: colors.border }]}
                   placeholderTextColor={colors.textSecondary}
                 />
+                {/* Date of Birth with Date Picker */}
+                <View style={styles.datePickerContainer}>
+                  <Text style={[styles.datePickerLabel, { color: colors.text }]}>Date of Birth</Text>
+                  {Platform.OS === 'web' ? (
+                    <View style={[styles.datePickerButton, { backgroundColor: colors.background, borderColor: colors.border }]}>
+                      <Ionicons name="calendar" size={22} color={colors.primary} style={styles.datePickerIcon} />
+                      <View style={{ flex: 1 }}>
+                        {/* @ts-ignore - Web-specific input */}
+                        <input
+                          type="date"
+                          value={childForm.dateOfBirth ? childForm.dateOfBirth.toISOString().split('T')[0] : ''}
+                          onChange={(e: any) => {
+                            const date = e.target.value ? new Date(e.target.value) : null;
+                            setChildForm({ 
+                              ...childForm, 
+                              dateOfBirth: date,
+                              age: date ? calculateAge(date).toString() : ''
+                            });
+                          }}
+                          max={new Date().toISOString().split('T')[0]}
+                          min="1900-01-01"
+                          style={{
+                            width: '100%',
+                            border: 'none',
+                            outline: 'none',
+                            fontSize: 16,
+                            fontWeight: 500,
+                            color: childForm.dateOfBirth ? colors.text : colors.textSecondary,
+                            backgroundColor: 'transparent',
+                            padding: 0,
+                            fontFamily: 'inherit',
+                          }}
+                        />
+                      </View>
+                    </View>
+                  ) : (
+                    <TouchableOpacity
+                      onPress={() => {
+                        console.log('📅 Opening date picker...');
+                        setShowDatePicker(true);
+                      }}
+                      style={[styles.datePickerButton, { backgroundColor: colors.background, borderColor: colors.border }]}
+                    >
+                      <Ionicons name="calendar" size={22} color={colors.primary} style={styles.datePickerIcon} />
+                      <Text style={[styles.datePickerText, { color: childForm.dateOfBirth ? colors.text : colors.textSecondary }]}>
+                        {childForm.dateOfBirth 
+                          ? childForm.dateOfBirth.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
+                          : 'Select Date of Birth'}
+                      </Text>
+                    </TouchableOpacity>
+                  )}
+                  {showDatePicker && Platform.OS !== 'web' && (
+                    <DateTimePicker
+                      value={childForm.dateOfBirth || new Date()}
+                      mode="date"
+                      display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                      maximumDate={new Date()}
+                      onChange={(event, selectedDate) => {
+                        console.log('📅 Date picker event:', event.type, selectedDate);
+                        if (Platform.OS === 'android') {
+                          setShowDatePicker(false);
+                        }
+                        if (event.type === 'set' && selectedDate) {
+                          setChildForm({ 
+                            ...childForm, 
+                            dateOfBirth: selectedDate,
+                            age: calculateAge(selectedDate).toString()
+                          });
+                          if (Platform.OS === 'android') {
+                            setShowDatePicker(false);
+                          }
+                        } else if (event.type === 'dismissed') {
+                          setShowDatePicker(false);
+                        }
+                      }}
+                    />
+                  )}
+                </View>
+                
+                {/* Age (auto-calculated from date of birth, but can be manually edited) - Below Date of Birth */}
                 <TextInput
                   value={childForm.age}
                   onChangeText={(text) => setChildForm({ ...childForm, age: text })}
-                  placeholder="Age *"
+                  placeholder="Age * (auto-calculated from date of birth)"
                   keyboardType="number-pad"
                   style={[styles.modalInput, { backgroundColor: colors.background, color: colors.text, borderColor: colors.border }]}
                   placeholderTextColor={colors.textSecondary}
-                />
-                <TextInput
-                  value={childForm.dateOfBirth}
-                  onChangeText={(text) => setChildForm({ ...childForm, dateOfBirth: text })}
-                  placeholder="Date of Birth (YYYY-MM-DD)"
-                  style={[styles.modalInput, { backgroundColor: colors.background, color: colors.text, borderColor: colors.border }]}
-                  placeholderTextColor={colors.textSecondary}
+                  editable={true} // Allow manual override if needed
                 />
                 <View style={styles.genderContainer}>
                   <Text style={[styles.genderLabel, { color: colors.text }]}>Gender</Text>
@@ -1001,5 +1213,58 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
     fontWeight: '700',
+  },
+  datePickerContainer: {
+    marginBottom: 12,
+  },
+  datePickerLabel: {
+    fontSize: 16,
+    fontWeight: '600',
+    marginBottom: 8,
+  },
+  datePickerButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: 10,
+    padding: 12,
+    borderWidth: 1,
+    gap: 8,
+  },
+  datePickerIcon: {
+    marginRight: 4,
+  },
+  datePickerText: {
+    flex: 1,
+    fontSize: 16,
+  },
+  syncButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    gap: 8,
+    marginTop: 8,
+  },
+  syncButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  deleteAccountButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    borderWidth: 1,
+    gap: 8,
+    marginTop: 8,
+  },
+  deleteAccountText: {
+    fontSize: 16,
+    fontWeight: '600',
   },
 });

@@ -105,3 +105,26 @@ export function formatDuration(seconds: number): string {
   }
   return `${secs}s`;
 }
+
+/**
+ * Calculate age from date of birth
+ * @param dateOfBirth - Date of birth
+ * @returns Age in years (0 if invalid date)
+ */
+export function calculateAge(dateOfBirth: Date | string | null | undefined): number {
+  if (!dateOfBirth) return 0;
+  
+  const dob = typeof dateOfBirth === 'string' ? new Date(dateOfBirth) : dateOfBirth;
+  if (isNaN(dob.getTime())) return 0;
+  
+  const today = new Date();
+  let age = today.getFullYear() - dob.getFullYear();
+  const monthDiff = today.getMonth() - dob.getMonth();
+  
+  // If birthday hasn't occurred this year yet, subtract 1
+  if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < dob.getDate())) {
+    age--;
+  }
+  
+  return Math.max(0, age); // Ensure age is not negative
+}

@@ -7,23 +7,24 @@ import { useAuth } from '@/src/hooks/useAuth';
 import { deleteChild, getParentChildren, saveChild, saveChildInstructions } from '@/src/services/child.service';
 import { uploadFile } from '@/src/services/storage.service';
 import { Child, ChildInstructions } from '@/src/types/child.types';
+import { calculateAge } from '@/src/utils/formatters';
 import { Ionicons } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import * as ImagePicker from 'expo-image-picker';
 import { useFocusEffect } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
 import {
-  ActivityIndicator,
-  Alert,
-  Image,
-  Modal,
-  Platform,
-  RefreshControl,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View
+    ActivityIndicator,
+    Alert,
+    Image,
+    Modal,
+    Platform,
+    RefreshControl,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TouchableOpacity,
+    View
 } from 'react-native';
 
 export default function InstructionsScreen() {
@@ -268,8 +269,21 @@ export default function InstructionsScreen() {
       return;
     }
 
-    if (!childForm.name.trim() || !childForm.age.trim()) {
-      Alert.alert('Error', 'Please fill in name and age');
+    if (!childForm.name.trim()) {
+      Alert.alert('Error', 'Please fill in child\'s name');
+      return;
+    }
+
+    // Calculate age from date of birth if available, otherwise use manual age
+    let calculatedAge = 0;
+    if (childForm.dateOfBirth) {
+      calculatedAge = calculateAge(childForm.dateOfBirth);
+    } else if (childForm.age.trim()) {
+      calculatedAge = parseInt(childForm.age) || 0;
+    }
+    
+    if (calculatedAge <= 0) {
+      Alert.alert('Error', 'Please provide date of birth or age');
       return;
     }
 
@@ -279,7 +293,7 @@ export default function InstructionsScreen() {
         id: editingChild?.id || '',
         parentId: user.id, // Use actual user ID
         name: childForm.name.trim(),
-        age: parseInt(childForm.age) || 0,
+        age: calculatedAge, // Use calculated age
         dateOfBirth: childForm.dateOfBirth || undefined,
         gender: childForm.gender || undefined,
         photoUrl: childForm.photoUrl || undefined,
@@ -287,26 +301,38 @@ export default function InstructionsScreen() {
         updatedAt: new Date(),
       };
 
+      // Save to Supabase (via saveChild service)
+      console.log('💾 Saving child:', { name: childData.name, id: childData.id, parentId: childData.parentId });
       const result = await saveChild(childData);
+      console.log('💾 Save result:', result);
       
       if (result.success && result.data) {
+        console.log('✅ Child saved successfully:', result.data);
         Alert.alert('Success', editingChild ? 'Child updated successfully!' : 'Child added successfully!');
         setShowChildModal(false);
         setEditingChild(null);
         setChildForm({ name: '', age: '', dateOfBirth: null, gender: '', photoUrl: '' });
+        setShowDatePicker(false);
         // Reload children to get updated list
         await loadChildren();
       } else {
-        Alert.alert('Error', result.error?.message || 'Failed to save child');
+        console.error('❌ Failed to save child:', result.error);
+        Alert.alert('Error', result.error?.message || 'Failed to save child. Please try again.');
       }
     } catch (error: any) {
-      Alert.alert('Error', error.message || 'Failed to save child');
+      console.error('❌ Exception saving child:', error);
+      Alert.alert('Error', error.message || 'Failed to save child. Please try again.');
     } finally {
       setLoading(false);
     }
   };
 
   const handleDeleteChild = async (childId: string, childName?: string) => {
+    if (!childId || childId.trim() === '') {
+      Alert.alert('Error', 'Invalid child ID');
+      return;
+    }
+
     Alert.alert(
       'Delete Child',
       `Are you sure you want to delete ${childName || 'this child'}? This action cannot be undone.`,
@@ -316,7 +342,7 @@ export default function InstructionsScreen() {
           text: 'Delete',
           style: 'destructive',
           onPress: async () => {
-            console.log('🗑️ Deleting child:', childId);
+            console.log('🗑️ Deleting child:', childId, 'Name:', childName);
             setLoading(true);
             try {
               // Remove from local state immediately for instant UI update
@@ -325,7 +351,7 @@ export default function InstructionsScreen() {
               delete newInstructions[childId];
               setInstructions(newInstructions);
               
-              // Then delete from storage/Supabase
+              // Delete from storage/Supabase
               const result = await deleteChild(childId);
               console.log('🗑️ Delete result:', result);
               
@@ -533,8 +559,9 @@ export default function InstructionsScreen() {
                         {child.name}
                       </Text>
                       <Text style={[styles.childAge, { color: colors.textSecondary }]}>
-                        {child.age} years old
-                        {child.gender && ` • ${child.gender}`}
+                        {child.dateOfBirth ? calculateAge(child.dateOfBirth) : child.age} years old
+                        {child.dateOfBirth && ` • Born: ${child.dateOfBirth.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })}`}
+                        {child.gender && ` • ${child.gender.charAt(0).toUpperCase() + child.gender.slice(1)}`}
                       </Text>
                     </View>
                     <View style={styles.childActions}>
@@ -673,13 +700,6 @@ export default function InstructionsScreen() {
               onChangeText={(text) => setChildForm({ ...childForm, name: text })}
               placeholder="Enter child's name"
             />
-            <Input
-              label="Age *"
-              value={childForm.age}
-              onChangeText={(text) => setChildForm({ ...childForm, age: text })}
-              placeholder="Enter age"
-              keyboardType="number-pad"
-            />
             
             {/* Date Picker */}
             <View style={styles.datePickerContainer}>
@@ -697,7 +717,11 @@ export default function InstructionsScreen() {
                         if (e.target.value) {
                           const date = new Date(e.target.value);
                           if (!isNaN(date.getTime())) {
-                            setChildForm({ ...childForm, dateOfBirth: date });
+                            setChildForm({ 
+                              ...childForm, 
+                              dateOfBirth: date,
+                              age: calculateAge(date).toString()
+                            });
                           }
                         }
                       }}
@@ -751,7 +775,11 @@ export default function InstructionsScreen() {
                           setShowDatePicker(false);
                         }
                         if (event.type === 'set' && selectedDate) {
-                          setChildForm({ ...childForm, dateOfBirth: selectedDate });
+                          setChildForm({ 
+                            ...childForm, 
+                            dateOfBirth: selectedDate,
+                            age: calculateAge(selectedDate).toString()
+                          });
                           if (Platform.OS === 'ios') {
                             setShowDatePicker(false);
                           }
@@ -766,6 +794,17 @@ export default function InstructionsScreen() {
                 </>
               )}
             </View>
+            
+            {/* Age (auto-calculated from date of birth, but can be manually edited) - Below Date of Birth */}
+            <Input
+              label="Age *"
+              value={childForm.age}
+              onChangeText={(text) => setChildForm({ ...childForm, age: text })}
+              placeholder="Age * (auto-calculated from date of birth)"
+              keyboardType="number-pad"
+              editable={true} // Allow manual override if needed
+            />
+            
             <View style={styles.genderContainer}>
               <Text style={[styles.label, { color: colors.text }]}>Gender</Text>
               <View style={styles.genderOptions}>

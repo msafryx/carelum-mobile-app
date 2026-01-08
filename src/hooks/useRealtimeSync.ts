@@ -55,10 +55,89 @@ export function useRealtimeSync() {
           table: 'chat_messages',
           filter: `receiver_id=eq.${user.id}`,
         },
-        (payload: any) => {
+        async (payload: any) => {
           console.log('💬 Message update:', payload);
+          // Sync to AsyncStorage
+          try {
+            const { save, STORAGE_KEYS } = await import('@/src/services/local-storage.service');
+            if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+              const msg = payload.new;
+              await save(STORAGE_KEYS.CHAT_MESSAGES, {
+                id: msg.id,
+                sessionId: msg.session_id,
+                senderId: msg.sender_id,
+                receiverId: msg.receiver_id,
+                message: msg.message,
+                read: msg.read || false,
+                readAt: msg.read_at ? new Date(msg.read_at).getTime() : null,
+                createdAt: new Date(msg.created_at).getTime(),
+              });
+              console.log('✅ Message synced to AsyncStorage from real-time');
+            }
+          } catch (error: any) {
+            console.warn('⚠️ Failed to sync message:', error);
+          }
           if (typeof window !== 'undefined') {
             window.dispatchEvent(new CustomEvent('messageReceived', { detail: payload }));
+          }
+        }
+      )
+      .subscribe();
+
+    // Subscribe to children (for real-time sync)
+    const childrenChannel = supabase
+      .channel('children-channel')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'children',
+          filter: `parent_id=eq.${user.id}`,
+        },
+        async (payload: any) => {
+          console.log('👶 Children update:', payload);
+          // Sync to AsyncStorage
+          try {
+            const { save, getAll, STORAGE_KEYS } = await import('@/src/services/local-storage.service');
+            if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+              const child = payload.new;
+              await save(STORAGE_KEYS.CHILDREN, {
+                id: child.id,
+                parentId: child.parent_id,
+                childNumber: child.child_number,
+                parentNumber: child.parent_number,
+                sitterNumber: child.sitter_number,
+                name: child.name,
+                age: child.age,
+                dateOfBirth: child.date_of_birth ? new Date(child.date_of_birth).getTime() : null,
+                gender: child.gender,
+                photoUrl: child.photo_url,
+                createdAt: new Date(child.created_at).getTime(),
+                updatedAt: new Date(child.updated_at).getTime(),
+              });
+              console.log('✅ Child synced to AsyncStorage from real-time');
+            } else if (payload.eventType === 'DELETE') {
+              // Handle delete - remove from AsyncStorage
+              const allChildren = await getAll(STORAGE_KEYS.CHILDREN);
+              if (allChildren.success && allChildren.data) {
+                const remaining = allChildren.data.filter((c: any) => c.id !== payload.old.id);
+                // Re-save remaining children
+                const { clear } = await import('@/src/services/local-storage.service');
+                await clear(STORAGE_KEYS.CHILDREN);
+                for (const child of remaining) {
+                  await save(STORAGE_KEYS.CHILDREN, child);
+                }
+              }
+            }
+            // Emit event for UI refresh
+            if (typeof window !== 'undefined') {
+              window.dispatchEvent(new CustomEvent('childrenUpdated'));
+            }
+            // Also emit via emitter for cross-platform compatibility
+            childrenUpdateEmitter.emit();
+          } catch (error: any) {
+            console.warn('⚠️ Failed to sync child to AsyncStorage:', error);
           }
         }
       )
@@ -107,6 +186,7 @@ export function useRealtimeSync() {
     channelsRef.current = [
       { channel: alertsChannel, unsubscribe: () => supabase.removeChannel(alertsChannel) },
       { channel: messagesChannel, unsubscribe: () => supabase.removeChannel(messagesChannel) },
+      { channel: childrenChannel, unsubscribe: () => supabase.removeChannel(childrenChannel) },
       { channel: sessionsChannel, unsubscribe: () => supabase.removeChannel(sessionsChannel) },
       { channel: sitterSessionsChannel, unsubscribe: () => supabase.removeChannel(sitterSessionsChannel) },
     ];

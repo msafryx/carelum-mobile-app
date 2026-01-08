@@ -4,6 +4,24 @@
 -- Enable UUID extension
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
+-- ============================================
+-- SYNC DELETIONS: auth.users <-> public.users
+-- ============================================
+-- This ensures that when a user is deleted from auth.users, they are also deleted from public.users
+CREATE OR REPLACE FUNCTION handle_auth_user_deleted()
+RETURNS TRIGGER AS $$
+BEGIN
+  DELETE FROM public.users WHERE id = OLD.id;
+  RETURN OLD;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+DROP TRIGGER IF EXISTS on_auth_user_deleted ON auth.users;
+CREATE TRIGGER on_auth_user_deleted
+  AFTER DELETE ON auth.users
+  FOR EACH ROW
+  EXECUTE FUNCTION handle_auth_user_deleted();
+
 -- Enable Realtime for tables that need it
 -- (Do this in Supabase Dashboard → Database → Replication)
 
@@ -217,8 +235,25 @@ CREATE POLICY "Users can update own profile" ON users
   FOR UPDATE USING (auth.uid() = id);
 
 -- Children: Parents can read/write their own children
-CREATE POLICY "Parents can manage own children" ON children
-  FOR ALL USING (parent_id = auth.uid() OR EXISTS (
+-- Drop existing policy if it exists
+DROP POLICY IF EXISTS "Parents can manage own children" ON children;
+
+-- Separate policies for better control
+CREATE POLICY "Parents can read own children" ON children
+  FOR SELECT USING (parent_id = auth.uid() OR EXISTS (
+    SELECT 1 FROM users WHERE id = auth.uid() AND role = 'admin'
+  ));
+
+CREATE POLICY "Parents can insert own children" ON children
+  FOR INSERT WITH CHECK (parent_id = auth.uid());
+
+CREATE POLICY "Parents can update own children" ON children
+  FOR UPDATE USING (parent_id = auth.uid() OR EXISTS (
+    SELECT 1 FROM users WHERE id = auth.uid() AND role = 'admin'
+  ));
+
+CREATE POLICY "Parents can delete own children" ON children
+  FOR DELETE USING (parent_id = auth.uid() OR EXISTS (
     SELECT 1 FROM users WHERE id = auth.uid() AND role = 'admin'
   ));
 

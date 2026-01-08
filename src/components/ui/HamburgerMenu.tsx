@@ -43,8 +43,21 @@ export default function HamburgerMenu({ visible, onClose }: Props) {
 
   const handleLogout = async () => {
     onClose();
-    await signOut();
-    router.replace('/(auth)/login');
+    try {
+      const result = await signOut();
+      if (result.success) {
+        router.replace('/(auth)/login');
+      } else {
+        // Still navigate to login even if signOut had an error
+        // (user might be logged out locally but Supabase call failed)
+        console.warn('⚠️ Sign out error:', result.error?.message);
+        router.replace('/(auth)/login');
+      }
+    } catch (error: any) {
+      console.error('❌ Logout error:', error);
+      // Navigate to login anyway
+      router.replace('/(auth)/login');
+    }
   };
 
   return (
@@ -111,7 +124,12 @@ export default function HamburgerMenu({ visible, onClose }: Props) {
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.item, { borderBottomColor: colors.border }]}
-                onPress={() => go('profile')}
+                onPress={() => {
+                  onClose();
+                  // Navigate to settings screen if it exists, otherwise stay on profile
+                  // Settings are already on the profile screen, so just close the menu
+                  // In the future, you can create a dedicated settings screen
+                }}
               >
                 <Ionicons
                   name="settings"
