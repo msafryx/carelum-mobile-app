@@ -2,50 +2,48 @@
  * Parent Session Detail Screen
  * Shows active session details, GPS tracking, cry detection alerts, and session controls
  */
-import React, { useState, useEffect, useCallback } from 'react';
-import {
-  View,
-  StyleSheet,
-  ScrollView,
-  RefreshControl,
-  Alert,
-  ActivityIndicator,
-  TouchableOpacity,
-  Text,
-} from 'react-native';
-import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useTheme } from '@/src/components/ui/ThemeProvider';
-import Header from '@/src/components/ui/Header';
-import Card from '@/src/components/ui/Card';
-import ErrorDisplay from '@/src/components/ui/ErrorDisplay';
-import GPSMapView from '@/src/components/session/GPSMapView';
+import EnhancedAlertsView from '@/src/components/alerts/EnhancedAlertsView';
 import EnhancedGPSMap from '@/src/components/gps/EnhancedGPSMap';
 import CryDetectionIndicator from '@/src/components/session/CryDetectionIndicator';
-import EnhancedAlertsView from '@/src/components/alerts/EnhancedAlertsView';
 import SessionControls from '@/src/components/session/SessionControls';
 import SessionTimeline from '@/src/components/session/SessionTimeline';
+import Card from '@/src/components/ui/Card';
+import ErrorDisplay from '@/src/components/ui/ErrorDisplay';
+import HamburgerMenu from '@/src/components/ui/HamburgerMenu';
+import Header from '@/src/components/ui/Header';
+import { useTheme } from '@/src/components/ui/ThemeProvider';
 import { useAuth } from '@/src/hooks/useAuth';
 import {
-  getSessionById,
-  subscribeToSession,
-  completeSession,
-  updateSessionStatus,
-} from '@/src/services/session.service';
+  Alert as AlertType,
+  getSessionAlerts,
+  markAlertAsViewed,
+  subscribeToSessionAlerts,
+} from '@/src/services/alert.service';
+import { getChildById } from '@/src/services/child.service';
 import {
   getSessionGPSTracking,
   subscribeToGPSUpdates,
 } from '@/src/services/monitoring.service';
 import {
-  getSessionAlerts,
-  subscribeToSessionAlerts,
-  markAlertAsViewed,
-} from '@/src/services/alert.service';
-import { getChildById } from '@/src/services/child.service';
-import { Session } from '@/src/types/session.types';
-import { LocationUpdate } from '@/src/types/session.types';
-import { Alert as AlertType } from '@/src/services/alert.service';
+  completeSession,
+  getSessionById,
+  subscribeToSession
+} from '@/src/services/session.service';
 import { Child } from '@/src/types/child.types';
+import { LocationUpdate, Session } from '@/src/types/session.types';
 import { Ionicons } from '@expo/vector-icons';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import React, { useCallback, useEffect, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 
 // Helper function to format duration
 function formatDuration(startTime: Date): string {
@@ -75,6 +73,7 @@ export default function SessionDetailScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
+  const [menuVisible, setMenuVisible] = useState(false);
 
   // Load session data
   const loadSessionData = useCallback(async () => {
@@ -253,7 +252,20 @@ export default function SessionDetailScreen() {
   if (loading) {
     return (
       <View style={[styles.container, { backgroundColor: colors.background }]}>
-        <Header showLogo={true} title="Session Details" />
+        <Header 
+          showLogo={true} 
+          title="Session Details"
+          rightComponent={
+            <TouchableOpacity
+              onPress={() => setMenuVisible(true)}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="menu" size={30} color={colors.text} />
+            </TouchableOpacity>
+          }
+        />
+        <HamburgerMenu visible={menuVisible} onClose={() => setMenuVisible(false)} />
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color={colors.primary} />
         </View>
@@ -264,7 +276,20 @@ export default function SessionDetailScreen() {
   if (error || !session) {
     return (
       <View style={[styles.container, { backgroundColor: colors.background }]}>
-        <Header showLogo={true} title="Session Details" />
+        <Header 
+          showLogo={true} 
+          title="Session Details"
+          rightComponent={
+            <TouchableOpacity
+              onPress={() => setMenuVisible(true)}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="menu" size={30} color={colors.text} />
+            </TouchableOpacity>
+          }
+        />
+        <HamburgerMenu visible={menuVisible} onClose={() => setMenuVisible(false)} />
         <ErrorDisplay
           error={{ message: error || 'Session not found' }}
           onRetry={loadSessionData}
@@ -280,7 +305,20 @@ export default function SessionDetailScreen() {
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
-      <Header showLogo={true} title="Session Details" />
+      <Header 
+        showLogo={true} 
+        title="Session Details"
+        rightComponent={
+          <TouchableOpacity
+            onPress={() => setMenuVisible(true)}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="menu" size={30} color={colors.text} />
+          </TouchableOpacity>
+        }
+      />
+      <HamburgerMenu visible={menuVisible} onClose={() => setMenuVisible(false)} />
       <ScrollView
         style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}

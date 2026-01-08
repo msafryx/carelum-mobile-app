@@ -2,6 +2,7 @@ import Button from '@/src/components/ui/Button';
 import Card from '@/src/components/ui/Card';
 import Header from '@/src/components/ui/Header';
 import Input from '@/src/components/ui/Input';
+import HamburgerMenu from '@/src/components/ui/HamburgerMenu';
 import { useTheme } from '@/src/components/ui/ThemeProvider';
 import { useAuth } from '@/src/hooks/useAuth';
 import { deleteChild, getParentChildren, saveChild, saveChildInstructions } from '@/src/services/child.service';
@@ -37,6 +38,7 @@ export default function InstructionsScreen() {
   const [showChildModal, setShowChildModal] = useState(false);
   const [showInstructionsModal, setShowInstructionsModal] = useState(false);
   const [editingChild, setEditingChild] = useState<Child | null>(null);
+  const [menuVisible, setMenuVisible] = useState(false);
 
   // Load children on mount
   useEffect(() => {
@@ -505,7 +507,21 @@ export default function InstructionsScreen() {
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
-      <Header showLogo={true} title="Child Profiles & Instructions" showBack={true} />
+      <Header 
+        showLogo={true} 
+        title="Child Profiles & Instructions" 
+        showBack={true}
+        rightComponent={
+          <TouchableOpacity
+            onPress={() => setMenuVisible(true)}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="menu" size={30} color={colors.text} />
+          </TouchableOpacity>
+        }
+      />
+      <HamburgerMenu visible={menuVisible} onClose={() => setMenuVisible(false)} />
       <ScrollView 
         contentContainerStyle={styles.content}
         refreshControl={

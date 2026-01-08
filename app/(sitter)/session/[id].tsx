@@ -18,6 +18,7 @@ import { useTheme } from '@/src/components/ui/ThemeProvider';
 import Header from '@/src/components/ui/Header';
 import Card from '@/src/components/ui/Card';
 import ErrorDisplay from '@/src/components/ui/ErrorDisplay';
+import SitterHamburgerMenu from '@/src/components/ui/SitterHamburgerMenu';
 import GPSMapView from '@/src/components/session/GPSMapView';
 import EnhancedGPSMap from '@/src/components/gps/EnhancedGPSMap';
 import CryDetectionIndicator from '@/src/components/session/CryDetectionIndicator';
@@ -79,6 +80,7 @@ export default function SitterSessionDetailScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
+  const [menuVisible, setMenuVisible] = useState(false);
 
   // Monitoring state
   const [gpsTrackingEnabled, setGpsTrackingEnabled] = useState(false);
@@ -407,7 +409,20 @@ export default function SitterSessionDetailScreen() {
   if (loading) {
     return (
       <View style={[styles.container, { backgroundColor: colors.background }]}>
-        <Header showLogo={true} title="Active Session" />
+        <Header 
+          showLogo={true} 
+          title="Active Session"
+          rightComponent={
+            <TouchableOpacity
+              onPress={() => setMenuVisible(true)}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="menu" size={30} color={colors.text} />
+            </TouchableOpacity>
+          }
+        />
+        <SitterHamburgerMenu visible={menuVisible} onClose={() => setMenuVisible(false)} />
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color={colors.primary} />
         </View>
@@ -418,7 +433,20 @@ export default function SitterSessionDetailScreen() {
   if (error || !session) {
     return (
       <View style={[styles.container, { backgroundColor: colors.background }]}>
-        <Header showLogo={true} title="Active Session" />
+        <Header 
+          showLogo={true} 
+          title="Active Session"
+          rightComponent={
+            <TouchableOpacity
+              onPress={() => setMenuVisible(true)}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="menu" size={30} color={colors.text} />
+            </TouchableOpacity>
+          }
+        />
+        <SitterHamburgerMenu visible={menuVisible} onClose={() => setMenuVisible(false)} />
         <ErrorDisplay
           error={{ message: error || 'Session not found' }}
           onRetry={loadSessionData}

@@ -19,18 +19,33 @@ export default function SitterChatbotScreen() {
     childId?: string;
   }>();
   const { user } = useAuth();
+  const [menuVisible, setMenuVisible] = useState(false);
 
   // If no session context, show empty state
   if (!sessionId || !childId || !user) {
     return (
       <View style={[styles.container, { backgroundColor: colors.background }]}>
-        <Header showLogo={true} title="AI Assistant" showBack={true} />
+        <Header 
+          showLogo={true} 
+          title="AI Assistant" 
+          showBack={true}
+          rightComponent={
+            <TouchableOpacity
+              onPress={() => setMenuVisible(true)}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="menu" size={30} color={colors.text} />
+            </TouchableOpacity>
+          }
+        />
         <View style={styles.emptyContainer}>
           <Ionicons name="chatbubbles-outline" size={64} color={colors.textSecondary} />
           <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
             Please access the chatbot from an active session
           </Text>
         </View>
+        <SitterHamburgerMenu visible={menuVisible} onClose={() => setMenuVisible(false)} />
       </View>
     );
   }

@@ -14,6 +14,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/src/components/ui/ThemeProvider';
 import Header from '@/src/components/ui/Header';
 import Card from '@/src/components/ui/Card';
+import HamburgerMenu from '@/src/components/ui/HamburgerMenu';
 
 interface Sitter {
   id: string;
@@ -79,13 +80,28 @@ export default function SearchScreen() {
   const [time, setTime] = useState('');
   const [duration, setDuration] = useState('2');
   const [childrenCount, setChildrenCount] = useState('1');
+  const [menuVisible, setMenuVisible] = useState(false);
 
   const rate = selected ? selected.rate : 0;
   const total = rate * parseInt(duration || '0');
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
-      <Header showLogo={true} title="Find Babysitter" showBack={true} />
+      <Header 
+        showLogo={true} 
+        title="Find Babysitter" 
+        showBack={true}
+        rightComponent={
+          <TouchableOpacity
+            onPress={() => setMenuVisible(true)}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="menu" size={30} color={colors.text} />
+          </TouchableOpacity>
+        }
+      />
+      <HamburgerMenu visible={menuVisible} onClose={() => setMenuVisible(false)} />
       <ScrollView contentContainerStyle={styles.content}>
         <TextInput
           placeholder="Search sitters"
