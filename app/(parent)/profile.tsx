@@ -13,7 +13,7 @@ import { syncAllDataFromSupabase } from '@/src/services/sync.service';
 import { ensureUserRowExists } from '@/src/services/user-api.service';
 import { Child } from '@/src/types/child.types';
 import { User } from '@/src/types/user.types';
-import { calculateAge } from '@/src/utils/formatters';
+import { calculateAge, formatAgeWithMonthsAndDays } from '@/src/utils/formatters';
 import { Ionicons } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import * as ImagePicker from 'expo-image-picker';
@@ -1249,11 +1249,11 @@ export default function ProfileScreen() {
                   <View style={styles.childDetails}>
                     {child.dateOfBirth ? (
                       <Text style={[styles.childDetail, { color: colors.textSecondary }]}>
-                        Age: {calculateAge(child.dateOfBirth)} years
+                        Age: {formatAgeWithMonthsAndDays(child.dateOfBirth)}
                       </Text>
                     ) : child.age ? (
                       <Text style={[styles.childDetail, { color: colors.textSecondary }]}>
-                        Age: {child.age} years
+                        Age: {child.age} year{child.age !== 1 ? 's' : ''}
                       </Text>
                     ) : null}
                     {child.dateOfBirth && (
@@ -1446,6 +1446,12 @@ export default function ProfileScreen() {
                         }
                       }}
                     />
+                  )}
+                  {/* Display calculated age below date picker */}
+                  {childForm.dateOfBirth && (
+                    <Text style={[styles.calculatedAgeText, { color: colors.primary }]}>
+                      Age: {formatAgeWithMonthsAndDays(childForm.dateOfBirth)}
+                    </Text>
                   )}
                 </View>
                 
@@ -1837,6 +1843,12 @@ const styles = StyleSheet.create({
   },
   datePickerContainer: {
     marginBottom: 12,
+  },
+  calculatedAgeText: {
+    fontSize: 14,
+    fontWeight: '600',
+    marginTop: 8,
+    marginLeft: 4,
   },
   datePickerLabel: {
     fontSize: 16,

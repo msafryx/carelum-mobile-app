@@ -167,6 +167,45 @@ export function calculateAgeWithMonths(
 }
 
 /**
+ * Calculate age with months and days from date of birth
+ * @param dateOfBirth - Date of birth
+ * @returns Object with years, months, and days, or null if invalid
+ */
+export function calculateAgeWithMonthsAndDays(
+  dateOfBirth: Date | string | null | undefined
+): { years: number; months: number; days: number } | null {
+  if (!dateOfBirth) return null;
+  
+  const dob = typeof dateOfBirth === 'string' ? new Date(dateOfBirth) : dateOfBirth;
+  if (isNaN(dob.getTime())) return null;
+  
+  const today = new Date();
+  let years = today.getFullYear() - dob.getFullYear();
+  let months = today.getMonth() - dob.getMonth();
+  let days = today.getDate() - dob.getDate();
+  
+  // Adjust if day hasn't occurred this month yet
+  if (days < 0) {
+    months--;
+    // Get days in previous month
+    const lastDayOfPrevMonth = new Date(today.getFullYear(), today.getMonth(), 0).getDate();
+    days += lastDayOfPrevMonth;
+  }
+  
+  // Adjust if months is negative
+  if (months < 0) {
+    months += 12;
+    years--;
+  }
+  
+  return {
+    years: Math.max(0, years),
+    months: Math.max(0, months),
+    days: Math.max(0, days),
+  };
+}
+
+/**
  * Format age with months for display
  * @param dateOfBirth - Date of birth
  * @returns Formatted age string (e.g., "1 year 3 months", "15 months", "2 years")
@@ -204,4 +243,57 @@ export function formatAgeWithMonths(
   }
   
   return `${years} years ${months} month${months !== 1 ? 's' : ''}`;
+}
+
+/**
+ * Format age with months and days for display
+ * For children < 1 year: shows months and days (e.g., "5 months 12 days")
+ * For children >= 1 year: shows years, months, and days (e.g., "2 years 3 months 15 days")
+ * @param dateOfBirth - Date of birth
+ * @returns Formatted age string
+ */
+export function formatAgeWithMonthsAndDays(
+  dateOfBirth: Date | string | null | undefined
+): string {
+  const ageData = calculateAgeWithMonthsAndDays(dateOfBirth);
+  
+  if (!ageData) return 'Age not available';
+  
+  const { years, months, days } = ageData;
+  
+  // If less than 1 year, show months and days
+  if (years === 0) {
+    if (months === 0 && days === 0) {
+      return 'Newborn';
+    }
+    if (months === 0) {
+      return `${days} day${days !== 1 ? 's' : ''}`;
+    }
+    if (days === 0) {
+      return `${months} month${months !== 1 ? 's' : ''}`;
+    }
+    return `${months} month${months !== 1 ? 's' : ''} ${days} day${days !== 1 ? 's' : ''}`;
+  }
+  
+  // For 1 year or older, show years, months, and days
+  const parts: string[] = [];
+  
+  // Add years
+  if (years === 1) {
+    parts.push('1 year');
+  } else {
+    parts.push(`${years} years`);
+  }
+  
+  // Add months
+  if (months > 0) {
+    parts.push(`${months} month${months !== 1 ? 's' : ''}`);
+  }
+  
+  // Add days
+  if (days > 0) {
+    parts.push(`${days} day${days !== 1 ? 's' : ''}`);
+  }
+  
+  return parts.join(' ');
 }
