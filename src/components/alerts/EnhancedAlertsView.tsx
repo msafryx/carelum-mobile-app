@@ -115,11 +115,11 @@ export default function EnhancedAlertsView({
 
     try {
       const { status } = await Notifs.getPermissionsAsync();
-      setNotificationPermission(status === 'granted');
-      
-      if (status !== 'granted') {
+    setNotificationPermission(status === 'granted');
+    
+    if (status !== 'granted') {
         const { status: newStatus } = await Notifs.requestPermissionsAsync();
-        setNotificationPermission(newStatus === 'granted');
+      setNotificationPermission(newStatus === 'granted');
       }
     } catch (error) {
       console.warn('⚠️ Failed to check notification permissions:', error);
@@ -133,12 +133,12 @@ export default function EnhancedAlertsView({
 
     try {
       Notifs.setNotificationHandler({
-        handleNotification: async () => ({
-          shouldShowAlert: true,
-          shouldPlaySound: true,
-          shouldSetBadge: true,
-        }),
-      });
+      handleNotification: async () => ({
+        shouldShowAlert: true,
+        shouldPlaySound: true,
+        shouldSetBadge: true,
+      }),
+    });
     } catch (error) {
       console.warn('⚠️ Failed to setup notification listener:', error);
     }
@@ -150,15 +150,15 @@ export default function EnhancedAlertsView({
 
     try {
       await Notifs.scheduleNotificationAsync({
-        content: {
-          title: alert.title,
-          body: alert.message,
-          sound: alert.severity === 'critical' || alert.severity === 'high' ? true : false,
+      content: {
+        title: alert.title,
+        body: alert.message,
+        sound: alert.severity === 'critical' || alert.severity === 'high' ? true : false,
           priority: alert.severity === 'critical' ? Notifs.AndroidNotificationPriority.MAX : Notifs.AndroidNotificationPriority.HIGH,
-          data: { alertId: alert.id, sessionId },
-        },
-        trigger: null, // Show immediately
-      });
+        data: { alertId: alert.id, sessionId },
+      },
+      trigger: null, // Show immediately
+    });
     } catch (error) {
       console.warn('⚠️ Failed to show push notification:', error);
     }

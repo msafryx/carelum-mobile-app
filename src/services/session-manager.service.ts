@@ -318,7 +318,7 @@ class SessionManager {
             console.error('❌ Direct Supabase update also failed:', supabaseResult.error);
             console.error('⚠️ Profile update may not be persisted. Error:', supabaseResult.error?.message);
             // Still return success for optimistic update, but warn user
-            return { success: true, data: updatedProfile };
+          return { success: true, data: updatedProfile };
           }
         }
       } catch (apiError: any) {

@@ -84,9 +84,10 @@ export async function signUp(data: SignUpData): Promise<ServiceResult<any>> {
       };
     }
 
-    // Generate user number (use local fallback to avoid RLS recursion during sign-up)
-    // During sign-up, we can't query users table due to RLS, so use local generation
-    const userNumber = await (await import('./user-number.service')).getNextUserNumberFromLocal(data.role);
+    // Skip user_number generation during sign-up to avoid duplicate key conflicts
+    // The database trigger or a background job will assign user_number later
+    // This prevents race conditions where multiple users get the same number
+    const userNumber = null; // Let DB handle user_number assignment to avoid conflicts
 
     // Normalize role: 'babysitter' -> 'sitter' for database compatibility
     const dbRole = data.role === 'babysitter' ? 'sitter' : data.role;
@@ -141,7 +142,7 @@ export async function signUp(data: SignUpData): Promise<ServiceResult<any>> {
           p_display_name: data.displayName.trim(), // Always set display_name from user input
           p_role: dbRole,
           p_preferred_language: data.preferredLanguage || LANGUAGES.ENGLISH,
-          p_user_number: userNumber, // Always set user number
+          p_user_number: null, // Skip user_number during sign-up to avoid duplicate key conflicts
           p_phone_number: data.phoneNumber && data.phoneNumber.trim() ? data.phoneNumber.trim() : null,
           p_photo_url: null,
           p_theme: 'auto',
@@ -236,39 +237,39 @@ export async function signUp(data: SignUpData): Promise<ServiceResult<any>> {
             }
           } else {
             // Other error, try upsert as fallback
-            const upsertData = {
-              id: authData.user!.id,
-              email: data.email,
+          const upsertData = {
+            id: authData.user!.id,
+            email: data.email,
               display_name: data.displayName.trim(), // CRITICAL: Save display_name
-              role: dbRole,
-              preferred_language: data.preferredLanguage || LANGUAGES.ENGLISH,
-              user_number: userNumber,
-              phone_number: data.phoneNumber && data.phoneNumber.trim() ? data.phoneNumber.trim() : null,
-              photo_url: null,
-              theme: 'auto',
-              is_verified: false,
-              verification_status: null,
-              hourly_rate: null,
-              bio: null,
-              address: null,
-              city: null,
-              country: 'Sri Lanka',
-            };
-            
-            console.log('📤 Trying upsert fallback with:', {
-              ...upsertData,
-              display_name: upsertData.display_name,
-              user_number: upsertData.user_number,
-            });
-            
-            const upsertRes = await executeWrite(() => supabase
-              .from('users')
-              .upsert(upsertData, { onConflict: 'id' }), 'users_upsert');
+            role: dbRole,
+            preferred_language: data.preferredLanguage || LANGUAGES.ENGLISH,
+            user_number: null, // Skip user_number to avoid conflicts
+            phone_number: data.phoneNumber && data.phoneNumber.trim() ? data.phoneNumber.trim() : null,
+            photo_url: null,
+            theme: 'auto',
+            is_verified: false,
+            verification_status: null,
+            hourly_rate: null,
+            bio: null,
+            address: null,
+            city: null,
+            country: 'Sri Lanka',
+          };
+          
+          console.log('📤 Trying upsert fallback with:', {
+            ...upsertData,
+            display_name: upsertData.display_name,
+            user_number: upsertData.user_number,
+          });
+          
+          const upsertRes = await executeWrite(() => supabase
+            .from('users')
+            .upsert(upsertData, { onConflict: 'id' }), 'users_upsert');
 
-            const upsertError = upsertRes.error;
-            if (upsertError) {
-              console.error('❌ Upsert fallback also failed:', upsertError);
-              console.error('❌ Upsert error details:', JSON.stringify(upsertError, null, 2));
+          const upsertError = upsertRes.error;
+          if (upsertError) {
+            console.error('❌ Upsert fallback also failed:', upsertError);
+            console.error('❌ Upsert error details:', JSON.stringify(upsertError, null, 2));
               
               // Last resort: Try update if row exists (might have been created by trigger)
               if (upsertError.code === '23505' && upsertError.message?.includes('user_number')) {
@@ -290,8 +291,8 @@ export async function signUp(data: SignUpData): Promise<ServiceResult<any>> {
                   console.log('✅ Display name saved via last resort update');
                 }
               }
-            } else {
-              console.log('✅ Profile created in Supabase via upsert fallback');
+          } else {
+            console.log('✅ Profile created in Supabase via upsert fallback');
             }
           }
         } else {

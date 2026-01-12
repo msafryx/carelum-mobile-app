@@ -12,6 +12,7 @@ import {
   ActivityIndicator,
   Pressable,
   Platform,
+  RefreshControl,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/src/components/ui/ThemeProvider';
@@ -55,7 +56,7 @@ export default function SitterProfileScreen() {
     messages: true,
   });
   const [menuVisible, setMenuVisible] = useState(false);
-  const [fetchingProfile, setFetchingProfile] = useState(false);
+  // Removed fetchingProfile - profile loads in background without blocking UI
   const [saving, setSaving] = useState(false);
   const fetchingRef = useRef(false);
   const hasFetchedRef = useRef(false);
@@ -69,7 +70,7 @@ export default function SitterProfileScreen() {
     }
     
     fetchingRef.current = true;
-    setFetchingProfile(true);
+    // Profile loads in background - no UI blocking
     try {
       // Get auth user
       const { data: { user: authUser }, error: authError } = await supabase.auth.getUser();
@@ -99,7 +100,7 @@ export default function SitterProfileScreen() {
       console.error('❌ Error fetching profile:', error);
     } finally {
       fetchingRef.current = false;
-      setFetchingProfile(false);
+      // Profile loaded in background
     }
   }, [user, refreshProfile]);
 
@@ -191,16 +192,8 @@ export default function SitterProfileScreen() {
     };
   }, [user?.id, editing, refreshProfile]);
 
-  // Refresh profile when screen comes into focus
-  useFocusEffect(
-    useCallback(() => {
-      if (user?.id && !editing && !fetchingRef.current) {
-        console.log('🔄 Profile screen focused, refreshing profile...');
-        fetchProfile();
-      }
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [user?.id, editing])
-  );
+  // Removed automatic refresh on focus - user can manually refresh by pulling down
+  // Realtime updates handle background sync without UI interruption
 
   const handlePickImage = async () => {
     if (!editing) return;
@@ -226,27 +219,27 @@ export default function SitterProfileScreen() {
         try {
           // Convert to blob - handle both local file URIs and network URIs
           console.log('📸 Converting image to blob, URI:', asset.uri);
-          const response = await fetch(asset.uri);
+        const response = await fetch(asset.uri);
           
           if (!response.ok) {
             throw new Error(`Failed to fetch image: ${response.status} ${response.statusText}`);
           }
           
-          const blob = await response.blob();
+        const blob = await response.blob();
           console.log('✅ Blob created, size:', blob.size, 'bytes, type:', blob.type);
           
           if (blob.size === 0) {
             throw new Error('Image file is empty');
           }
-          
+        
           // Upload to Supabase Storage
-          const imagePath = `profileImages/${user.id}/${Date.now()}.jpg`;
+        const imagePath = `profileImages/${user.id}/${Date.now()}.jpg`;
           console.log('📤 Starting upload to:', imagePath);
-          const uploadResult = await uploadFile(imagePath, blob, 'image/jpeg', {
-            maxSize: 5 * 1024 * 1024,
-          });
+        const uploadResult = await uploadFile(imagePath, blob, 'image/jpeg', {
+          maxSize: 5 * 1024 * 1024,
+        });
 
-          if (uploadResult.success && uploadResult.data) {
+        if (uploadResult.success && uploadResult.data) {
             // Update form state immediately
             setForm(prev => ({ ...prev, profileImageUrl: uploadResult.data! }));
             Alert.alert('Success', 'Profile picture selected! Click save to update.');
@@ -268,14 +261,14 @@ export default function SitterProfileScreen() {
                 'Failed to upload image. This might be:\n\n1. Network connectivity issue\n2. Supabase Storage policies not set up\n3. CORS configuration issue\n\nPlease check your internet connection and verify Storage policies in Supabase Dashboard.',
                 [{ text: 'OK' }]
               );
-            } else {
+        } else {
               Alert.alert('Upload Error', errorMsg);
             }
           }
           setUploadingImage(false);
         } catch (fetchError: any) {
           console.error('❌ Error converting image to blob:', fetchError);
-          setUploadingImage(false);
+        setUploadingImage(false);
           Alert.alert('Error', `Failed to process image: ${fetchError.message || 'Unknown error'}`);
         }
       }
@@ -479,92 +472,105 @@ export default function SitterProfileScreen() {
         <Ionicons name="menu" size={30} color={colors.text} />
       </TouchableOpacity>
       <Header showLogo={true} title="Profile" showBack={true} />
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView 
+        contentContainerStyle={styles.content}
+        refreshControl={
+          <RefreshControl
+            refreshing={false}
+            onRefresh={async () => {
+              // Refresh profile when user pulls down
+              await fetchProfile().catch(err => console.warn('⚠️ Profile refresh failed:', err));
+            }}
+            tintColor={colors.primary}
+            colors={[colors.primary]}
+          />
+        }
+      >
         <View style={styles.profileCardWrapper}>
           <Card style={{ marginBottom: 0 }}>
-            <View style={styles.section}>
-              <TouchableOpacity
-                onPress={editing ? handlePickImage : undefined}
-                disabled={!editing || uploadingImage}
-                style={styles.avatarContainer}
-              >
-                {uploadingImage ? (
-                  <ActivityIndicator size="large" color={colors.primary} />
+          <View style={styles.section}>
+            <TouchableOpacity
+              onPress={editing ? handlePickImage : undefined}
+              disabled={!editing || uploadingImage}
+              style={styles.avatarContainer}
+            >
+              {uploadingImage ? (
+                <ActivityIndicator size="large" color={colors.primary} />
                 ) : form.profileImageUrl ? (
                   <Image source={{ uri: form.profileImageUrl }} style={styles.avatar} />
-                ) : (
-                  <Image source={require('@/assets/images/adult.webp')} style={styles.avatar} />
-                )}
-                {editing && (
-                  <View style={[styles.avatarOverlay, { backgroundColor: colors.primary + '80' }]}>
-                    <Ionicons name="camera" size={24} color="#fff" />
-                  </View>
-                )}
-              </TouchableOpacity>
-              {editing ? (
-                <>
-                  <TextInput
+              ) : (
+                <Image source={require('@/assets/images/adult.webp')} style={styles.avatar} />
+              )}
+              {editing && (
+                <View style={[styles.avatarOverlay, { backgroundColor: colors.primary + '80' }]}>
+                  <Ionicons name="camera" size={24} color="#fff" />
+                </View>
+              )}
+            </TouchableOpacity>
+            {editing ? (
+              <>
+                <TextInput
                     value={form.displayName}
                     onChangeText={(value) => setForm(prev => ({ ...prev, displayName: value }))}
-                    placeholder="Full Name"
+                  placeholder="Full Name"
                     editable={true}
-                    style={[styles.input, { backgroundColor: colors.background, color: colors.text, borderColor: colors.border }]}
-                    placeholderTextColor={colors.textSecondary}
-                  />
-                  <TextInput
+                  style={[styles.input, { backgroundColor: colors.background, color: colors.text, borderColor: colors.border }]}
+                  placeholderTextColor={colors.textSecondary}
+                />
+                <TextInput
                     value={authEmail || form.email}
                     editable={false}
                     placeholder="Email Address (cannot be changed)"
                     style={[styles.input, { backgroundColor: colors.background + '80', color: colors.textSecondary, borderColor: colors.border }]}
-                    keyboardType="email-address"
-                    autoCapitalize="none"
-                    placeholderTextColor={colors.textSecondary}
-                  />
-                  <TextInput
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                  placeholderTextColor={colors.textSecondary}
+                />
+                <TextInput
                     value={form.phoneNumber}
                     onChangeText={(value) => setForm(prev => ({ ...prev, phoneNumber: value }))}
-                    placeholder="Phone Number"
+                  placeholder="Phone Number"
                     editable={true}
-                    style={[styles.input, { backgroundColor: colors.background, color: colors.text, borderColor: colors.border }]}
-                    keyboardType="phone-pad"
-                    placeholderTextColor={colors.textSecondary}
-                  />
-                  <TextInput
+                  style={[styles.input, { backgroundColor: colors.background, color: colors.text, borderColor: colors.border }]}
+                  keyboardType="phone-pad"
+                  placeholderTextColor={colors.textSecondary}
+                />
+                <TextInput
                     value={form.address}
                     onChangeText={(value) => setForm(prev => ({ ...prev, address: value }))}
-                    placeholder="Address"
+                  placeholder="Address"
                     editable={true}
-                    style={[styles.input, { backgroundColor: colors.background, color: colors.text, borderColor: colors.border }]}
-                    placeholderTextColor={colors.textSecondary}
-                  />
-                  <TextInput
+                  style={[styles.input, { backgroundColor: colors.background, color: colors.text, borderColor: colors.border }]}
+                  placeholderTextColor={colors.textSecondary}
+                />
+                <TextInput
                     value={form.city}
                     onChangeText={(value) => setForm(prev => ({ ...prev, city: value }))}
-                    placeholder="City"
+                  placeholder="City"
                     editable={true}
-                    style={[styles.input, { backgroundColor: colors.background, color: colors.text, borderColor: colors.border }]}
-                    placeholderTextColor={colors.textSecondary}
-                  />
-                  <TextInput
+                  style={[styles.input, { backgroundColor: colors.background, color: colors.text, borderColor: colors.border }]}
+                  placeholderTextColor={colors.textSecondary}
+                />
+                <TextInput
                     value={form.country}
                     onChangeText={(value) => setForm(prev => ({ ...prev, country: value }))}
-                    placeholder="Country"
+                  placeholder="Country"
                     editable={true}
-                    style={[styles.input, { backgroundColor: colors.background, color: colors.text, borderColor: colors.border }]}
-                    placeholderTextColor={colors.textSecondary}
-                  />
-                  <TextInput
+                  style={[styles.input, { backgroundColor: colors.background, color: colors.text, borderColor: colors.border }]}
+                  placeholderTextColor={colors.textSecondary}
+                />
+                <TextInput
                     value={form.bio}
                     onChangeText={(value) => setForm(prev => ({ ...prev, bio: value }))}
-                    placeholder="Tell parents about your experience and skills..."
-                    style={[styles.input, styles.bioInput, { backgroundColor: colors.background, color: colors.text, borderColor: colors.border }]}
-                    multiline
-                    numberOfLines={4}
-                    placeholderTextColor={colors.textSecondary}
-                  />
-                </>
-              ) : (
-                <>
+                  placeholder="Tell parents about your experience and skills..."
+                  style={[styles.input, styles.bioInput, { backgroundColor: colors.background, color: colors.text, borderColor: colors.border }]}
+                  multiline
+                  numberOfLines={4}
+                  placeholderTextColor={colors.textSecondary}
+                />
+              </>
+            ) : (
+              <>
                   <Text style={[styles.name, { color: colors.text }]}>
                     {form.displayName || profile?.email?.split('@')[0] || 'No name set'}
                   </Text>
@@ -572,13 +578,13 @@ export default function SitterProfileScreen() {
                   {form.phoneNumber && <Text style={{ color: colors.textSecondary }}>{form.phoneNumber}</Text>}
                   {form.address && <Text style={{ color: colors.textSecondary }}>{form.address}</Text>}
                   {(form.city || form.country) && (
-                    <Text style={{ color: colors.textSecondary }}>
+                  <Text style={{ color: colors.textSecondary }}>
                       {[form.city, form.country].filter(Boolean).join(', ')}
-                    </Text>
-                  )}
+                  </Text>
+                )}
                   <Text style={[styles.bio, { color: colors.textSecondary }]}>{form.bio || 'No bio added yet'}</Text>
-                </>
-              )}
+              </>
+            )}
             </View>
           </Card>
           <Pressable
@@ -600,16 +606,16 @@ export default function SitterProfileScreen() {
             hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
             accessibilityLabel={editing ? "Save profile changes" : "Edit profile"}
             accessibilityRole="button"
-          >
+            >
             {saving ? (
-              <ActivityIndicator size="small" color={colors.primary} />
-            ) : (
-              <Ionicons
-                name={editing ? 'checkmark' : 'pencil'}
-                size={22}
-                color={colors.primary}
-              />
-            )}
+                <ActivityIndicator size="small" color={colors.primary} />
+              ) : (
+                <Ionicons
+                  name={editing ? 'checkmark' : 'pencil'}
+                  size={22}
+                  color={colors.primary}
+                />
+              )}
           </Pressable>
           {editing && (
             <Pressable
@@ -629,7 +635,7 @@ export default function SitterProfileScreen() {
               <Ionicons name="close" size={22} color={colors.error} />
             </Pressable>
           )}
-        </View>
+          </View>
 
         <Card>
           <Text style={[styles.sectionTitle, { color: colors.text }]}>Appearance</Text>

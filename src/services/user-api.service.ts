@@ -2,8 +2,8 @@
  * User API Service
  * Handles all user/profile API calls to the backend
  */
-import { supabase } from '@/src/config/supabase';
-import { ServiceResult } from '@/src/types/error.types';
+import { isSupabaseConfigured, supabase } from '@/src/config/supabase';
+import { ErrorCode, ServiceResult } from '@/src/types/error.types';
 import { User } from '@/src/types/user.types';
 import {
   handleAPIError,
@@ -20,6 +20,9 @@ const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:8000';
  */
 async function getAuthToken(): Promise<string | null> {
   try {
+    if (!isSupabaseConfigured() || !supabase) {
+      return null;
+    }
     const { data: { session } } = await supabase.auth.getSession();
     return session?.access_token || null;
   } catch (error) {
@@ -42,7 +45,7 @@ async function apiRequest<T>(
       return {
         success: false,
         error: {
-          code: 'UNAUTHORIZED',
+          code: ErrorCode.AUTH_ERROR,
           message: 'No authentication token available',
         },
       };
@@ -133,8 +136,22 @@ async function updateAuthMetadata(displayName?: string): Promise<void> {
   try {
     if (!displayName) return;
     
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
+    if (!isSupabaseConfigured() || !supabase) {
+      console.warn('⚠️ Supabase not configured for metadata update');
+      return;
+    }
+    
+    const { data: { user }, error: getUserError } = await supabase.auth.getUser();
+    
+    if (getUserError) {
+      console.warn('⚠️ Failed to get auth user for metadata update:', getUserError);
+      return;
+    }
+    
+    if (!user) {
+      console.warn('⚠️ No auth user found for metadata update');
+      return;
+    }
 
     // Update auth metadata to keep display_name in sync
     const { error } = await supabase.auth.updateUser({
@@ -160,42 +177,53 @@ async function updateAuthMetadata(displayName?: string): Promise<void> {
  */
 export async function ensureUserRowExists(userId: string, email: string, displayName?: string): Promise<ServiceResult<void>> {
   try {
-    // Check if user exists in users table
+    if (!isSupabaseConfigured() || !supabase) {
+      return {
+        success: false,
+        error: {
+          code: ErrorCode.DB_NOT_AVAILABLE,
+          message: 'Supabase is not configured',
+        },
+      };
+    }
+    
+    // Check if user exists in users table (use maybeSingle() to avoid errors when not found)
     const { data: existingUser, error: fetchError } = await supabase
       .from('users')
-      .select('id')
+      .select('id, display_name')
       .eq('id', userId)
-      .single();
+      .maybeSingle(); // Use maybeSingle() instead of single() to avoid errors
 
-    if (fetchError && fetchError.code !== 'PGRST116') { // PGRST116 = not found
-      console.warn('⚠️ Error checking user existence:', fetchError);
+    // Check for real errors (not "not found")
+    if (fetchError) {
+      const isNotFoundError = 
+        fetchError.code === 'PGRST116' || 
+        fetchError.code === 'PGRST301' ||
+        fetchError.message?.includes('No rows') ||
+        fetchError.message?.includes('not found');
+      
+      if (!isNotFoundError) {
+        console.warn('⚠️ Error checking user existence:', fetchError);
+        // Continue anyway - might be a transient error
+      }
     }
 
     if (existingUser) {
       // User exists - check if display_name needs updating
-      if (displayName) {
-        const { data: currentUser } = await supabase
+      if (displayName && (!existingUser.display_name || existingUser.display_name !== displayName)) {
+        console.log('📝 Updating display_name for existing user...');
+        const { error: updateError } = await supabase
           .from('users')
-          .select('display_name')
-          .eq('id', userId)
-          .single();
+          .update({
+            display_name: displayName,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', userId);
         
-        // Update display_name if it's missing or different
-        if (!currentUser?.display_name || currentUser.display_name !== displayName) {
-          console.log('📝 Updating display_name for existing user...');
-          const { error: updateError } = await supabase
-            .from('users')
-            .update({
-              display_name: displayName,
-              updated_at: new Date().toISOString(),
-            })
-            .eq('id', userId);
-          
-          if (updateError) {
-            console.warn('⚠️ Failed to update display_name:', updateError);
-          } else {
-            console.log('✅ Display name updated for existing user');
-          }
+        if (updateError) {
+          console.warn('⚠️ Failed to update display_name:', updateError);
+        } else {
+          console.log('✅ Display name updated for existing user');
         }
       }
       return { success: true };
@@ -226,12 +254,25 @@ export async function ensureUserRowExists(userId: string, email: string, display
     if (rpcError) {
       console.warn('⚠️ RPC failed, trying direct insert/update:', rpcError.message);
       
-      // Check if row exists (might have been created by trigger)
-      const { data: existingRow } = await supabase
+      // Check if row exists (might have been created by trigger) - use maybeSingle()
+      const { data: existingRow, error: checkError } = await supabase
         .from('users')
         .select('id')
         .eq('id', userId)
-        .single();
+        .maybeSingle(); // Use maybeSingle() to avoid errors
+      
+      // Check if it's a real error (not "not found")
+      if (checkError) {
+        const isNotFoundError = 
+          checkError.code === 'PGRST116' || 
+          checkError.code === 'PGRST301' ||
+          checkError.message?.includes('No rows') ||
+          checkError.message?.includes('not found');
+        
+        if (!isNotFoundError) {
+          console.warn('⚠️ Error checking if row exists after RPC failure:', checkError);
+        }
+      }
       
       if (existingRow) {
         // Row exists, just update display_name
@@ -249,7 +290,7 @@ export async function ensureUserRowExists(userId: string, email: string, display
           return {
             success: false,
             error: {
-              code: 'CREATE_USER_ERROR',
+              code: ErrorCode.DB_UPDATE_ERROR,
               message: `Failed to update user row: ${updateError.message}`,
             },
           };
@@ -269,14 +310,48 @@ export async function ensureUserRowExists(userId: string, email: string, display
             user_number: null, // Skip to avoid conflicts
             theme: 'auto',
             is_verified: false,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
           });
         
         if (insertError) {
+          // Check if it's a duplicate key error (row was created between checks)
+          const isDuplicateError = 
+            insertError.code === '23505' || // PostgreSQL unique violation
+            insertError.message?.includes('duplicate') ||
+            insertError.message?.includes('unique constraint');
+          
+          if (isDuplicateError) {
+            console.log('⚠️ Insert failed due to duplicate (row created by trigger), updating instead...');
+            // Row was created by trigger, just update display_name
+            const { error: updateError } = await supabase
+              .from('users')
+              .update({
+                display_name: displayName || email.split('@')[0],
+                email: email,
+                updated_at: new Date().toISOString(),
+              })
+              .eq('id', userId);
+            
+            if (updateError) {
+              console.error('❌ Failed to update user row after duplicate error:', updateError);
+              return {
+                success: false,
+                error: {
+                  code: ErrorCode.DB_UPDATE_ERROR,
+                  message: `Failed to update user row: ${updateError.message}`,
+                },
+              };
+            }
+            console.log('✅ User row updated after duplicate error');
+            return { success: true };
+          }
+          
           console.error('❌ Failed to insert user row:', insertError);
           return {
             success: false,
             error: {
-              code: 'CREATE_USER_ERROR',
+              code: ErrorCode.DB_INSERT_ERROR,
               message: `Failed to create user row: ${insertError.message}`,
             },
           };
@@ -293,7 +368,7 @@ export async function ensureUserRowExists(userId: string, email: string, display
     return {
       success: false,
       error: {
-        code: 'CREATE_USER_ERROR',
+        code: ErrorCode.DB_EXECUTE_ERROR,
         message: `Failed to ensure user row exists: ${error.message}`,
       },
     };
