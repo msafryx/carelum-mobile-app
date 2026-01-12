@@ -833,14 +833,246 @@ export async function getChildInstructions(
   childId: string
 ): Promise<ServiceResult<ChildInstructions | null>> {
   try {
+    // Try AsyncStorage first
+    try {
+      const { getAll, STORAGE_KEYS } = await import('./local-storage.service');
+      const result = await getAll(STORAGE_KEYS.CHILD_INSTRUCTIONS);
+      if (result.success && result.data) {
+        const childInst = (result.data as any[]).find((inst: any) => inst.childId === childId);
+        if (childInst) {
+          const instructions: ChildInstructions = {
+            ...childInst,
+            createdAt: new Date(childInst.createdAt || Date.now()),
+            updatedAt: new Date(childInst.updatedAt || Date.now()),
+            allergies: childInst.allergies ? (typeof childInst.allergies === 'string' ? JSON.parse(childInst.allergies) : childInst.allergies) : undefined,
+            medications: childInst.medications ? (typeof childInst.medications === 'string' ? JSON.parse(childInst.medications) : childInst.medications) : undefined,
+            favoriteActivities: childInst.favoriteActivities ? (typeof childInst.favoriteActivities === 'string' ? JSON.parse(childInst.favoriteActivities) : childInst.favoriteActivities) : undefined,
+            comfortItems: childInst.comfortItems ? (typeof childInst.comfortItems === 'string' ? JSON.parse(childInst.comfortItems) : childInst.comfortItems) : undefined,
+            emergencyContacts: childInst.emergencyContacts ? (typeof childInst.emergencyContacts === 'string' ? JSON.parse(childInst.emergencyContacts) : childInst.emergencyContacts) : undefined,
+            doctorInfo: childInst.doctorInfo ? (typeof childInst.doctorInfo === 'string' ? JSON.parse(childInst.doctorInfo) : childInst.doctorInfo) : undefined,
+          };
+          console.log('✅ Loaded instructions from AsyncStorage');
+          return { success: true, data: instructions };
+        }
+      }
+    } catch (localError: any) {
+      console.warn('⚠️ Failed to load from AsyncStorage, trying API:', localError.message);
+    }
+
+    // Try API, fallback to Supabase
     const result = await apiRequest<any>(API_ENDPOINTS.CHILD_INSTRUCTIONS(childId));
 
     if (!result.success) {
-      // If not found, return null instead of error
+      // If not found, try Supabase fallback
       const errorCode = result.error?.code as string;
       if (errorCode === 'CHILD_NOT_FOUND' || errorCode === 'DOCUMENT_NOT_FOUND') {
+        // Try Supabase fallback
+        if (isSupabaseConfigured() && supabase) {
+          try {
+            const { data: supabaseData, error: supabaseError } = await supabase
+              .from('child_instructions')
+              .select('*')
+              .eq('child_id', childId)
+              .maybeSingle();
+            
+            if (supabaseError) {
+              console.warn('⚠️ Supabase fetch failed:', supabaseError);
+              return { success: true, data: null };
+            }
+            
+            if (!supabaseData) {
+              return { success: true, data: null };
+            }
+            
+            // Parse JSON fields and map from DB columns to UI fields
+            // Handle both old format (medication TEXT, allergies TEXT) and new format (medications JSONB, allergies JSONB)
+            let medications: Array<{name: string; dosage: string; time: string}> | undefined;
+            if (supabaseData.medications) {
+              // New format: JSONB array
+              medications = Array.isArray(supabaseData.medications) ? supabaseData.medications : undefined;
+            } else if (supabaseData.medication) {
+              // Old format: TEXT (JSON string) - backward compatibility
+              try {
+                const parsed = typeof supabaseData.medication === 'string' ? JSON.parse(supabaseData.medication) : supabaseData.medication;
+                medications = Array.isArray(parsed) ? parsed : undefined;
+              } catch (e) {
+                // Ignore parse errors
+              }
+            }
+            
+            let allergies: string[] | undefined;
+            if (supabaseData.allergies) {
+              // New format: JSONB array or old format: TEXT (JSON string)
+              if (Array.isArray(supabaseData.allergies)) {
+                allergies = supabaseData.allergies;
+              } else if (typeof supabaseData.allergies === 'string') {
+                try {
+                  const parsed = JSON.parse(supabaseData.allergies);
+                  allergies = Array.isArray(parsed) ? parsed : undefined;
+                } catch (e) {
+                  // Ignore
+                }
+              }
+            }
+            
+            let favoriteActivities: string[] | undefined;
+            if (supabaseData.favorite_activities) {
+              favoriteActivities = Array.isArray(supabaseData.favorite_activities) 
+                ? supabaseData.favorite_activities 
+                : (typeof supabaseData.favorite_activities === 'string' ? JSON.parse(supabaseData.favorite_activities) : undefined);
+            }
+            
+            let comfortItems: string[] | undefined;
+            if (supabaseData.comfort_items) {
+              comfortItems = Array.isArray(supabaseData.comfort_items) 
+                ? supabaseData.comfort_items 
+                : (typeof supabaseData.comfort_items === 'string' ? JSON.parse(supabaseData.comfort_items) : undefined);
+            }
+            
+            let doctorInfo: {name: string; phone: string; clinic?: string} | undefined;
+            if (supabaseData.doctor_info) {
+              doctorInfo = typeof supabaseData.doctor_info === 'object' 
+                ? supabaseData.doctor_info 
+                : (typeof supabaseData.doctor_info === 'string' ? JSON.parse(supabaseData.doctor_info) : undefined);
+            }
+            
+            const instructions: ChildInstructions = {
+              id: supabaseData.id,
+              childId: supabaseData.child_id,
+              parentId: supabaseData.parent_id,
+              feedingSchedule: supabaseData.feeding_schedule,
+              napSchedule: supabaseData.nap_schedule,
+              bedtime: supabaseData.bedtime,
+              dietaryRestrictions: supabaseData.dietary_restrictions,
+              medications,
+              allergies,
+              favoriteActivities,
+              comfortItems,
+              routines: supabaseData.routines,
+              specialNeeds: supabaseData.special_needs,
+              emergencyContacts: supabaseData.emergency_contacts ? (typeof supabaseData.emergency_contacts === 'string' ? JSON.parse(supabaseData.emergency_contacts) : supabaseData.emergency_contacts) : undefined,
+              doctorInfo,
+              additionalNotes: supabaseData.additional_notes || supabaseData.special_instructions || undefined,
+              createdAt: new Date(supabaseData.created_at),
+              updatedAt: new Date(supabaseData.updated_at),
+            };
+            
+            // Save to AsyncStorage
+            try {
+              const { save, STORAGE_KEYS } = await import('./local-storage.service');
+              await save(STORAGE_KEYS.CHILD_INSTRUCTIONS, {
+                ...instructions,
+                createdAt: instructions.createdAt.getTime(),
+                updatedAt: instructions.updatedAt.getTime(),
+              });
+            } catch (storageError) {
+              console.warn('⚠️ Failed to save to AsyncStorage:', storageError);
+            }
+            
+            console.log('✅ Loaded instructions from Supabase (fallback)');
+            return { success: true, data: instructions };
+          } catch (supabaseError: any) {
+            console.warn('⚠️ Supabase fallback failed:', supabaseError);
+            return { success: true, data: null };
+          }
+        }
         return { success: true, data: null };
       }
+      
+      // Try Supabase fallback for other errors
+      if (isSupabaseConfigured() && supabase) {
+        try {
+          const { data: supabaseData, error: supabaseError } = await supabase
+            .from('child_instructions')
+            .select('*')
+            .eq('child_id', childId)
+            .maybeSingle();
+          
+          if (supabaseError) {
+            return { success: true, data: null };
+          }
+          
+          if (!supabaseData) {
+            return { success: true, data: null };
+          }
+          
+          // Parse JSON fields and map from DB columns to UI fields (handle both old and new formats)
+          let medications: Array<{name: string; dosage: string; time: string}> | undefined;
+          if (supabaseData.medications) {
+            medications = Array.isArray(supabaseData.medications) ? supabaseData.medications : undefined;
+          } else if (supabaseData.medication) {
+            // Old format fallback
+            try {
+              const parsed = typeof supabaseData.medication === 'string' ? JSON.parse(supabaseData.medication) : supabaseData.medication;
+              medications = Array.isArray(parsed) ? parsed : undefined;
+            } catch (e) {
+              // Ignore
+            }
+          }
+          
+          let allergies: string[] | undefined;
+          if (supabaseData.allergies) {
+            if (Array.isArray(supabaseData.allergies)) {
+              allergies = supabaseData.allergies;
+            } else if (typeof supabaseData.allergies === 'string') {
+              try {
+                const parsed = JSON.parse(supabaseData.allergies);
+                allergies = Array.isArray(parsed) ? parsed : undefined;
+              } catch (e) {
+                // Ignore
+              }
+            }
+          }
+          
+          let favoriteActivities: string[] | undefined;
+          if (supabaseData.favorite_activities) {
+            favoriteActivities = Array.isArray(supabaseData.favorite_activities) 
+              ? supabaseData.favorite_activities 
+              : (typeof supabaseData.favorite_activities === 'string' ? JSON.parse(supabaseData.favorite_activities) : undefined);
+          }
+          
+          let comfortItems: string[] | undefined;
+          if (supabaseData.comfort_items) {
+            comfortItems = Array.isArray(supabaseData.comfort_items) 
+              ? supabaseData.comfort_items 
+              : (typeof supabaseData.comfort_items === 'string' ? JSON.parse(supabaseData.comfort_items) : undefined);
+          }
+          
+          let doctorInfo: {name: string; phone: string; clinic?: string} | undefined;
+          if (supabaseData.doctor_info) {
+            doctorInfo = typeof supabaseData.doctor_info === 'object' 
+              ? supabaseData.doctor_info 
+              : (typeof supabaseData.doctor_info === 'string' ? JSON.parse(supabaseData.doctor_info) : undefined);
+          }
+          
+          const instructions: ChildInstructions = {
+            id: supabaseData.id,
+            childId: supabaseData.child_id,
+            parentId: supabaseData.parent_id,
+            feedingSchedule: supabaseData.feeding_schedule,
+            napSchedule: supabaseData.nap_schedule,
+            bedtime: supabaseData.bedtime,
+            dietaryRestrictions: supabaseData.dietary_restrictions,
+            medications,
+            allergies,
+            favoriteActivities,
+            comfortItems,
+            routines: supabaseData.routines,
+            specialNeeds: supabaseData.special_needs,
+            emergencyContacts: supabaseData.emergency_contacts ? (typeof supabaseData.emergency_contacts === 'string' ? JSON.parse(supabaseData.emergency_contacts) : supabaseData.emergency_contacts) : undefined,
+            doctorInfo,
+            additionalNotes: supabaseData.additional_notes || supabaseData.special_instructions || undefined,
+            createdAt: new Date(supabaseData.created_at),
+            updatedAt: new Date(supabaseData.updated_at),
+          };
+          
+          console.log('✅ Loaded instructions from Supabase (API fallback)');
+          return { success: true, data: instructions };
+        } catch (supabaseError: any) {
+          return { success: true, data: null };
+        }
+      }
+      
       return result;
     }
 
@@ -851,29 +1083,231 @@ export async function getChildInstructions(
       return { success: true, data: null };
     }
 
-    // Parse JSON fields if needed
+    // Parse JSON fields and map from API response to UI fields
+    // API returns: feedingSchedule, napSchedule, medication (string), allergies (string), emergencyContacts (dict), specialInstructions (string)
+    let medications: Array<{name: string; dosage: string; time: string}> | undefined;
+    try {
+      if (apiData.medication) {
+        const parsed = typeof apiData.medication === 'string' ? JSON.parse(apiData.medication) : apiData.medication;
+        medications = Array.isArray(parsed) ? parsed : undefined;
+      }
+    } catch (e) {
+      // If parsing fails, medication might be plain text - ignore
+    }
+    
+    let allergies: string[] | undefined;
+    try {
+      if (apiData.allergies) {
+        const parsed = typeof apiData.allergies === 'string' ? JSON.parse(apiData.allergies) : apiData.allergies;
+        allergies = Array.isArray(parsed) ? parsed : undefined;
+      }
+    } catch (e) {
+      // If parsing fails, allergies might be plain text - ignore
+    }
+    
     const instructions: ChildInstructions = {
       id: apiData.id,
       childId: apiData.childId,
       parentId: apiData.parentId,
       feedingSchedule: apiData.feedingSchedule,
       napSchedule: apiData.napSchedule,
-      bedtime: apiData.bedtime,
-      dietaryRestrictions: apiData.dietaryRestrictions,
-      allergies: apiData.allergies ? (typeof apiData.allergies === 'string' ? JSON.parse(apiData.allergies) : apiData.allergies) : [],
-      medications: apiData.medications ? (typeof apiData.medications === 'string' ? JSON.parse(apiData.medications) : apiData.medications) : [],
-      favoriteActivities: apiData.favoriteActivities ? (typeof apiData.favoriteActivities === 'string' ? JSON.parse(apiData.favoriteActivities) : apiData.favoriteActivities) : [],
-      comfortItems: apiData.comfortItems ? (typeof apiData.comfortItems === 'string' ? JSON.parse(apiData.comfortItems) : apiData.comfortItems) : [],
-      routines: apiData.routines,
-      specialNeeds: apiData.specialNeeds,
-      emergencyContacts: apiData.emergencyContacts ? (typeof apiData.emergencyContacts === 'string' ? JSON.parse(apiData.emergencyContacts) : apiData.emergencyContacts) : [],
-      doctorInfo: apiData.doctorInfo ? (typeof apiData.doctorInfo === 'string' ? JSON.parse(apiData.doctorInfo) : apiData.doctorInfo) : null,
-      additionalNotes: apiData.additionalNotes,
+      medications,
+      allergies,
+      emergencyContacts: apiData.emergencyContacts ? (typeof apiData.emergencyContacts === 'string' ? JSON.parse(apiData.emergencyContacts) : apiData.emergencyContacts) : undefined,
+      additionalNotes: apiData.specialInstructions || undefined,
       createdAt: new Date(apiData.createdAt),
       updatedAt: new Date(apiData.updatedAt),
     };
 
+    // Save to AsyncStorage
+    try {
+      const { save, STORAGE_KEYS } = await import('./local-storage.service');
+      await save(STORAGE_KEYS.CHILD_INSTRUCTIONS, {
+        ...instructions,
+        createdAt: instructions.createdAt.getTime(),
+        updatedAt: instructions.updatedAt.getTime(),
+      });
+    } catch (storageError) {
+      console.warn('⚠️ Failed to save to AsyncStorage:', storageError);
+    }
+
     return { success: true, data: instructions };
+  } catch (error: any) {
+    return {
+      success: false,
+      error: handleUnexpectedError(error),
+    };
+  }
+}
+
+/**
+ * Get all child instructions for a parent
+ */
+export async function getParentInstructions(
+  parentId: string
+): Promise<ServiceResult<Record<string, ChildInstructions>>> {
+  try {
+    // Try AsyncStorage first
+    try {
+      const { getAll, STORAGE_KEYS } = await import('./local-storage.service');
+      const result = await getAll(STORAGE_KEYS.CHILD_INSTRUCTIONS);
+      if (result.success && result.data) {
+        const parentInsts = (result.data as any[]).filter((inst: any) => inst.parentId === parentId);
+        if (parentInsts.length > 0) {
+          const instructionsMap: Record<string, ChildInstructions> = {};
+          for (const inst of parentInsts) {
+            instructionsMap[inst.childId] = {
+              ...inst,
+              createdAt: new Date(inst.createdAt || Date.now()),
+              updatedAt: new Date(inst.updatedAt || Date.now()),
+              allergies: inst.allergies ? (typeof inst.allergies === 'string' ? JSON.parse(inst.allergies) : inst.allergies) : undefined,
+              medications: inst.medications ? (typeof inst.medications === 'string' ? JSON.parse(inst.medications) : inst.medications) : undefined,
+              favoriteActivities: inst.favoriteActivities ? (typeof inst.favoriteActivities === 'string' ? JSON.parse(inst.favoriteActivities) : inst.favoriteActivities) : undefined,
+              comfortItems: inst.comfortItems ? (typeof inst.comfortItems === 'string' ? JSON.parse(inst.comfortItems) : inst.comfortItems) : undefined,
+              emergencyContacts: inst.emergencyContacts ? (typeof inst.emergencyContacts === 'string' ? JSON.parse(inst.emergencyContacts) : inst.emergencyContacts) : undefined,
+              doctorInfo: inst.doctorInfo ? (typeof inst.doctorInfo === 'string' ? JSON.parse(inst.doctorInfo) : inst.doctorInfo) : undefined,
+            };
+          }
+          console.log(`✅ Loaded ${Object.keys(instructionsMap).length} instructions from AsyncStorage`);
+          return { success: true, data: instructionsMap };
+        }
+      }
+    } catch (localError: any) {
+      console.warn('⚠️ Failed to load from AsyncStorage, trying Supabase:', localError.message);
+    }
+
+    // Try Supabase directly
+    if (isSupabaseConfigured() && supabase) {
+      try {
+        const { data: instructionsData, error: supabaseError } = await supabase
+          .from('child_instructions')
+          .select('*')
+          .eq('parent_id', parentId);
+
+        if (supabaseError) {
+          console.error('❌ Supabase fetch failed:', supabaseError);
+          return {
+            success: false,
+            error: {
+              code: ErrorCode.DB_SELECT_ERROR,
+              message: `Failed to fetch instructions: ${supabaseError.message}`,
+            },
+          };
+        }
+
+        const instructionsMap: Record<string, ChildInstructions> = {};
+        for (const inst of instructionsData || []) {
+          // Parse JSONB fields (handle both old TEXT and new JSONB formats)
+          let medications: Array<{name: string; dosage: string; time: string}> | undefined;
+          if (inst.medications) {
+            if (Array.isArray(inst.medications)) {
+              medications = inst.medications;
+            } else if (typeof inst.medications === 'string') {
+              try {
+                const parsed = JSON.parse(inst.medications);
+                medications = Array.isArray(parsed) ? parsed : undefined;
+              } catch (e) {
+                // Ignore parse errors
+              }
+            }
+          } else if (inst.medication) {
+            // Old format fallback
+            try {
+              const parsed = typeof inst.medication === 'string' ? JSON.parse(inst.medication) : inst.medication;
+              medications = Array.isArray(parsed) ? parsed : undefined;
+            } catch (e) {
+              // Ignore
+            }
+          }
+          
+          let allergies: string[] | undefined;
+          if (inst.allergies) {
+            if (Array.isArray(inst.allergies)) {
+              allergies = inst.allergies;
+            } else if (typeof inst.allergies === 'string') {
+              try {
+                const parsed = JSON.parse(inst.allergies);
+                allergies = Array.isArray(parsed) ? parsed : undefined;
+              } catch (e) {
+                // Ignore
+              }
+            }
+          }
+          
+          let favoriteActivities: string[] | undefined;
+          if (inst.favorite_activities) {
+            favoriteActivities = Array.isArray(inst.favorite_activities) 
+              ? inst.favorite_activities 
+              : (typeof inst.favorite_activities === 'string' ? JSON.parse(inst.favorite_activities) : undefined);
+          }
+          
+          let comfortItems: string[] | undefined;
+          if (inst.comfort_items) {
+            comfortItems = Array.isArray(inst.comfort_items) 
+              ? inst.comfort_items 
+              : (typeof inst.comfort_items === 'string' ? JSON.parse(inst.comfort_items) : undefined);
+          }
+          
+          let doctorInfo: {name: string; phone: string; clinic?: string} | undefined;
+          if (inst.doctor_info) {
+            doctorInfo = typeof inst.doctor_info === 'object' 
+              ? inst.doctor_info 
+              : (typeof inst.doctor_info === 'string' ? JSON.parse(inst.doctor_info) : undefined);
+          }
+          
+          instructionsMap[inst.child_id] = {
+            id: inst.id,
+            childId: inst.child_id,
+            parentId: inst.parent_id,
+            feedingSchedule: inst.feeding_schedule,
+            napSchedule: inst.nap_schedule,
+            bedtime: inst.bedtime,
+            dietaryRestrictions: inst.dietary_restrictions,
+            medications,
+            allergies,
+            favoriteActivities,
+            comfortItems,
+            routines: inst.routines,
+            specialNeeds: inst.special_needs,
+            emergencyContacts: inst.emergency_contacts ? (typeof inst.emergency_contacts === 'string' ? JSON.parse(inst.emergency_contacts) : inst.emergency_contacts) : undefined,
+            doctorInfo,
+            additionalNotes: inst.additional_notes || inst.special_instructions || undefined,
+            createdAt: new Date(inst.created_at),
+            updatedAt: new Date(inst.updated_at),
+          };
+        }
+
+        // Save to AsyncStorage
+        try {
+          const { save, STORAGE_KEYS } = await import('./local-storage.service');
+          for (const inst of Object.values(instructionsMap)) {
+            await save(STORAGE_KEYS.CHILD_INSTRUCTIONS, {
+              ...inst,
+              createdAt: inst.createdAt.getTime(),
+              updatedAt: inst.updatedAt.getTime(),
+            });
+          }
+        } catch (storageError) {
+          console.warn('⚠️ Failed to save to AsyncStorage:', storageError);
+        }
+
+        console.log(`✅ Loaded ${Object.keys(instructionsMap).length} instructions from Supabase`);
+        return { success: true, data: instructionsMap };
+      } catch (error: any) {
+        return {
+          success: false,
+          error: handleUnexpectedError(error),
+        };
+      }
+    }
+
+    return {
+      success: false,
+      error: {
+        code: ErrorCode.DB_NOT_AVAILABLE,
+        message: 'Supabase is not configured',
+      },
+    };
   } catch (error: any) {
     return {
       success: false,
@@ -922,7 +1356,10 @@ export async function saveChildInstructions(
       createdAt: instructions.id ? instructions.createdAt : new Date(),
     };
 
-    // Prepare Supabase data
+    // Prepare Supabase data - map to actual DB columns
+    // DB now has all columns: feeding_schedule, nap_schedule, bedtime, dietary_restrictions,
+    // medications (JSONB), allergies (JSONB), favorite_activities (JSONB), comfort_items (JSONB),
+    // routines, special_needs, emergency_contacts (JSONB), doctor_info (JSONB), additional_notes
     const supabaseData: any = {
       child_id: instructionsData.childId,
       parent_id: instructionsData.parentId,
@@ -930,15 +1367,31 @@ export async function saveChildInstructions(
       nap_schedule: instructionsData.napSchedule || null,
       bedtime: instructionsData.bedtime || null,
       dietary_restrictions: instructionsData.dietaryRestrictions || null,
-      allergies: instructionsData.allergies ? JSON.stringify(instructionsData.allergies) : null,
-      medications: instructionsData.medications ? JSON.stringify(instructionsData.medications) : null,
-      favorite_activities: instructionsData.favoriteActivities ? JSON.stringify(instructionsData.favoriteActivities) : null,
-      comfort_items: instructionsData.comfortItems ? JSON.stringify(instructionsData.comfortItems) : null,
+      // Map medications array to medications JSONB
+      medications: instructionsData.medications && instructionsData.medications.length > 0
+        ? instructionsData.medications
+        : null,
+      // Map allergies array to allergies JSONB
+      allergies: instructionsData.allergies && instructionsData.allergies.length > 0
+        ? instructionsData.allergies
+        : null,
+      // Map favoriteActivities array to favorite_activities JSONB
+      favorite_activities: instructionsData.favoriteActivities && instructionsData.favoriteActivities.length > 0
+        ? instructionsData.favoriteActivities
+        : null,
+      // Map comfortItems array to comfort_items JSONB
+      comfort_items: instructionsData.comfortItems && instructionsData.comfortItems.length > 0
+        ? instructionsData.comfortItems
+        : null,
       routines: instructionsData.routines || null,
       special_needs: instructionsData.specialNeeds || null,
-      emergency_contacts: instructionsData.emergencyContacts ? JSON.stringify(instructionsData.emergencyContacts) : null,
-      doctor_info: instructionsData.doctorInfo ? JSON.stringify(instructionsData.doctorInfo) : null,
+      // Map emergencyContacts to emergency_contacts JSONB
+      emergency_contacts: instructionsData.emergencyContacts || null,
+      // Map doctorInfo to doctor_info JSONB
+      doctor_info: instructionsData.doctorInfo || null,
       additional_notes: instructionsData.additionalNotes || null,
+      // Keep special_instructions for backward compatibility (can be removed later)
+      special_instructions: instructionsData.specialNeeds || instructionsData.additionalNotes || null,
     };
 
     // FAST & RELIABLE: Save to AsyncStorage first, then sync to Supabase with timeout
@@ -977,133 +1430,366 @@ export async function saveChildInstructions(
       console.warn('⚠️ Failed to save to AsyncStorage:', storageError);
     }
 
-    // Sync to Supabase in background (fire and forget - instant return)
-    if (instructions.id) {
-      // Update existing - sync in background
-      (async () => {
-        try {
-          console.log('💾 Background update instructions in API:', instructions.id);
-          
-          const apiData: any = {};
-          if (supabaseData.feeding_schedule !== undefined) apiData.feedingSchedule = supabaseData.feeding_schedule;
-          if (supabaseData.nap_schedule !== undefined) apiData.napSchedule = supabaseData.nap_schedule;
-          if (supabaseData.medication !== undefined) apiData.medication = supabaseData.medication;
-          if (supabaseData.allergies !== undefined) apiData.allergies = supabaseData.allergies;
-          if (supabaseData.emergency_contacts !== undefined) apiData.emergencyContacts = supabaseData.emergency_contacts;
-          if (supabaseData.special_instructions !== undefined) apiData.specialInstructions = supabaseData.special_instructions;
-          
-          const result = await apiRequest<any>(API_ENDPOINTS.CHILD_INSTRUCTIONS(instructions.childId), {
-            method: 'PUT',
-            body: JSON.stringify(apiData),
-          });
+    // Try API first, fallback to direct Supabase if API fails
+    const isUpdate = !!instructions.id && !instructions.id.startsWith('temp_');
+    
+    try {
+      if (isUpdate) {
+        console.log('💾 Updating instructions in API...');
+      } else {
+        console.log('💾 Creating instructions in API...');
+      }
+      
+      // Prepare API data - API expects same fields as DB (updated with new columns)
+      const apiData: any = {
+        feedingSchedule: supabaseData.feeding_schedule,
+        napSchedule: supabaseData.nap_schedule,
+        bedtime: supabaseData.bedtime,
+        dietaryRestrictions: supabaseData.dietary_restrictions,
+        medications: supabaseData.medications,
+        allergies: supabaseData.allergies,
+        favoriteActivities: supabaseData.favorite_activities,
+        comfortItems: supabaseData.comfort_items,
+        routines: supabaseData.routines,
+        specialNeeds: supabaseData.special_needs,
+        emergencyContacts: supabaseData.emergency_contacts,
+        doctorInfo: supabaseData.doctor_info,
+        additionalNotes: supabaseData.additional_notes,
+        // Keep for backward compatibility
+        specialInstructions: supabaseData.special_instructions,
+      };
+      
+      const result = await apiRequest<any>(API_ENDPOINTS.CHILD_INSTRUCTIONS(instructions.childId), {
+        method: 'PUT',
+        body: JSON.stringify(apiData),
+      });
 
-          if (result.success && result.data) {
-            const apiData = result.data;
-            const updatedInstructions = {
-              id: apiData.id,
-              childId: apiData.childId,
-              parentId: apiData.parentId,
-              feedingSchedule: apiData.feedingSchedule,
-              napSchedule: apiData.napSchedule,
-              bedtime: apiData.bedtime,
-              dietaryRestrictions: apiData.dietaryRestrictions,
-              allergies: apiData.allergies ? (typeof apiData.allergies === 'string' ? JSON.parse(apiData.allergies) : apiData.allergies) : [],
-              medications: apiData.medications ? (typeof apiData.medications === 'string' ? JSON.parse(apiData.medications) : apiData.medications) : [],
-              favoriteActivities: apiData.favoriteActivities ? (typeof apiData.favoriteActivities === 'string' ? JSON.parse(apiData.favoriteActivities) : apiData.favoriteActivities) : [],
-              comfortItems: apiData.comfortItems ? (typeof apiData.comfortItems === 'string' ? JSON.parse(apiData.comfortItems) : apiData.comfortItems) : [],
-              routines: apiData.routines,
-              specialNeeds: apiData.specialNeeds,
-              emergencyContacts: apiData.emergencyContacts ? (typeof apiData.emergencyContacts === 'string' ? JSON.parse(apiData.emergencyContacts) : apiData.emergencyContacts) : [],
-              doctorInfo: apiData.doctorInfo ? (typeof apiData.doctorInfo === 'string' ? JSON.parse(apiData.doctorInfo) : apiData.doctorInfo) : null,
-              additionalNotes: apiData.additionalNotes,
-              createdAt: new Date(apiData.createdAt),
-              updatedAt: new Date(apiData.updatedAt),
-            };
-            console.log('✅ Instructions updated in API:', updatedInstructions.id);
+      if (!result.success) {
+        console.warn('⚠️ API save failed, trying direct Supabase save...');
+        
+        // Fallback to direct Supabase save - always use upsert to handle both insert and update
+        if (isSupabaseConfigured() && supabase) {
+          try {
+            // Use upsert to handle both insert and update cases based on unique constraint
+            const { data: upsertData, error: upsertError } = await supabase
+              .from('child_instructions')
+              .upsert(supabaseData, {
+                onConflict: 'child_id,parent_id',
+                ignoreDuplicates: false
+              })
+              .select()
+              .single();
             
-            // Update AsyncStorage with latest data
-            try {
-              const { save, STORAGE_KEYS } = await import('./local-storage.service');
-              await save(STORAGE_KEYS.CHILD_INSTRUCTIONS, {
-                ...updatedInstructions,
-                createdAt: updatedInstructions.createdAt.getTime(),
-                updatedAt: updatedInstructions.updatedAt.getTime(),
-              });
-            } catch (updateError) {
-              console.warn('⚠️ Failed to update AsyncStorage:', updateError);
+            if (upsertError) {
+              throw upsertError;
             }
-          } else {
-            console.warn('⚠️ Background API update failed:', result.error?.message);
-          }
-        } catch (error: any) {
-          console.warn('⚠️ Background API update error:', error.message);
-        }
-      })(); // IIFE - runs in background, doesn't block
-    } else {
-      // Create new - sync in background
-      (async () => {
-        try {
-          console.log('💾 Background create instructions in API...');
-          
-          const apiData: any = {};
-          if (supabaseData.feeding_schedule !== undefined) apiData.feedingSchedule = supabaseData.feeding_schedule;
-          if (supabaseData.nap_schedule !== undefined) apiData.napSchedule = supabaseData.nap_schedule;
-          if (supabaseData.medication !== undefined) apiData.medication = supabaseData.medication;
-          if (supabaseData.allergies !== undefined) apiData.allergies = supabaseData.allergies;
-          if (supabaseData.emergency_contacts !== undefined) apiData.emergencyContacts = supabaseData.emergency_contacts;
-          if (supabaseData.special_instructions !== undefined) apiData.specialInstructions = supabaseData.special_instructions;
-          
-          const result = await apiRequest<any>(API_ENDPOINTS.CHILD_INSTRUCTIONS(instructions.childId), {
-            method: 'PUT',
-            body: JSON.stringify(apiData),
-          });
-
-          if (result.success && result.data) {
-            const apiData = result.data;
-            const createdInstructions = {
-              id: apiData.id,
-              childId: apiData.childId,
-              parentId: apiData.parentId,
-              feedingSchedule: apiData.feedingSchedule,
-              napSchedule: apiData.napSchedule,
-              bedtime: apiData.bedtime,
-              dietaryRestrictions: apiData.dietaryRestrictions,
-              allergies: apiData.allergies ? (typeof apiData.allergies === 'string' ? JSON.parse(apiData.allergies) : apiData.allergies) : [],
-              medications: apiData.medications ? (typeof apiData.medications === 'string' ? JSON.parse(apiData.medications) : apiData.medications) : [],
-              favoriteActivities: apiData.favoriteActivities ? (typeof apiData.favoriteActivities === 'string' ? JSON.parse(apiData.favoriteActivities) : apiData.favoriteActivities) : [],
-              comfortItems: apiData.comfortItems ? (typeof apiData.comfortItems === 'string' ? JSON.parse(apiData.comfortItems) : apiData.comfortItems) : [],
-              routines: apiData.routines,
-              specialNeeds: apiData.specialNeeds,
-              emergencyContacts: apiData.emergencyContacts ? (typeof apiData.emergencyContacts === 'string' ? JSON.parse(apiData.emergencyContacts) : apiData.emergencyContacts) : [],
-              doctorInfo: apiData.doctorInfo ? (typeof apiData.doctorInfo === 'string' ? JSON.parse(apiData.doctorInfo) : apiData.doctorInfo) : null,
-              additionalNotes: apiData.additionalNotes,
-              createdAt: new Date(apiData.createdAt),
-              updatedAt: new Date(apiData.updatedAt),
-            };
-            console.log('✅ Instructions created/updated in API:', createdInstructions.id);
             
-            // Update AsyncStorage with real ID (replace temp ID)
+            if (upsertData) {
+              // Parse JSON fields and map from DB columns to UI fields (handle both old and new formats)
+              let medications: Array<{name: string; dosage: string; time: string}> | undefined;
+              if (upsertData.medications) {
+                medications = Array.isArray(upsertData.medications) ? upsertData.medications : undefined;
+              } else if (upsertData.medication) {
+                try {
+                  const parsed = typeof upsertData.medication === 'string' ? JSON.parse(upsertData.medication) : upsertData.medication;
+                  medications = Array.isArray(parsed) ? parsed : undefined;
+                } catch (e) {
+                  // Ignore
+                }
+              }
+              
+              let allergies: string[] | undefined;
+              if (upsertData.allergies) {
+                allergies = Array.isArray(upsertData.allergies) 
+                  ? upsertData.allergies 
+                  : (typeof upsertData.allergies === 'string' ? JSON.parse(upsertData.allergies) : undefined);
+              }
+              
+              let favoriteActivities: string[] | undefined;
+              if (upsertData.favorite_activities) {
+                favoriteActivities = Array.isArray(upsertData.favorite_activities) 
+                  ? upsertData.favorite_activities 
+                  : (typeof upsertData.favorite_activities === 'string' ? JSON.parse(upsertData.favorite_activities) : undefined);
+              }
+              
+              let comfortItems: string[] | undefined;
+              if (upsertData.comfort_items) {
+                comfortItems = Array.isArray(upsertData.comfort_items) 
+                  ? upsertData.comfort_items 
+                  : (typeof upsertData.comfort_items === 'string' ? JSON.parse(upsertData.comfort_items) : undefined);
+              }
+              
+              let doctorInfo: {name: string; phone: string; clinic?: string} | undefined;
+              if (upsertData.doctor_info) {
+                doctorInfo = typeof upsertData.doctor_info === 'object' 
+                  ? upsertData.doctor_info 
+                  : (typeof upsertData.doctor_info === 'string' ? JSON.parse(upsertData.doctor_info) : undefined);
+              }
+              
+              const savedInstructions: ChildInstructions = {
+                id: upsertData.id,
+                childId: upsertData.child_id,
+                parentId: upsertData.parent_id,
+                feedingSchedule: upsertData.feeding_schedule,
+                napSchedule: upsertData.nap_schedule,
+                bedtime: upsertData.bedtime,
+                dietaryRestrictions: upsertData.dietary_restrictions,
+                medications,
+                allergies,
+                favoriteActivities,
+                comfortItems,
+                routines: upsertData.routines,
+                specialNeeds: upsertData.special_needs,
+                emergencyContacts: upsertData.emergency_contacts ? (typeof upsertData.emergency_contacts === 'string' ? JSON.parse(upsertData.emergency_contacts) : upsertData.emergency_contacts) : undefined,
+                doctorInfo,
+                additionalNotes: upsertData.additional_notes || upsertData.special_instructions || undefined,
+                createdAt: new Date(upsertData.created_at),
+                updatedAt: new Date(upsertData.updated_at),
+              };
+              
+              // Update AsyncStorage with real data
+              try {
+                const { save, remove, STORAGE_KEYS } = await import('./local-storage.service');
+                if (!isUpdate) {
+                  await remove(STORAGE_KEYS.CHILD_INSTRUCTIONS, tempId);
+                }
+                await save(STORAGE_KEYS.CHILD_INSTRUCTIONS, {
+                  ...savedInstructions,
+                  createdAt: savedInstructions.createdAt.getTime(),
+                  updatedAt: savedInstructions.updatedAt.getTime(),
+                });
+              } catch (storageError) {
+                console.warn('⚠️ Failed to update AsyncStorage:', storageError);
+              }
+              
+              console.log('✅ Instructions saved in Supabase (direct fallback)');
+              return { success: true, data: savedInstructions };
+            }
+          } catch (supabaseError: any) {
+            console.error('❌ Direct Supabase save failed:', supabaseError);
+            return {
+              success: false,
+              error: {
+                code: ErrorCode.DB_INSERT_ERROR,
+                message: `Failed to save instructions: ${supabaseError.message}`,
+              },
+            };
+          }
+        } else {
+          return {
+            success: false,
+            error: {
+              code: ErrorCode.DB_NOT_AVAILABLE,
+              message: 'API save failed and Supabase is not configured',
+            },
+          };
+        }
+      }
+      
+      // API succeeded - parse response and map to UI fields
+      if (result.success && result.data) {
+        const apiData = result.data;
+        
+        // Parse all fields (handle both old and new API formats)
+        let medications: Array<{name: string; dosage: string; time: string}> | undefined;
+        if (apiData.medications) {
+          medications = Array.isArray(apiData.medications) ? apiData.medications : undefined;
+        } else if (apiData.medication) {
+          try {
+            const parsed = typeof apiData.medication === 'string' ? JSON.parse(apiData.medication) : apiData.medication;
+            medications = Array.isArray(parsed) ? parsed : undefined;
+          } catch (e) {
+            // Ignore
+          }
+        }
+        
+        let allergies: string[] | undefined;
+        if (apiData.allergies) {
+          allergies = Array.isArray(apiData.allergies) 
+            ? apiData.allergies 
+            : (typeof apiData.allergies === 'string' ? JSON.parse(apiData.allergies) : undefined);
+        }
+        
+        let favoriteActivities: string[] | undefined;
+        if (apiData.favoriteActivities) {
+          favoriteActivities = Array.isArray(apiData.favoriteActivities) 
+            ? apiData.favoriteActivities 
+            : (typeof apiData.favoriteActivities === 'string' ? JSON.parse(apiData.favoriteActivities) : undefined);
+        }
+        
+        let comfortItems: string[] | undefined;
+        if (apiData.comfortItems) {
+          comfortItems = Array.isArray(apiData.comfortItems) 
+            ? apiData.comfortItems 
+            : (typeof apiData.comfortItems === 'string' ? JSON.parse(apiData.comfortItems) : undefined);
+        }
+        
+        let doctorInfo: {name: string; phone: string; clinic?: string} | undefined;
+        if (apiData.doctorInfo) {
+          doctorInfo = typeof apiData.doctorInfo === 'object' 
+            ? apiData.doctorInfo 
+            : (typeof apiData.doctorInfo === 'string' ? JSON.parse(apiData.doctorInfo) : undefined);
+        }
+        
+        const savedInstructions: ChildInstructions = {
+          id: apiData.id,
+          childId: apiData.childId,
+          parentId: apiData.parentId,
+          feedingSchedule: apiData.feedingSchedule,
+          napSchedule: apiData.napSchedule,
+          bedtime: apiData.bedtime,
+          dietaryRestrictions: apiData.dietaryRestrictions,
+          medications,
+          allergies,
+          favoriteActivities,
+          comfortItems,
+          routines: apiData.routines,
+          specialNeeds: apiData.specialNeeds,
+          emergencyContacts: apiData.emergencyContacts ? (typeof apiData.emergencyContacts === 'string' ? JSON.parse(apiData.emergencyContacts) : apiData.emergencyContacts) : undefined,
+          doctorInfo,
+          additionalNotes: apiData.additionalNotes || apiData.specialInstructions || undefined,
+          createdAt: new Date(apiData.createdAt),
+          updatedAt: new Date(apiData.updatedAt),
+        };
+        
+        // Update AsyncStorage with real data
+        try {
+          const { save, remove, STORAGE_KEYS } = await import('./local-storage.service');
+          if (!isUpdate) {
+            await remove(STORAGE_KEYS.CHILD_INSTRUCTIONS, tempId);
+          }
+          await save(STORAGE_KEYS.CHILD_INSTRUCTIONS, {
+            ...savedInstructions,
+            createdAt: savedInstructions.createdAt.getTime(),
+            updatedAt: savedInstructions.updatedAt.getTime(),
+          });
+        } catch (storageError) {
+          console.warn('⚠️ Failed to update AsyncStorage:', storageError);
+        }
+        
+        console.log('✅ Instructions saved to API');
+        return { success: true, data: savedInstructions };
+      }
+    } catch (error: any) {
+      console.error('❌ Save instructions error:', error);
+      
+      // Try Supabase fallback even on exception - use upsert to handle both insert and update
+      if (isSupabaseConfigured() && supabase) {
+        try {
+          // Always use upsert to handle both insert and update cases
+          const { data: upsertData, error: upsertError } = await supabase
+            .from('child_instructions')
+            .upsert(supabaseData, {
+              onConflict: 'child_id,parent_id',
+              ignoreDuplicates: false
+            })
+            .select()
+            .single();
+          
+          if (upsertError) throw upsertError;
+          
+          if (upsertData) {
+            // Parse JSON fields and map from DB columns to UI fields (handle both old and new formats)
+            let medications: Array<{name: string; dosage: string; time: string}> | undefined;
+            if (upsertData.medications) {
+              medications = Array.isArray(upsertData.medications) ? upsertData.medications : undefined;
+            } else if (upsertData.medication) {
+              try {
+                const parsed = typeof upsertData.medication === 'string' ? JSON.parse(upsertData.medication) : upsertData.medication;
+                medications = Array.isArray(parsed) ? parsed : undefined;
+              } catch (e) {
+                // Ignore
+              }
+            }
+            
+            let allergies: string[] | undefined;
+            if (upsertData.allergies) {
+              allergies = Array.isArray(upsertData.allergies) 
+                ? upsertData.allergies 
+                : (typeof upsertData.allergies === 'string' ? JSON.parse(upsertData.allergies) : undefined);
+            }
+            
+            let favoriteActivities: string[] | undefined;
+            if (upsertData.favorite_activities) {
+              favoriteActivities = Array.isArray(upsertData.favorite_activities) 
+                ? upsertData.favorite_activities 
+                : (typeof upsertData.favorite_activities === 'string' ? JSON.parse(upsertData.favorite_activities) : undefined);
+            }
+            
+            let comfortItems: string[] | undefined;
+            if (upsertData.comfort_items) {
+              comfortItems = Array.isArray(upsertData.comfort_items) 
+                ? upsertData.comfort_items 
+                : (typeof upsertData.comfort_items === 'string' ? JSON.parse(upsertData.comfort_items) : undefined);
+            }
+            
+            let doctorInfo: {name: string; phone: string; clinic?: string} | undefined;
+            if (upsertData.doctor_info) {
+              doctorInfo = typeof upsertData.doctor_info === 'object' 
+                ? upsertData.doctor_info 
+                : (typeof upsertData.doctor_info === 'string' ? JSON.parse(upsertData.doctor_info) : undefined);
+            }
+            
+            const savedInstructions: ChildInstructions = {
+              id: upsertData.id,
+              childId: upsertData.child_id,
+              parentId: upsertData.parent_id,
+              feedingSchedule: upsertData.feeding_schedule,
+              napSchedule: upsertData.nap_schedule,
+              bedtime: upsertData.bedtime,
+              dietaryRestrictions: upsertData.dietary_restrictions,
+              medications,
+              allergies,
+              favoriteActivities,
+              comfortItems,
+              routines: upsertData.routines,
+              specialNeeds: upsertData.special_needs,
+              emergencyContacts: upsertData.emergency_contacts ? (typeof upsertData.emergency_contacts === 'string' ? JSON.parse(upsertData.emergency_contacts) : upsertData.emergency_contacts) : undefined,
+              doctorInfo,
+              additionalNotes: upsertData.additional_notes || upsertData.special_instructions || undefined,
+              createdAt: new Date(upsertData.created_at),
+              updatedAt: new Date(upsertData.updated_at),
+            };
+            
+            // Update AsyncStorage
             try {
               const { save, remove, STORAGE_KEYS } = await import('./local-storage.service');
-              await remove(STORAGE_KEYS.CHILD_INSTRUCTIONS, tempId);
+              if (!isUpdate) {
+                await remove(STORAGE_KEYS.CHILD_INSTRUCTIONS, tempId);
+              }
               await save(STORAGE_KEYS.CHILD_INSTRUCTIONS, {
-                ...createdInstructions,
-                createdAt: createdInstructions.createdAt.getTime(),
-                updatedAt: createdInstructions.updatedAt.getTime(),
+                ...savedInstructions,
+                createdAt: savedInstructions.createdAt.getTime(),
+                updatedAt: savedInstructions.updatedAt.getTime(),
               });
-              console.log('✅ AsyncStorage updated with real ID from API');
-            } catch (updateError) {
-              console.warn('⚠️ Failed to update AsyncStorage:', updateError);
+            } catch (storageError) {
+              console.warn('⚠️ Failed to update AsyncStorage:', storageError);
             }
-          } else {
-            console.warn('⚠️ Background API create failed:', result.error?.message);
+            
+            console.log('✅ Instructions saved in Supabase (exception fallback)');
+            return { success: true, data: savedInstructions };
           }
-        } catch (error: any) {
-          console.warn('⚠️ Background API create error:', error.message);
+        } catch (supabaseError: any) {
+          return {
+            success: false,
+            error: {
+              code: ErrorCode.DB_INSERT_ERROR,
+              message: `Failed to save instructions: ${supabaseError.message}`,
+            },
+          };
         }
-      })(); // IIFE - runs in background, doesn't block
+      }
+      
+      return {
+        success: false,
+        error: {
+          code: ErrorCode.DB_INSERT_ERROR,
+          message: `Failed to save instructions: ${error.message}`,
+        },
+      };
     }
 
+    // Should not reach here, but fallback
     return { success: true, data: savedInstructions };
   } catch (error: any) {
     return {

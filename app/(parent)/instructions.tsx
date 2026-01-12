@@ -5,7 +5,7 @@ import Input from '@/src/components/ui/Input';
 import HamburgerMenu from '@/src/components/ui/HamburgerMenu';
 import { useTheme } from '@/src/components/ui/ThemeProvider';
 import { useAuth } from '@/src/hooks/useAuth';
-import { deleteChild, getParentChildren, saveChild, saveChildInstructions } from '@/src/services/child.service';
+import { deleteChild, getParentChildren, getParentInstructions, saveChild, saveChildInstructions } from '@/src/services/child.service';
 import { uploadFile } from '@/src/services/storage.service';
 import { Child, ChildInstructions } from '@/src/types/child.types';
 import { calculateAge, formatAgeWithMonthsAndDays } from '@/src/utils/formatters';
@@ -98,14 +98,35 @@ export default function InstructionsScreen() {
         const realChildren = result.data.filter(c => !c.id || !c.id.startsWith('temp_'));
         setChildren(realChildren);
         console.log(`✅ Loaded ${realChildren.length} children (filtered temp IDs)`);
+        
+        // Load instructions for all children
+        await loadInstructions();
       } else {
         setChildren([]);
+        setInstructions({});
       }
     } catch (error: any) {
       console.error('❌ Failed to load children:', error.message);
       setChildren([]);
+      setInstructions({});
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadInstructions = async () => {
+    if (!user) return;
+    try {
+      const result = await getParentInstructions(user.id);
+      if (result.success && result.data) {
+        setInstructions(result.data);
+        console.log(`✅ Loaded ${Object.keys(result.data).length} instructions`);
+      } else {
+        setInstructions({});
+      }
+    } catch (error: any) {
+      console.error('❌ Failed to load instructions:', error.message);
+      setInstructions({});
     }
   };
   
@@ -510,7 +531,10 @@ export default function InstructionsScreen() {
         refreshControl={
           <RefreshControl
             refreshing={loading}
-            onRefresh={loadChildren}
+            onRefresh={async () => {
+              await loadChildren();
+              await loadInstructions();
+            }}
             tintColor={colors.primary}
             colors={[colors.primary]}
           />
