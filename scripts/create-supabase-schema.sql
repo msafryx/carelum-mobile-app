@@ -5,6 +5,118 @@
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 -- ============================================
+-- USER REGISTRATION SYNC: auth.users <-> public.users
+-- ============================================
+
+-- Function to create/update user profile (called during sign-up)
+CREATE OR REPLACE FUNCTION create_user_profile(
+  p_id UUID,
+  p_email TEXT,
+  p_display_name TEXT DEFAULT NULL,
+  p_role TEXT DEFAULT 'parent',
+  p_preferred_language TEXT DEFAULT 'en',
+  p_user_number TEXT DEFAULT NULL,
+  p_phone_number TEXT DEFAULT NULL,
+  p_photo_url TEXT DEFAULT NULL,
+  p_theme TEXT DEFAULT 'auto',
+  p_is_verified BOOLEAN DEFAULT FALSE,
+  p_verification_status TEXT DEFAULT NULL,
+  p_hourly_rate DECIMAL(10, 2) DEFAULT NULL,
+  p_bio TEXT DEFAULT NULL
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  -- Insert or update user profile
+  -- SECURITY DEFINER bypasses RLS, so this will work even during sign-up
+  INSERT INTO users (
+    id, email, display_name, role, preferred_language, user_number,
+    phone_number, photo_url, theme, is_verified, verification_status,
+    hourly_rate, bio, created_at, updated_at
+  )
+  VALUES (
+    p_id, p_email, p_display_name, p_role, p_preferred_language, p_user_number,
+    p_phone_number, p_photo_url, p_theme, p_is_verified, p_verification_status,
+    p_hourly_rate, p_bio, NOW(), NOW()
+  )
+  ON CONFLICT (id) DO UPDATE SET
+    email = EXCLUDED.email,
+    display_name = COALESCE(EXCLUDED.display_name, users.display_name),
+    role = COALESCE(EXCLUDED.role, users.role),
+    preferred_language = COALESCE(EXCLUDED.preferred_language, users.preferred_language),
+    user_number = COALESCE(EXCLUDED.user_number, users.user_number),
+    phone_number = COALESCE(EXCLUDED.phone_number, users.phone_number),
+    photo_url = COALESCE(EXCLUDED.photo_url, users.photo_url),
+    theme = COALESCE(EXCLUDED.theme, users.theme),
+    is_verified = COALESCE(EXCLUDED.is_verified, users.is_verified),
+    verification_status = COALESCE(EXCLUDED.verification_status, users.verification_status),
+    hourly_rate = COALESCE(EXCLUDED.hourly_rate, users.hourly_rate),
+    bio = COALESCE(EXCLUDED.bio, users.bio),
+    updated_at = NOW();
+END;
+$$;
+
+-- Grant execute permission to authenticated and anon users
+GRANT EXECUTE ON FUNCTION create_user_profile TO authenticated;
+GRANT EXECUTE ON FUNCTION create_user_profile TO anon;
+
+-- Trigger function to auto-sync auth.users to public.users on INSERT
+CREATE OR REPLACE FUNCTION handle_auth_user_created()
+RETURNS TRIGGER AS $$
+DECLARE
+  user_email TEXT;
+  user_display_name TEXT;
+BEGIN
+  -- Get email from auth.users
+  user_email := NEW.email;
+  
+  -- Extract display name from email (fallback)
+  user_display_name := COALESCE(
+    split_part(user_email, '@', 1),
+    user_email
+  );
+  
+  -- Create basic user profile in public.users
+  -- SECURITY DEFINER allows this to bypass RLS
+  INSERT INTO public.users (
+    id,
+    email,
+    display_name,
+    role,
+    preferred_language,
+    theme,
+    is_verified,
+    created_at,
+    updated_at
+  )
+  VALUES (
+    NEW.id,
+    user_email,
+    user_display_name,
+    'parent', -- Default role, will be updated by frontend
+    'en',
+    'auto',
+    FALSE,
+    NOW(),
+    NOW()
+  )
+  ON CONFLICT (id) DO NOTHING; -- Don't overwrite if profile already exists
+  
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- Trigger on auth.users INSERT
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+CREATE TRIGGER on_auth_user_created
+  AFTER INSERT ON auth.users
+  FOR EACH ROW
+  EXECUTE FUNCTION handle_auth_user_created();
+
+-- ============================================
 -- SYNC DELETIONS: auth.users <-> public.users
 -- ============================================
 -- This ensures that when a user is deleted from auth.users, they are also deleted from public.users
@@ -64,16 +176,20 @@ CREATE TABLE IF NOT EXISTS children (
 );
 
 -- Child instructions table
+-- Note: Run ADD_CHILD_INSTRUCTIONS_COLUMNS.sql migration to add all fields for chatbot RAG
 CREATE TABLE IF NOT EXISTS child_instructions (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   child_id UUID NOT NULL REFERENCES children(id) ON DELETE CASCADE,
   parent_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   feeding_schedule TEXT,
   nap_schedule TEXT,
-  medication TEXT,
-  allergies TEXT,
+  medication TEXT, -- Legacy: Use medications (JSONB) after migration
+  allergies TEXT, -- Legacy: Use allergies (JSONB) after migration
   emergency_contacts JSONB,
   special_instructions TEXT,
+  -- New columns added by migration: bedtime, dietary_restrictions, medications (JSONB),
+  -- allergies (JSONB), favorite_activities, comfort_items, routines, special_needs,
+  -- doctor_info, additional_notes
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE(child_id, parent_id)
@@ -219,20 +335,25 @@ ALTER TABLE verification_requests ENABLE ROW LEVEL SECURITY;
 ALTER TABLE reviews ENABLE ROW LEVEL SECURITY;
 
 -- Basic RLS policies (users can read/write their own data)
--- Note: You'll need to customize these based on your security requirements
+-- Note: The create_user_profile function uses SECURITY DEFINER to bypass RLS during sign-up
 
 -- Users: Users can read their own profile, admins can read all
+DROP POLICY IF EXISTS "Users can read own profile" ON users;
 CREATE POLICY "Users can read own profile" ON users
   FOR SELECT USING (auth.uid() = id OR EXISTS (
     SELECT 1 FROM users WHERE id = auth.uid() AND role = 'admin'
   ));
 
 -- Users can insert their own profile (for sign-up)
+-- Note: Most inserts are handled by create_user_profile function and handle_auth_user_created trigger
+DROP POLICY IF EXISTS "Users can insert own profile" ON users;
 CREATE POLICY "Users can insert own profile" ON users
   FOR INSERT WITH CHECK (auth.uid() = id);
 
+DROP POLICY IF EXISTS "Users can update own profile" ON users;
 CREATE POLICY "Users can update own profile" ON users
-  FOR UPDATE USING (auth.uid() = id);
+  FOR UPDATE USING (auth.uid() = id)
+  WITH CHECK (auth.uid() = id);
 
 -- Children: Parents can read/write their own children
 -- Drop existing policy if it exists
