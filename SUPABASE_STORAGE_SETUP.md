@@ -4,13 +4,13 @@
 
 **If you see `⚠️ Bucket "profile-images" not found in available buckets`, the bucket doesn't exist!**
 
-**👉 RUN `CREATE_BUCKET_NOW.sql` in Supabase SQL Editor RIGHT NOW - it will create the bucket AND set up all policies in one go!**
+**👉 RUN `STORAGE_SETUP.sql` in Supabase SQL Editor RIGHT NOW - it will create both buckets (profile-images and child-images) AND set up all policies in one go!**
 
 ## 🚨 IMPORTANT: If You See "Network request failed" Error
 
 **If you have multiple conflicting policies (especially ones granting `INSERT`/`UPDATE`/`DELETE` to `public`), you MUST clean them up first!**
 
-**Run `CLEANUP_STORAGE_POLICIES.sql` in Supabase SQL Editor to remove all conflicting policies and create only the 4 correct ones.**
+**Run `STORAGE_SETUP.sql` in Supabase SQL Editor - it will remove all conflicting policies and create only the correct ones for both buckets.**
 
 This is the most common cause of "Network request failed" errors with `statusCode: undefined`.
 
@@ -260,9 +260,9 @@ This is the most common issue. Try these steps:
 
 Child photos are stored in a separate bucket called `child-images`. To set it up:
 
-1. **Run the SQL script**: `CREATE_CHILD_IMAGES_BUCKET.sql`
-   - This creates the `child-images` bucket
-   - Sets up RLS policies for child image uploads
+1. **Run the SQL script**: `STORAGE_SETUP.sql`
+   - This creates both `profile-images` and `child-images` buckets
+   - Sets up RLS policies for both buckets
    - Allows parents to upload photos for their children
 
 2. **Path format**: `childImages/{userId}/{childId}_{timestamp}.jpg`

@@ -101,7 +101,7 @@ async function testStorageConnectivity(bucket: string): Promise<void> {
     if (testError) {
       if (testError.message?.includes('not found') || testError.message?.includes('does not exist')) {
         console.error(`❌ Bucket "${bucket}" does not exist:`, testError.message);
-        console.error('   👉 Run CREATE_BUCKET_NOW.sql in Supabase SQL Editor');
+        console.error('   👉 Run STORAGE_SETUP.sql in Supabase SQL Editor');
       } else {
         console.warn(`⚠️ Cannot access bucket "${bucket}":`, testError.message);
         console.warn('   This might be a policy issue, but we will still attempt upload');
@@ -428,7 +428,7 @@ export async function uploadFile(
             errorMessage = 'Cannot connect to Supabase at all. Check:\n1. Internet connection\n2. Supabase project is active\n3. Supabase URL is correct';
           } else {
             // Auth works but Storage doesn't - this is Storage-specific
-            errorMessage = 'Storage API is unreachable. This might be:\n1. Storage policies blocking the request\n2. Storage service configuration issue\n3. Network/CORS blocking Storage endpoint\n\nRun CLEANUP_STORAGE_POLICIES.sql to fix policies.';
+            errorMessage = 'Storage API is unreachable. This might be:\n1. Storage policies blocking the request\n2. Storage service configuration issue\n3. Network/CORS blocking Storage endpoint\n\nRun STORAGE_SETUP.sql to fix policies.';
           }
         } catch (testErr: any) {
           errorMessage = `Network error: ${testErr.message || 'Cannot reach Supabase'}. Check internet connection.`;

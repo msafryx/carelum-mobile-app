@@ -51,9 +51,9 @@ A cross-platform mobile application for connecting parents with verified babysit
    - Run the SQL schema in `scripts/create-supabase-schema.sql` in your Supabase SQL Editor
    - See `README_SUPABASE.md` for detailed setup instructions
 
-5. **Set up Supabase Storage (for profile images)**
+5. **Set up Supabase Storage (for profile and child images)**
 
-   - Run `CREATE_BUCKET_NOW.sql` in Supabase SQL Editor to create the storage bucket and policies
+   - Run `STORAGE_SETUP.sql` in Supabase SQL Editor to create both storage buckets and policies
    - Or follow the step-by-step guide in `SUPABASE_STORAGE_SETUP.md`
 
 6. **Start the backend API server**
