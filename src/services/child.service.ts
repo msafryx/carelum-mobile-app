@@ -41,10 +41,98 @@ export async function getParentChildren(
       console.warn('⚠️ Failed to load from AsyncStorage, trying Supabase:', localError.message);
     }
 
-    // Fallback to API
-    const result = await apiRequest<any[]>(API_ENDPOINTS.CHILDREN);
+    // Try API first, fallback to direct Supabase if API fails
+    let result = await apiRequest<any[]>(API_ENDPOINTS.CHILDREN);
 
     if (!result.success) {
+      console.warn('⚠️ API failed, trying direct Supabase fetch:', result.error?.message);
+      
+      // Fallback to direct Supabase fetch
+      if (isSupabaseConfigured() && supabase) {
+        try {
+          const { data: childrenData, error: supabaseError } = await supabase
+            .from('children')
+            .select('*')
+            .eq('parent_id', parentId)
+            .order('created_at', { ascending: false });
+
+          if (supabaseError) {
+            console.error('❌ Supabase fetch failed:', supabaseError);
+            return {
+              success: false,
+              error: {
+                code: ErrorCode.DB_SELECT_ERROR,
+                message: `Failed to fetch children: ${supabaseError.message}`,
+              },
+            };
+          }
+
+          const children: Child[] = (childrenData || []).map((child: any) => ({
+            id: child.id,
+            parentId: child.parent_id,
+            name: child.name,
+            age: child.age,
+            dateOfBirth: child.date_of_birth ? new Date(child.date_of_birth) : undefined,
+            gender: child.gender || undefined,
+            photoUrl: child.photo_url || undefined,
+            childNumber: child.child_number || undefined,
+            parentNumber: child.parent_number || undefined,
+            sitterNumber: child.sitter_number || undefined,
+            createdAt: new Date(child.created_at),
+            updatedAt: new Date(child.updated_at),
+          }));
+
+          // Sync to AsyncStorage for next time - replace temp IDs with real IDs
+          if (children.length > 0) {
+            try {
+              const { save, getAll, remove, STORAGE_KEYS } = await import('./local-storage.service');
+              
+              // Get all existing children to find temp IDs to remove
+              const existingResult = await getAll(STORAGE_KEYS.CHILDREN);
+              if (existingResult.success && existingResult.data) {
+                // Find temp IDs that should be replaced
+                const tempIdsToRemove = (existingResult.data as any[])
+                  .filter((c: any) => c.parentId === parentId && c.id && c.id.startsWith('temp_'))
+                  .map((c: any) => c.id);
+                
+                // Remove temp IDs
+                for (const tempId of tempIdsToRemove) {
+                  await remove(STORAGE_KEYS.CHILDREN, tempId);
+                }
+                if (tempIdsToRemove.length > 0) {
+                  console.log(`🗑️ Removed ${tempIdsToRemove.length} temp child ID(s) from AsyncStorage`);
+                }
+              }
+              
+              // Save real children
+              for (const child of children) {
+                await save(STORAGE_KEYS.CHILDREN, {
+                  ...child,
+                  createdAt: child.createdAt.getTime(),
+                  updatedAt: child.updatedAt.getTime(),
+                  dateOfBirth: child.dateOfBirth ? child.dateOfBirth.getTime() : null,
+                });
+              }
+              console.log('✅ Children synced from Supabase to AsyncStorage (temp IDs removed)');
+            } catch (syncError: any) {
+              console.warn('⚠️ Failed to sync children to AsyncStorage:', syncError.message);
+            }
+          }
+
+          console.log(`✅ Loaded ${children.length} children from Supabase (direct)`);
+          return { success: true, data: children };
+        } catch (error: any) {
+          return {
+            success: false,
+            error: {
+              code: ErrorCode.DB_SELECT_ERROR,
+              message: `Failed to fetch children: ${error.message}`,
+            },
+          };
+        }
+      }
+      
+      // If Supabase also fails, return API error
       return result;
     }
 
@@ -63,10 +151,29 @@ export async function getParentChildren(
       updatedAt: new Date(apiChild.updatedAt),
     }));
 
-    // Sync to AsyncStorage for next time
+    // Sync to AsyncStorage for next time - replace temp IDs with real IDs
     if (children.length > 0) {
       try {
-        const { save, STORAGE_KEYS } = await import('./local-storage.service');
+        const { save, getAll, remove, STORAGE_KEYS } = await import('./local-storage.service');
+        
+        // Get all existing children to find temp IDs to remove
+        const existingResult = await getAll(STORAGE_KEYS.CHILDREN);
+        if (existingResult.success && existingResult.data) {
+          // Find temp IDs that should be replaced
+          const tempIdsToRemove = (existingResult.data as any[])
+            .filter((c: any) => c.parentId === parentId && c.id && c.id.startsWith('temp_'))
+            .map((c: any) => c.id);
+          
+          // Remove temp IDs
+          for (const tempId of tempIdsToRemove) {
+            await remove(STORAGE_KEYS.CHILDREN, tempId);
+          }
+          if (tempIdsToRemove.length > 0) {
+            console.log(`🗑️ Removed ${tempIdsToRemove.length} temp child ID(s) from AsyncStorage`);
+          }
+        }
+        
+        // Save real children
         for (const child of children) {
           await save(STORAGE_KEYS.CHILDREN, {
             ...child,
@@ -75,7 +182,7 @@ export async function getParentChildren(
             dateOfBirth: child.dateOfBirth ? child.dateOfBirth.getTime() : null,
           });
         }
-        console.log('✅ Children synced from Supabase to AsyncStorage');
+        console.log('✅ Children synced from API to AsyncStorage (temp IDs removed)');
       } catch (syncError: any) {
         console.warn('⚠️ Failed to sync children to AsyncStorage:', syncError.message);
       }
@@ -323,11 +430,75 @@ export async function saveChild(child: Child): Promise<ServiceResult<Child>> {
             parentNumber: supabaseData.parent_number,
           };
           
-          const result = await apiRequest<any>(API_ENDPOINTS.CHILDREN, {
+          let result = await apiRequest<any>(API_ENDPOINTS.CHILDREN, {
             method: 'POST',
             body: JSON.stringify(apiData),
           });
           
+          // If API fails, try direct Supabase insert
+          if (!result.success) {
+            console.warn('⚠️ API sync failed, trying direct Supabase insert:', result.error?.message);
+            
+            if (isSupabaseConfigured() && supabase) {
+              try {
+                const { data: insertedChild, error: insertError } = await supabase
+                  .from('children')
+                  .insert(supabaseData)
+                  .select()
+                  .single();
+
+                if (insertError) {
+                  console.error('❌ Direct Supabase insert failed:', insertError);
+                  return; // Give up
+                }
+
+                // Success - convert to Child type
+                const realChild: Child = {
+                  id: insertedChild.id,
+                  parentId: insertedChild.parent_id,
+                  name: insertedChild.name,
+                  age: insertedChild.age,
+                  dateOfBirth: insertedChild.date_of_birth ? new Date(insertedChild.date_of_birth) : undefined,
+                  gender: insertedChild.gender || undefined,
+                  photoUrl: insertedChild.photo_url || undefined,
+                  childNumber: insertedChild.child_number || undefined,
+                  parentNumber: insertedChild.parent_number || undefined,
+                  sitterNumber: insertedChild.sitter_number || undefined,
+                  createdAt: new Date(insertedChild.created_at),
+                  updatedAt: new Date(insertedChild.updated_at),
+                };
+
+                // Update AsyncStorage with real ID (replace temp ID)
+                try {
+                  const { save, getAll, STORAGE_KEYS } = await import('./local-storage.service');
+                  const allChildren = await getAll(STORAGE_KEYS.CHILDREN);
+                  if (allChildren.success && allChildren.data) {
+                    const updatedChildren = allChildren.data.map((c: any) => 
+                      c.id === tempId ? {
+                        ...realChild,
+                        createdAt: realChild.createdAt.getTime(),
+                        updatedAt: realChild.updatedAt.getTime(),
+                        dateOfBirth: realChild.dateOfBirth ? realChild.dateOfBirth.getTime() : null,
+                      } : c
+                    );
+                    for (const child of updatedChildren) {
+                      await save(STORAGE_KEYS.CHILDREN, child);
+                    }
+                  }
+                  console.log('✅ Child synced to Supabase (direct), AsyncStorage updated with real ID:', realChild.id);
+                } catch (updateError) {
+                  console.warn('⚠️ Failed to update AsyncStorage with real ID:', updateError);
+                }
+                return; // Success
+              } catch (supabaseError: any) {
+                console.error('❌ Direct Supabase insert exception:', supabaseError);
+                return; // Give up
+              }
+            }
+            return; // No Supabase, give up
+          }
+          
+          // API succeeded
           if (result.success && result.data) {
             // Success - update AsyncStorage with real ID
             const apiChild = result.data;
@@ -378,10 +549,10 @@ export async function saveChild(child: Child): Promise<ServiceResult<Child>> {
       // Return success IMMEDIATELY - no waiting
       return { success: true, data: savedChild };
     } else {
-      // Existing child (real ID) - sync in background (fire and forget - instant return)
+      // Existing child (real ID) - sync in background
       const realId = savedChild.id;
       
-      // Sync to API in background (fire and forget - instant return)
+      // Sync to API first, fallback to direct Supabase if API fails
       (async () => {
         try {
           console.log('💾 Background update to API:', realId);
@@ -396,11 +567,68 @@ export async function saveChild(child: Child): Promise<ServiceResult<Child>> {
           if (supabaseData.parent_number !== undefined) apiData.parentNumber = supabaseData.parent_number;
           if (supabaseData.sitter_number !== undefined) apiData.sitterNumber = supabaseData.sitter_number;
           
-          const result = await apiRequest<any>(API_ENDPOINTS.CHILD_BY_ID(realId), {
+          let result = await apiRequest<any>(API_ENDPOINTS.CHILD_BY_ID(realId), {
             method: 'PUT',
             body: JSON.stringify(apiData),
           });
           
+          // If API fails, try direct Supabase update
+          if (!result.success) {
+            console.warn('⚠️ API update failed, trying direct Supabase update:', result.error?.message);
+            
+            if (isSupabaseConfigured() && supabase) {
+              try {
+                const { data: updatedChild, error: updateError } = await supabase
+                  .from('children')
+                  .update(supabaseData)
+                  .eq('id', realId)
+                  .select()
+                  .single();
+
+                if (updateError) {
+                  console.error('❌ Direct Supabase update failed:', updateError);
+                  return; // Give up
+                }
+
+                // Success - convert to Child type
+                const realChild: Child = {
+                  id: updatedChild.id,
+                  parentId: updatedChild.parent_id,
+                  name: updatedChild.name,
+                  age: updatedChild.age,
+                  dateOfBirth: updatedChild.date_of_birth ? new Date(updatedChild.date_of_birth) : undefined,
+                  gender: updatedChild.gender || undefined,
+                  photoUrl: updatedChild.photo_url || undefined,
+                  childNumber: updatedChild.child_number || undefined,
+                  parentNumber: updatedChild.parent_number || undefined,
+                  sitterNumber: updatedChild.sitter_number || undefined,
+                  createdAt: new Date(updatedChild.created_at),
+                  updatedAt: new Date(updatedChild.updated_at),
+                };
+
+                // Update AsyncStorage with latest data
+                try {
+                  const { save, STORAGE_KEYS } = await import('./local-storage.service');
+                  await save(STORAGE_KEYS.CHILDREN, {
+                    ...realChild,
+                    createdAt: realChild.createdAt.getTime(),
+                    updatedAt: realChild.updatedAt.getTime(),
+                    dateOfBirth: realChild.dateOfBirth ? realChild.dateOfBirth.getTime() : null,
+                  });
+                  console.log('✅ AsyncStorage updated with Supabase data (direct)');
+                } catch (updateError) {
+                  console.warn('⚠️ Failed to update AsyncStorage:', updateError);
+                }
+                return; // Success
+              } catch (supabaseError: any) {
+                console.error('❌ Direct Supabase update exception:', supabaseError);
+                return; // Give up
+              }
+            }
+            return; // No Supabase, give up
+          }
+          
+          // API succeeded
           if (result.success && result.data) {
             console.log('✅ Child updated in API:', result.data.id);
             // Update AsyncStorage with latest data from API
@@ -426,11 +654,9 @@ export async function saveChild(child: Child): Promise<ServiceResult<Child>> {
               } catch (updateError) {
                 console.warn('⚠️ Failed to update AsyncStorage:', updateError);
               }
-          } else {
-            console.warn('⚠️ Background API update failed:', result.error?.message);
           }
         } catch (error: any) {
-          console.warn('⚠️ Background API update error:', error.message);
+          console.warn('⚠️ Background update error:', error.message);
         }
       })(); // IIFE - runs in background, doesn't block
       
@@ -490,29 +716,106 @@ export async function deleteChild(childId: string): Promise<ServiceResult<void>>
       console.warn('⚠️ Failed to delete from AsyncStorage:', localError.message);
     }
 
-    // Delete from API in background (fire and forget - instant return)
+    // Delete from API, fallback to direct Supabase if API fails
     if (!isTempId) {
-      (async () => {
-        try {
-          console.log('💾 Background delete from API...');
-          const result = await apiRequest<any>(API_ENDPOINTS.CHILD_BY_ID(childId), {
-            method: 'DELETE',
-          });
+      try {
+        console.log('💾 Deleting child from API...');
+        const result = await apiRequest<any>(API_ENDPOINTS.CHILD_BY_ID(childId), {
+          method: 'DELETE',
+        });
 
-          if (!result.success) {
-            console.warn('⚠️ Background API delete failed:', result.error?.message);
+        if (!result.success) {
+          console.warn('⚠️ API delete failed, trying direct Supabase delete...');
+          
+          // Fallback to direct Supabase delete
+          if (isSupabaseConfigured() && supabase) {
+            try {
+              // Delete child from Supabase (cascade delete will handle child_instructions)
+              const { error: deleteError } = await supabase
+                .from('children')
+                .delete()
+                .eq('id', childId);
+              
+              if (deleteError) {
+                console.error('❌ Direct Supabase delete failed:', deleteError);
+                return {
+                  success: false,
+                  error: {
+                    code: ErrorCode.DB_DELETE_ERROR,
+                    message: `Failed to delete child: ${deleteError.message}`,
+                  },
+                };
+              }
+              
+              console.log('✅ Child deleted from Supabase (direct fallback)');
+            } catch (supabaseError: any) {
+              console.error('❌ Direct Supabase delete exception:', supabaseError);
+              return {
+                success: false,
+                error: {
+                  code: ErrorCode.DB_DELETE_ERROR,
+                  message: `Failed to delete child: ${supabaseError.message}`,
+                },
+              };
+            }
           } else {
-            console.log('✅ Child deleted from API (child_instructions deleted via cascade)');
+            return {
+              success: false,
+              error: {
+                code: ErrorCode.DB_DELETE_ERROR,
+                message: 'API delete failed and Supabase is not configured',
+              },
+            };
           }
-        } catch (error: any) {
-          console.warn('⚠️ Background API delete error:', error.message);
+        } else {
+          console.log('✅ Child deleted from API (child_instructions deleted via cascade)');
         }
-      })(); // IIFE - runs in background, doesn't block
+      } catch (error: any) {
+        console.error('❌ Delete error:', error);
+        
+        // Try Supabase fallback even on exception
+        if (isSupabaseConfigured() && supabase) {
+          try {
+            const { error: deleteError } = await supabase
+              .from('children')
+              .delete()
+              .eq('id', childId);
+            
+            if (deleteError) {
+              return {
+                success: false,
+                error: {
+                  code: ErrorCode.DB_DELETE_ERROR,
+                  message: `Failed to delete child: ${deleteError.message}`,
+                },
+              };
+            }
+            
+            console.log('✅ Child deleted from Supabase (exception fallback)');
+          } catch (supabaseError: any) {
+            return {
+              success: false,
+              error: {
+                code: ErrorCode.DB_DELETE_ERROR,
+                message: `Failed to delete child: ${supabaseError.message}`,
+              },
+            };
+          }
+        } else {
+          return {
+            success: false,
+            error: {
+              code: ErrorCode.DB_DELETE_ERROR,
+              message: `Failed to delete child: ${error.message}`,
+            },
+          };
+        }
+      }
     } else {
-      console.log('⚠️ Skipping API delete for temp ID:', childId);
+      console.log('⚠️ Skipping database delete for temp ID:', childId);
     }
 
-    // Return success IMMEDIATELY - no waiting
+    // Return success
     return { success: true };
   } catch (error: any) {
     console.error('❌ Delete child error:', error);

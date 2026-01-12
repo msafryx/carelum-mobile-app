@@ -279,32 +279,59 @@ export default function ProfileScreen() {
     setLoadingChildren(true);
     
     try {
-      // Try AsyncStorage first
-      const result = await getAll(STORAGE_KEYS.CHILDREN);
-      if (result.success && result.data) {
-        const userChildren = result.data.filter((c: any) => c.parentId === user.id);
-        if (userChildren.length > 0) {
-          const formattedChildren: Child[] = userChildren.map((c: any) => ({
-            ...c,
-            createdAt: new Date(c.createdAt || Date.now()),
-            updatedAt: new Date(c.updatedAt || Date.now()),
-            dateOfBirth: c.dateOfBirth ? new Date(c.dateOfBirth) : undefined,
-          }));
-          setChildren(formattedChildren);
-          console.log('✅ Children loaded from AsyncStorage');
-          setLoadingChildren(false);
-          return;
+      // Always try to load from Supabase first to get real IDs
+      // This ensures temp IDs are replaced with real IDs from DB
+      const supabaseResult = await getParentChildren(user.id);
+      
+      if (supabaseResult.success && supabaseResult.data && supabaseResult.data.length > 0) {
+        // CRITICAL: Deduplicate by ID to prevent duplicates
+        const childrenMap = new Map<string, Child>();
+        for (const child of supabaseResult.data) {
+          if (child.id && !child.id.startsWith('temp_')) {
+            childrenMap.set(child.id, child);
+          }
         }
+        const uniqueChildren = Array.from(childrenMap.values());
+        setChildren(uniqueChildren);
+        console.log(`✅ Loaded ${uniqueChildren.length} children from Supabase (deduplicated by ID)`);
+        setLoadingChildren(false);
+        return;
       }
       
-      // Fallback to Supabase
-      const supabaseResult = await getParentChildren(user.id);
-      if (supabaseResult.success && supabaseResult.data) {
-        setChildren(supabaseResult.data);
-        console.log('✅ Children loaded from Supabase');
+      // Fallback to AsyncStorage if Supabase has no data
+      const result = await getAll(STORAGE_KEYS.CHILDREN);
+      if (result.success && result.data) {
+        const userChildren = (result.data as any[]).filter((c: any) => c.parentId === user.id);
+        
+        // CRITICAL: Deduplicate by ID (prefer real IDs, remove temp IDs)
+        const childrenMap = new Map<string, Child>();
+        
+        for (const c of userChildren) {
+          // Skip temp IDs
+          if (c.id && c.id.startsWith('temp_')) {
+            continue;
+          }
+          
+          // Use ID as key for deduplication
+          if (c.id) {
+            childrenMap.set(c.id, {
+              ...c,
+              createdAt: new Date(c.createdAt || Date.now()),
+              updatedAt: new Date(c.updatedAt || Date.now()),
+              dateOfBirth: c.dateOfBirth ? new Date(c.dateOfBirth) : undefined,
+            } as Child);
+          }
+        }
+        
+        const formattedChildren = Array.from(childrenMap.values());
+        setChildren(formattedChildren);
+        console.log(`✅ Loaded ${formattedChildren.length} children from AsyncStorage (deduplicated by ID, temp IDs filtered)`);
+      } else {
+        setChildren([]);
       }
     } catch (error: any) {
       console.error('❌ Failed to load children:', error.message);
+      setChildren([]);
     } finally {
       setLoadingChildren(false);
     }
@@ -352,14 +379,95 @@ export default function ProfileScreen() {
         const response = await fetch(asset.uri);
         const blob = await response.blob();
         
-        const imagePath = `childImages/${user.id}/${childId || 'new'}_${Date.now()}.jpg`;
+        // Use actual child ID if available, otherwise use 'new'
+        const actualChildId = childId && !childId.startsWith('temp_') ? childId : 'new';
+        const imagePath = `childImages/${user.id}/${actualChildId}_${Date.now()}.jpg`;
         const uploadResult = await uploadFile(imagePath, blob, 'image/jpeg', {
           maxSize: 5 * 1024 * 1024,
         });
 
         if (uploadResult.success && uploadResult.data) {
-          setChildForm({ ...childForm, photoUrl: uploadResult.data });
-          Alert.alert('Success', 'Child photo uploaded!');
+          // If picking photo from list (not in modal), update child directly
+          if (childId && !showChildModal) {
+            // Find the child and update it directly
+            const childToUpdate = children.find(c => c.id === childId);
+            if (childToUpdate) {
+              const updatedChild: Child = {
+                ...childToUpdate,
+                photoUrl: uploadResult.data,
+                updatedAt: new Date(),
+              };
+              
+              // Update in state immediately with new photo URL and deduplicate
+              setChildren(prev => {
+                const updated = prev.map(c => 
+                  c.id === childId ? { ...updatedChild, photoUrl: uploadResult.data } : c
+                );
+                // Deduplicate by ID to prevent duplicates
+                const childrenMap = new Map<string, Child>();
+                for (const child of updated) {
+                  if (child.id && !child.id.startsWith('temp_')) {
+                    childrenMap.set(child.id, child);
+                  }
+                }
+                return Array.from(childrenMap.values());
+              });
+              
+              // Save to database in background
+              saveChild({ ...updatedChild, photoUrl: uploadResult.data }).then(result => {
+                if (result.success && result.data) {
+                  console.log('✅ Child photo updated in database');
+                  // Update state with the saved child (has real ID and photo URL)
+                  setChildren(prev => {
+                    const childrenMap = new Map<string, Child>();
+                    // Add all existing children
+                    for (const child of prev) {
+                      if (child.id && !child.id.startsWith('temp_')) {
+                        childrenMap.set(child.id, child);
+                      }
+                    }
+                    // Update with the saved child
+                    if (result.data) {
+                      childrenMap.set(result.data.id, result.data);
+                    }
+                    return Array.from(childrenMap.values());
+                  });
+                } else {
+                  console.warn('⚠️ Failed to save photo update:', result.error);
+                  // Revert state on failure
+                  setChildren(prev => {
+                    const childrenMap = new Map<string, Child>();
+                    for (const child of prev) {
+                      if (child.id && !child.id.startsWith('temp_')) {
+                        childrenMap.set(child.id, child.id === childId ? childToUpdate : child);
+                      }
+                    }
+                    return Array.from(childrenMap.values());
+                  });
+                  Alert.alert('Error', 'Photo uploaded but failed to save. Please try again.');
+                }
+              }).catch(err => {
+                console.error('❌ Error saving photo update:', err);
+                // Revert state on error
+                setChildren(prev => {
+                  const childrenMap = new Map<string, Child>();
+                  for (const child of prev) {
+                    if (child.id && !child.id.startsWith('temp_')) {
+                      childrenMap.set(child.id, child.id === childId ? childToUpdate : child);
+                    }
+                  }
+                  return Array.from(childrenMap.values());
+                });
+                Alert.alert('Error', 'Failed to save photo update.');
+              });
+              
+              Alert.alert('Success', 'Child photo updated!');
+            }
+          } else {
+            // If in modal, just update the form
+            setChildForm({ ...childForm, photoUrl: uploadResult.data });
+            Alert.alert('Success', 'Child photo uploaded!');
+          }
         } else {
           Alert.alert('Error', uploadResult.error?.message || 'Failed to upload image');
         }
@@ -394,17 +502,45 @@ export default function ProfileScreen() {
 
     setLoading(true);
     try {
+      // CRITICAL: Preserve child ID when editing to prevent creating duplicates
+      // Check if this child already exists in the children array by name (fallback check)
+      let childId = editingChild ? editingChild.id : '';
+      
+      // If no editingChild but childForm has a name, check if child exists
+      if (!childId && childForm.name.trim()) {
+        const existingChild = children.find(c => 
+          c.name.trim().toLowerCase() === childForm.name.trim().toLowerCase() &&
+          c.parentId === user.id
+        );
+        if (existingChild) {
+          childId = existingChild.id;
+          console.log('🔍 Found existing child by name, using ID:', childId);
+        }
+      }
+      
       const childData: Child = {
-        id: editingChild?.id || '',
+        id: childId, // Preserve ID for updates, empty for new children
         parentId: user.id,
         name: childForm.name.trim(),
         age: calculatedAge, // Use calculated age
         dateOfBirth: childForm.dateOfBirth || undefined,
         gender: childForm.gender || undefined,
         photoUrl: childForm.photoUrl || undefined,
+        childNumber: editingChild?.childNumber, // Preserve child number
+        parentNumber: editingChild?.parentNumber, // Preserve parent number
+        sitterNumber: editingChild?.sitterNumber, // Preserve sitter number
         createdAt: editingChild?.createdAt || new Date(),
         updatedAt: new Date(),
       };
+      
+      console.log('💾 Saving child:', { 
+        name: childData.name, 
+        id: childData.id, 
+        parentId: childData.parentId,
+        isEdit: !!editingChild,
+        hasPhoto: !!childData.photoUrl,
+        isNew: !childId || childId.trim() === ''
+      });
 
       // Save to Supabase (via saveChild service)
       console.log('💾 Saving child:', { name: childData.name, id: childData.id, parentId: childData.parentId });
@@ -449,19 +585,28 @@ export default function ProfileScreen() {
             console.log('🗑️ Deleting child:', childId, 'Name:', childName);
             setLoading(true);
             try {
-              // Remove from local state immediately for instant UI update
-              setChildren(prev => prev.filter(c => c.id !== childId));
-              
-              // Delete from storage/Supabase (syncs immediately)
+              // Delete from storage/Supabase first (wait for it to complete)
               const result = await deleteChild(childId);
               console.log('🗑️ Delete result:', result);
               
               if (result.success) {
+                // Remove from local state after successful delete
+                setChildren(prev => {
+                  const childrenMap = new Map<string, Child>();
+                  for (const child of prev) {
+                    if (child.id && child.id !== childId && !child.id.startsWith('temp_')) {
+                      childrenMap.set(child.id, child);
+                    }
+                  }
+                  return Array.from(childrenMap.values());
+                });
+                
                 // Reload children to ensure sync
                 await loadChildren();
                 Alert.alert('Success', 'Child deleted successfully');
               } else {
-                // If delete failed, reload to restore state
+                // If delete failed, show error and reload to restore state
+                console.error('❌ Delete failed:', result.error);
                 await loadChildren();
                 Alert.alert('Error', result.error?.message || 'Failed to delete child');
               }
@@ -1085,7 +1230,11 @@ export default function ProfileScreen() {
                   style={styles.childAvatarContainer}
                 >
                   {child.photoUrl ? (
-                    <Image source={{ uri: child.photoUrl }} style={styles.childAvatar} />
+                    <Image 
+                      source={{ uri: child.photoUrl }} 
+                      style={styles.childAvatar}
+                      key={`${child.id}-${child.photoUrl}`} // Force re-render when photoUrl or child changes
+                    />
                   ) : (
                     <View style={[styles.childAvatarPlaceholder, { backgroundColor: colors.primary + '20' }]}>
                       <Ionicons name="person" size={24} color={colors.primary} />
@@ -1199,7 +1348,11 @@ export default function ProfileScreen() {
                   {uploadingChildImage ? (
                     <ActivityIndicator size="large" color={colors.primary} />
                   ) : childForm.photoUrl ? (
-                    <Image source={{ uri: childForm.photoUrl }} style={styles.modalAvatar} />
+                    <Image 
+                      source={{ uri: childForm.photoUrl }} 
+                      style={styles.modalAvatar}
+                      key={childForm.photoUrl} // Force re-render when photoUrl changes
+                    />
                   ) : (
                     <View style={[styles.modalAvatarPlaceholder, { backgroundColor: colors.primary + '20' }]}>
                       <Ionicons name="camera" size={32} color={colors.primary} />

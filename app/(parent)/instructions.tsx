@@ -12,7 +12,6 @@ import { calculateAge, formatAgeWithMonths } from '@/src/utils/formatters';
 import { Ionicons } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import * as ImagePicker from 'expo-image-picker';
-import { useFocusEffect } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
 import {
     ActivityIndicator,
@@ -42,29 +41,9 @@ export default function InstructionsScreen() {
 
   // Load children on mount
   useEffect(() => {
-    loadChildren();
-  }, [user]);
-
-  // Refresh children when screen comes into focus
-  useFocusEffect(
-    useCallback(() => {
-      if (user) {
-        console.log('🔄 Instructions screen focused, refreshing children...');
-        loadChildren();
-      }
-    }, [user])
-  );
-
-  // Set up interval to check for changes (every 5 seconds)
-  useEffect(() => {
-    if (!user) return;
-    
-    const interval = setInterval(() => {
-      console.log('🔄 Periodic refresh: checking for children updates...');
+    if (user) {
       loadChildren();
-    }, 5000); // Check every 5 seconds
-
-    return () => clearInterval(interval);
+    }
   }, [user]);
 
   // Listen for children updates from real-time sync (cross-platform)
@@ -115,11 +94,16 @@ export default function InstructionsScreen() {
     try {
       const result = await getParentChildren(user.id);
       if (result.success && result.data) {
-        setChildren(result.data);
-        console.log(`✅ Loaded ${result.data.length} children`);
+        // Filter out any temp IDs to prevent duplicates
+        const realChildren = result.data.filter(c => !c.id || !c.id.startsWith('temp_'));
+        setChildren(realChildren);
+        console.log(`✅ Loaded ${realChildren.length} children (filtered temp IDs)`);
+      } else {
+        setChildren([]);
       }
     } catch (error: any) {
       console.error('❌ Failed to load children:', error.message);
+      setChildren([]);
     } finally {
       setLoading(false);
     }
@@ -211,36 +195,21 @@ export default function InstructionsScreen() {
         const imagePath = `childImages/${user.id}/${editingChild?.id || 'new'}_${Date.now()}.jpg`;
         console.log('☁️ Uploading to Supabase Storage:', imagePath);
         
-        let fileData: Blob | Uint8Array | ArrayBuffer;
+        // Convert to blob - works on both web and native
+        // The uploadFile service handles Blob conversion internally
+        console.log('🔄 Converting image to blob...');
+        const response = await fetch(asset.uri);
+        if (!response.ok) {
+          throw new Error(`Failed to fetch image: ${response.statusText}`);
+        }
+        const blob = await response.blob();
+        console.log('✅ Blob created, size:', blob.size, 'bytes, type:', blob.type);
         
-        // On web, convert to blob. On native, fetch and convert to Uint8Array
-        if (Platform.OS === 'web') {
-          console.log('🔄 Converting image to blob (web)...');
-          const response = await fetch(asset.uri);
-          if (!response.ok) {
-            throw new Error(`Failed to fetch image: ${response.statusText}`);
-          }
-          fileData = await response.blob();
-          console.log('✅ Blob created, size:', (fileData as Blob).size);
-        } else {
-          // Native: Fetch the file and convert to Uint8Array
-          console.log('🔄 Reading file for native upload...');
-          try {
-            const response = await fetch(asset.uri);
-            if (!response.ok) {
-              throw new Error(`Failed to fetch image: ${response.statusText}`);
-            }
-            const blob = await response.blob();
-            const arrayBuffer = await blob.arrayBuffer();
-            fileData = new Uint8Array(arrayBuffer);
-            console.log('✅ File converted to Uint8Array, size:', fileData.length);
-          } catch (fetchError: any) {
-            console.error('❌ Failed to read file:', fetchError);
-            throw new Error(`Failed to read image file: ${fetchError.message}`);
-          }
+        if (blob.size === 0) {
+          throw new Error('Image file is empty');
         }
         
-        const uploadResult = await uploadFile(imagePath, fileData, 'image/jpeg', {
+        const uploadResult = await uploadFile(imagePath, blob, 'image/jpeg', {
           maxSize: 5 * 1024 * 1024,
         });
 
@@ -291,17 +260,31 @@ export default function InstructionsScreen() {
 
     setLoading(true);
     try {
+      // CRITICAL: Ensure we preserve the child ID when editing
+      const childId = editingChild ? editingChild.id : '';
+      
       const childData: Child = {
-        id: editingChild?.id || '',
+        id: childId, // Preserve ID for updates
         parentId: user.id, // Use actual user ID
         name: childForm.name.trim(),
         age: calculatedAge, // Use calculated age
         dateOfBirth: childForm.dateOfBirth || undefined,
         gender: childForm.gender || undefined,
         photoUrl: childForm.photoUrl || undefined,
+        childNumber: editingChild?.childNumber, // Preserve child number
+        parentNumber: editingChild?.parentNumber, // Preserve parent number
+        sitterNumber: editingChild?.sitterNumber, // Preserve sitter number
         createdAt: editingChild?.createdAt || new Date(),
         updatedAt: new Date(),
       };
+      
+      console.log('💾 Saving child:', { 
+        name: childData.name, 
+        id: childData.id, 
+        parentId: childData.parentId,
+        isEdit: !!editingChild,
+        hasPhoto: !!childData.photoUrl
+      });
 
       // Save to Supabase (via saveChild service)
       console.log('💾 Saving child:', { name: childData.name, id: childData.id, parentId: childData.parentId });
@@ -347,24 +330,24 @@ export default function InstructionsScreen() {
             console.log('🗑️ Deleting child:', childId, 'Name:', childName);
             setLoading(true);
             try {
-              // Remove from local state immediately for instant UI update
-              setChildren(prev => prev.filter(c => c.id !== childId));
-              const newInstructions = { ...instructions };
-              delete newInstructions[childId];
-              setInstructions(newInstructions);
-              
-              // Delete from storage/Supabase
+              // Delete from storage/Supabase first (wait for it to complete)
               const result = await deleteChild(childId);
               console.log('🗑️ Delete result:', result);
               
               if (result.success) {
+                // Remove from local state after successful delete
+                setChildren(prev => prev.filter(c => c.id !== childId && !c.id.startsWith('temp_')));
+                const newInstructions = { ...instructions };
+                delete newInstructions[childId];
+                setInstructions(newInstructions);
+                
                 // Reload children to ensure sync
                 await loadChildren();
                 Alert.alert('Success', 'Child deleted successfully');
               } else {
-                // If delete failed, reload to restore state
-                await loadChildren();
+                // If delete failed, show error and reload to restore state
                 console.error('❌ Delete failed:', result.error);
+                await loadChildren();
                 Alert.alert('Error', result.error?.message || 'Failed to delete child. Please try again.');
               }
             } catch (error: any) {

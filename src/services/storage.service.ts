@@ -270,7 +270,7 @@ export async function uploadFile(
         if ((uploadError as any).error) errorDetails.error = (uploadError as any).error;
         if ((uploadError as any).stack) errorDetails.stack = (uploadError as any).stack?.substring(0, 200);
         
-        console.error(`❌ Upload attempt ${attempt} failed:`, errorDetails);
+        console.error(`❌ Upload attempt ${attempt} failed:`, JSON.stringify(errorDetails, null, 2));
         
         // Check if it's a policy error (403) vs network error
         const statusCode = (uploadError as any).statusCode;

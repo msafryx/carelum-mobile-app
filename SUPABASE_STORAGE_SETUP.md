@@ -256,10 +256,30 @@ This is the most common issue. Try these steps:
   2. Check that your session is valid
   3. Verify Supabase auth is working (try other auth operations)
 
+## Child Images Bucket Setup
+
+Child photos are stored in a separate bucket called `child-images`. To set it up:
+
+1. **Run the SQL script**: `CREATE_CHILD_IMAGES_BUCKET.sql`
+   - This creates the `child-images` bucket
+   - Sets up RLS policies for child image uploads
+   - Allows parents to upload photos for their children
+
+2. **Path format**: `childImages/{userId}/{childId}_{timestamp}.jpg`
+   - Files are organized by parent user ID
+   - Each child photo has a unique filename with timestamp
+
+3. **Verify setup**:
+   - Go to Storage → `child-images` in Supabase Dashboard
+   - Check that the bucket exists and is public
+   - Verify 4 policies are active (INSERT, UPDATE, SELECT, DELETE)
+
 ## 📝 Notes
 
-- **Bucket Name**: Must be `profile-images` (with hyphen, lowercase)
-- **Path Format**: Files are stored as `{user_id}/{timestamp}.jpg`
+- **Profile Bucket Name**: Must be `profile-images` (with hyphen, lowercase)
+- **Child Images Bucket Name**: Must be `child-images` (with hyphen, lowercase)
+- **Profile Path Format**: Files are stored as `{user_id}/{timestamp}.jpg`
+- **Child Path Format**: Files are stored as `{user_id}/{childId}_{timestamp}.jpg`
 - **Public Access**: Required for images to display in the app
 - **File Size**: 5MB limit is recommended for profile pictures
 
