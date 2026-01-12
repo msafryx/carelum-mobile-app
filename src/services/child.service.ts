@@ -1,11 +1,13 @@
 /**
- * Child Service - Supabase
- * Handles child profile and instructions operations
+ * Child Service - REST API
+ * Handles child profile and instructions operations with AsyncStorage caching
  */
+import { API_ENDPOINTS } from '@/src/config/constants';
 import { isSupabaseConfigured, supabase } from '@/src/config/supabase';
 import { Child, ChildInstructions } from '@/src/types/child.types';
 import { ErrorCode, ServiceResult } from '@/src/types/error.types';
 import { handleUnexpectedError } from '@/src/utils/errorHandler';
+import { apiRequest } from './api-base.service';
 import { getNextChildNumber, getNextChildNumberFromLocal } from './child-number.service';
 
 /**
@@ -39,46 +41,26 @@ export async function getParentChildren(
       console.warn('⚠️ Failed to load from AsyncStorage, trying Supabase:', localError.message);
     }
 
-    // Fallback to Supabase
-    if (!isSupabaseConfigured() || !supabase) {
-      return {
-        success: false,
-        error: {
-          code: ErrorCode.DB_NOT_AVAILABLE,
-          message: 'Supabase is not configured',
-        },
-      };
+    // Fallback to API
+    const result = await apiRequest<any[]>(API_ENDPOINTS.CHILDREN);
+
+    if (!result.success) {
+      return result;
     }
 
-    const { data, error } = await supabase
-      .from('children')
-      .select('*')
-      .eq('parent_id', parentId)
-      .order('created_at', { ascending: false });
-
-    if (error) {
-      return {
-        success: false,
-        error: {
-          code: ErrorCode.DB_SELECT_ERROR,
-          message: `Failed to fetch children: ${error.message}`,
-        },
-      };
-    }
-
-    const children: Child[] = (data || []).map((row: any) => ({
-      id: row.id,
-      parentId: row.parent_id,
-      name: row.name,
-      age: row.age,
-      dateOfBirth: row.date_of_birth ? new Date(row.date_of_birth) : undefined,
-      gender: row.gender,
-      photoUrl: row.photo_url,
-      childNumber: row.child_number,
-      parentNumber: row.parent_number,
-      sitterNumber: row.sitter_number,
-      createdAt: new Date(row.created_at),
-      updatedAt: new Date(row.updated_at),
+    const children: Child[] = (result.data || []).map((apiChild: any) => ({
+      id: apiChild.id,
+      parentId: apiChild.parentId,
+      name: apiChild.name,
+      age: apiChild.age,
+      dateOfBirth: apiChild.dateOfBirth ? new Date(apiChild.dateOfBirth) : undefined,
+      gender: apiChild.gender,
+      photoUrl: apiChild.photoUrl,
+      childNumber: apiChild.childNumber,
+      parentNumber: apiChild.parentNumber,
+      sitterNumber: apiChild.sitterNumber,
+      createdAt: new Date(apiChild.createdAt),
+      updatedAt: new Date(apiChild.updatedAt),
     }));
 
     // Sync to AsyncStorage for next time
@@ -134,46 +116,27 @@ export async function getChildById(childId: string): Promise<ServiceResult<Child
       console.warn('⚠️ Failed to load from AsyncStorage:', localError.message);
     }
 
-    // Fallback to Supabase
-    if (!isSupabaseConfigured() || !supabase) {
-      return {
-        success: false,
-        error: {
-          code: ErrorCode.DB_NOT_AVAILABLE,
-          message: 'Supabase is not configured',
-        },
-      };
+    // Fallback to API
+    const result = await apiRequest<any>(API_ENDPOINTS.CHILD_BY_ID(childId));
+
+    if (!result.success) {
+      return result;
     }
 
-    const { data, error } = await supabase
-      .from('children')
-      .select('*')
-      .eq('id', childId)
-      .single();
-
-    if (error || !data) {
-      return {
-        success: false,
-        error: {
-          code: ErrorCode.DOCUMENT_NOT_FOUND,
-          message: 'Child not found',
-        },
-      };
-    }
-
+    const apiChild = result.data;
     const child: Child = {
-      id: data.id,
-      parentId: data.parent_id,
-      name: data.name,
-      age: data.age,
-      dateOfBirth: data.date_of_birth ? new Date(data.date_of_birth) : undefined,
-      gender: data.gender,
-      photoUrl: data.photo_url,
-      childNumber: data.child_number,
-      parentNumber: data.parent_number,
-      sitterNumber: data.sitter_number,
-      createdAt: new Date(data.created_at),
-      updatedAt: new Date(data.updated_at),
+      id: apiChild.id,
+      parentId: apiChild.parentId,
+      name: apiChild.name,
+      age: apiChild.age,
+      dateOfBirth: apiChild.dateOfBirth ? new Date(apiChild.dateOfBirth) : undefined,
+      gender: apiChild.gender,
+      photoUrl: apiChild.photoUrl,
+      childNumber: apiChild.childNumber,
+      parentNumber: apiChild.parentNumber,
+      sitterNumber: apiChild.sitterNumber,
+      createdAt: new Date(apiChild.createdAt),
+      updatedAt: new Date(apiChild.updatedAt),
     };
 
     return { success: true, data: child };
@@ -345,38 +308,43 @@ export async function saveChild(child: Child): Promise<ServiceResult<Child>> {
       // New child - use upsert to handle duplicates gracefully
       const tempId = savedChild.id;
       
-      // Sync to Supabase in background (fire and forget - instant return)
-      if (isSupabaseConfigured() && supabase) {
-        (async () => {
-          try {
-            console.log('💾 Background sync to Supabase...');
-            
-            // Use upsert to handle duplicates
-            const result = await supabase
-              .from('children')
-              .upsert(supabaseData, { 
-                onConflict: 'child_number',
-                ignoreDuplicates: false 
-              })
-              .select()
-              .single();
-            
-            if (result && result.data && !result.error) {
-              // Success - update AsyncStorage with real ID
-              const realChild = {
-                id: result.data.id,
-                parentId: result.data.parent_id,
-                name: result.data.name,
-                age: result.data.age,
-                dateOfBirth: result.data.date_of_birth ? new Date(result.data.date_of_birth) : undefined,
-                gender: result.data.gender,
-                photoUrl: result.data.photo_url,
-                childNumber: result.data.child_number,
-                parentNumber: result.data.parent_number,
-                sitterNumber: result.data.sitter_number,
-                createdAt: new Date(result.data.created_at),
-                updatedAt: new Date(result.data.updated_at),
-              };
+      // Sync to API in background (fire and forget - instant return)
+      (async () => {
+        try {
+          console.log('💾 Background sync to API...');
+          
+          const apiData = {
+            name: supabaseData.name,
+            age: supabaseData.age,
+            dateOfBirth: supabaseData.date_of_birth,
+            gender: supabaseData.gender,
+            photoUrl: supabaseData.photo_url,
+            childNumber: supabaseData.child_number,
+            parentNumber: supabaseData.parent_number,
+          };
+          
+          const result = await apiRequest<any>(API_ENDPOINTS.CHILDREN, {
+            method: 'POST',
+            body: JSON.stringify(apiData),
+          });
+          
+          if (result.success && result.data) {
+            // Success - update AsyncStorage with real ID
+            const apiChild = result.data;
+            const realChild = {
+              id: apiChild.id,
+              parentId: apiChild.parentId,
+              name: apiChild.name,
+              age: apiChild.age,
+              dateOfBirth: apiChild.dateOfBirth ? new Date(apiChild.dateOfBirth) : undefined,
+              gender: apiChild.gender,
+              photoUrl: apiChild.photoUrl,
+              childNumber: apiChild.childNumber,
+              parentNumber: apiChild.parentNumber,
+              sitterNumber: apiChild.sitterNumber,
+              createdAt: new Date(apiChild.createdAt),
+              updatedAt: new Date(apiChild.updatedAt),
+            };
               
               // Update AsyncStorage with real ID (replace temp ID)
               try {
@@ -399,14 +367,13 @@ export async function saveChild(child: Child): Promise<ServiceResult<Child>> {
               } catch (updateError) {
                 console.warn('⚠️ Failed to update AsyncStorage with real ID:', updateError);
               }
-            } else if (result && result.error) {
-              console.warn('⚠️ Background Supabase sync failed:', result.error.message);
-            }
-          } catch (error: any) {
-            console.warn('⚠️ Background Supabase sync error:', error.message);
+          } else {
+            console.warn('⚠️ Background API sync failed:', result.error?.message);
           }
-        })(); // IIFE - runs in background, doesn't block
-      }
+        } catch (error: any) {
+          console.warn('⚠️ Background API sync error:', error.message);
+        }
+      })(); // IIFE - runs in background, doesn't block
       
       // Return success IMMEDIATELY - no waiting
       return { success: true, data: savedChild };
@@ -414,51 +381,58 @@ export async function saveChild(child: Child): Promise<ServiceResult<Child>> {
       // Existing child (real ID) - sync in background (fire and forget - instant return)
       const realId = savedChild.id;
       
-      // Sync to Supabase in background (fire and forget - instant return)
-      if (isSupabaseConfigured() && supabase) {
-        (async () => {
-          try {
-            console.log('💾 Background update to Supabase:', realId);
-            
-            const result = await supabase
-              .from('children')
-              .update(supabaseData)
-              .eq('id', realId)
-              .select()
-              .single();
-            
-            if (result && result.data && !result.error) {
-              console.log('✅ Child updated in Supabase:', result.data.id);
-              // Update AsyncStorage with latest data from Supabase
-              try {
-                const { save, STORAGE_KEYS } = await import('./local-storage.service');
-                const updatedChild = {
-                  id: result.data.id,
-                  parentId: result.data.parent_id,
-                  childNumber: result.data.child_number,
-                  parentNumber: result.data.parent_number,
-                  sitterNumber: result.data.sitter_number,
-                  name: result.data.name,
-                  age: result.data.age,
-                  dateOfBirth: result.data.date_of_birth ? new Date(result.data.date_of_birth).getTime() : null,
-                  gender: result.data.gender,
-                  photoUrl: result.data.photo_url,
-                  createdAt: new Date(result.data.created_at).getTime(),
-                  updatedAt: new Date(result.data.updated_at).getTime(),
+      // Sync to API in background (fire and forget - instant return)
+      (async () => {
+        try {
+          console.log('💾 Background update to API:', realId);
+          
+          const apiData: any = {};
+          if (supabaseData.name !== undefined) apiData.name = supabaseData.name;
+          if (supabaseData.age !== undefined) apiData.age = supabaseData.age;
+          if (supabaseData.date_of_birth !== undefined) apiData.dateOfBirth = supabaseData.date_of_birth;
+          if (supabaseData.gender !== undefined) apiData.gender = supabaseData.gender;
+          if (supabaseData.photo_url !== undefined) apiData.photoUrl = supabaseData.photo_url;
+          if (supabaseData.child_number !== undefined) apiData.childNumber = supabaseData.child_number;
+          if (supabaseData.parent_number !== undefined) apiData.parentNumber = supabaseData.parent_number;
+          if (supabaseData.sitter_number !== undefined) apiData.sitterNumber = supabaseData.sitter_number;
+          
+          const result = await apiRequest<any>(API_ENDPOINTS.CHILD_BY_ID(realId), {
+            method: 'PUT',
+            body: JSON.stringify(apiData),
+          });
+          
+          if (result.success && result.data) {
+            console.log('✅ Child updated in API:', result.data.id);
+            // Update AsyncStorage with latest data from API
+            try {
+              const { save, STORAGE_KEYS } = await import('./local-storage.service');
+              const apiChild = result.data;
+              const updatedChild = {
+                id: apiChild.id,
+                parentId: apiChild.parentId,
+                childNumber: apiChild.childNumber,
+                parentNumber: apiChild.parentNumber,
+                sitterNumber: apiChild.sitterNumber,
+                name: apiChild.name,
+                  age: apiChild.age,
+                  dateOfBirth: apiChild.dateOfBirth ? new Date(apiChild.dateOfBirth).getTime() : null,
+                  gender: apiChild.gender,
+                  photoUrl: apiChild.photoUrl,
+                  createdAt: new Date(apiChild.createdAt).getTime(),
+                  updatedAt: new Date(apiChild.updatedAt).getTime(),
                 };
                 await save(STORAGE_KEYS.CHILDREN, updatedChild);
-                console.log('✅ AsyncStorage updated with Supabase data');
+                console.log('✅ AsyncStorage updated with API data');
               } catch (updateError) {
                 console.warn('⚠️ Failed to update AsyncStorage:', updateError);
               }
-            } else if (result && result.error) {
-              console.warn('⚠️ Background Supabase update failed:', result.error.message);
-            }
-          } catch (error: any) {
-            console.warn('⚠️ Background Supabase update error:', error.message);
+          } else {
+            console.warn('⚠️ Background API update failed:', result.error?.message);
           }
-        })(); // IIFE - runs in background, doesn't block
-      }
+        } catch (error: any) {
+          console.warn('⚠️ Background API update error:', error.message);
+        }
+      })(); // IIFE - runs in background, doesn't block
       
       // Return success IMMEDIATELY - no waiting
       return { success: true, data: savedChild };
@@ -516,27 +490,26 @@ export async function deleteChild(childId: string): Promise<ServiceResult<void>>
       console.warn('⚠️ Failed to delete from AsyncStorage:', localError.message);
     }
 
-    // Delete from Supabase in background (fire and forget - instant return)
-    if (!isTempId && isSupabaseConfigured() && supabase) {
+    // Delete from API in background (fire and forget - instant return)
+    if (!isTempId) {
       (async () => {
         try {
-          console.log('💾 Background delete from Supabase...');
-          const result = await supabase
-            .from('children')
-            .delete()
-            .eq('id', childId);
+          console.log('💾 Background delete from API...');
+          const result = await apiRequest<any>(API_ENDPOINTS.CHILD_BY_ID(childId), {
+            method: 'DELETE',
+          });
 
-          if (result && result.error) {
-            console.warn('⚠️ Background Supabase delete failed:', result.error.message);
+          if (!result.success) {
+            console.warn('⚠️ Background API delete failed:', result.error?.message);
           } else {
-            console.log('✅ Child deleted from Supabase (child_instructions deleted via cascade)');
+            console.log('✅ Child deleted from API (child_instructions deleted via cascade)');
           }
         } catch (error: any) {
-          console.warn('⚠️ Background Supabase delete error:', error.message);
+          console.warn('⚠️ Background API delete error:', error.message);
         }
       })(); // IIFE - runs in background, doesn't block
-    } else if (isTempId) {
-      console.log('⚠️ Skipping Supabase delete for temp ID:', childId);
+    } else {
+      console.log('⚠️ Skipping API delete for temp ID:', childId);
     }
 
     // Return success IMMEDIATELY - no waiting
@@ -557,61 +530,44 @@ export async function getChildInstructions(
   childId: string
 ): Promise<ServiceResult<ChildInstructions | null>> {
   try {
-    if (!isSupabaseConfigured() || !supabase) {
-      return {
-        success: false,
-        error: {
-          code: ErrorCode.DB_NOT_AVAILABLE,
-          message: 'Supabase is not configured',
-        },
-      };
-    }
+    const result = await apiRequest<any>(API_ENDPOINTS.CHILD_INSTRUCTIONS(childId));
 
-    const { data, error } = await supabase
-      .from('child_instructions')
-      .select('*')
-      .eq('child_id', childId)
-      .limit(1)
-      .single();
-
-    if (error) {
-      if (error.code === 'PGRST116') {
-        // No rows returned
+    if (!result.success) {
+      // If not found, return null instead of error
+      const errorCode = result.error?.code as string;
+      if (errorCode === 'CHILD_NOT_FOUND' || errorCode === 'DOCUMENT_NOT_FOUND') {
         return { success: true, data: null };
       }
-      return {
-        success: false,
-        error: {
-          code: ErrorCode.DB_SELECT_ERROR,
-          message: `Failed to fetch instructions: ${error.message}`,
-        },
-      };
+      return result;
     }
 
-    if (!data) {
+    const apiData = result.data;
+    
+    // Handle empty instructions (id is empty string)
+    if (!apiData.id || apiData.id === '') {
       return { success: true, data: null };
     }
 
-    // Parse JSON fields
+    // Parse JSON fields if needed
     const instructions: ChildInstructions = {
-      id: data.id,
-      childId: data.child_id,
-      parentId: data.parent_id,
-      feedingSchedule: data.feeding_schedule,
-      napSchedule: data.nap_schedule,
-      bedtime: data.bedtime,
-      dietaryRestrictions: data.dietary_restrictions,
-      allergies: data.allergies ? (typeof data.allergies === 'string' ? JSON.parse(data.allergies) : data.allergies) : [],
-      medications: data.medications ? (typeof data.medications === 'string' ? JSON.parse(data.medications) : data.medications) : [],
-      favoriteActivities: data.favorite_activities ? (typeof data.favorite_activities === 'string' ? JSON.parse(data.favorite_activities) : data.favorite_activities) : [],
-      comfortItems: data.comfort_items ? (typeof data.comfort_items === 'string' ? JSON.parse(data.comfort_items) : data.comfort_items) : [],
-      routines: data.routines,
-      specialNeeds: data.special_needs,
-      emergencyContacts: data.emergency_contacts ? (typeof data.emergency_contacts === 'string' ? JSON.parse(data.emergency_contacts) : data.emergency_contacts) : [],
-      doctorInfo: data.doctor_info ? (typeof data.doctor_info === 'string' ? JSON.parse(data.doctor_info) : data.doctor_info) : null,
-      additionalNotes: data.additional_notes,
-      createdAt: new Date(data.created_at),
-      updatedAt: new Date(data.updated_at),
+      id: apiData.id,
+      childId: apiData.childId,
+      parentId: apiData.parentId,
+      feedingSchedule: apiData.feedingSchedule,
+      napSchedule: apiData.napSchedule,
+      bedtime: apiData.bedtime,
+      dietaryRestrictions: apiData.dietaryRestrictions,
+      allergies: apiData.allergies ? (typeof apiData.allergies === 'string' ? JSON.parse(apiData.allergies) : apiData.allergies) : [],
+      medications: apiData.medications ? (typeof apiData.medications === 'string' ? JSON.parse(apiData.medications) : apiData.medications) : [],
+      favoriteActivities: apiData.favoriteActivities ? (typeof apiData.favoriteActivities === 'string' ? JSON.parse(apiData.favoriteActivities) : apiData.favoriteActivities) : [],
+      comfortItems: apiData.comfortItems ? (typeof apiData.comfortItems === 'string' ? JSON.parse(apiData.comfortItems) : apiData.comfortItems) : [],
+      routines: apiData.routines,
+      specialNeeds: apiData.specialNeeds,
+      emergencyContacts: apiData.emergencyContacts ? (typeof apiData.emergencyContacts === 'string' ? JSON.parse(apiData.emergencyContacts) : apiData.emergencyContacts) : [],
+      doctorInfo: apiData.doctorInfo ? (typeof apiData.doctorInfo === 'string' ? JSON.parse(apiData.doctorInfo) : apiData.doctorInfo) : null,
+      additionalNotes: apiData.additionalNotes,
+      createdAt: new Date(apiData.createdAt),
+      updatedAt: new Date(apiData.updatedAt),
     };
 
     return { success: true, data: instructions };
@@ -723,36 +679,44 @@ export async function saveChildInstructions(
       // Update existing - sync in background
       (async () => {
         try {
-          console.log('💾 Background update instructions in Supabase:', instructions.id);
-          const result = await supabase
-            .from('child_instructions')
-            .update(supabaseData)
-            .eq('id', instructions.id)
-            .select()
-            .single();
+          console.log('💾 Background update instructions in API:', instructions.id);
+          
+          const apiData: any = {};
+          if (supabaseData.feeding_schedule !== undefined) apiData.feedingSchedule = supabaseData.feeding_schedule;
+          if (supabaseData.nap_schedule !== undefined) apiData.napSchedule = supabaseData.nap_schedule;
+          if (supabaseData.medication !== undefined) apiData.medication = supabaseData.medication;
+          if (supabaseData.allergies !== undefined) apiData.allergies = supabaseData.allergies;
+          if (supabaseData.emergency_contacts !== undefined) apiData.emergencyContacts = supabaseData.emergency_contacts;
+          if (supabaseData.special_instructions !== undefined) apiData.specialInstructions = supabaseData.special_instructions;
+          
+          const result = await apiRequest<any>(API_ENDPOINTS.CHILD_INSTRUCTIONS(instructions.childId), {
+            method: 'PUT',
+            body: JSON.stringify(apiData),
+          });
 
-          if (result && result.data && !result.error) {
+          if (result.success && result.data) {
+            const apiData = result.data;
             const updatedInstructions = {
-              id: result.data.id,
-              childId: result.data.child_id,
-              parentId: result.data.parent_id,
-              feedingSchedule: result.data.feeding_schedule,
-              napSchedule: result.data.nap_schedule,
-              bedtime: result.data.bedtime,
-              dietaryRestrictions: result.data.dietary_restrictions,
-              allergies: result.data.allergies ? (typeof result.data.allergies === 'string' ? JSON.parse(result.data.allergies) : result.data.allergies) : [],
-              medications: result.data.medications ? (typeof result.data.medications === 'string' ? JSON.parse(result.data.medications) : result.data.medications) : [],
-              favoriteActivities: result.data.favorite_activities ? (typeof result.data.favorite_activities === 'string' ? JSON.parse(result.data.favorite_activities) : result.data.favorite_activities) : [],
-              comfortItems: result.data.comfort_items ? (typeof result.data.comfort_items === 'string' ? JSON.parse(result.data.comfort_items) : result.data.comfort_items) : [],
-              routines: result.data.routines,
-              specialNeeds: result.data.special_needs,
-              emergencyContacts: result.data.emergency_contacts ? (typeof result.data.emergency_contacts === 'string' ? JSON.parse(result.data.emergency_contacts) : result.data.emergency_contacts) : [],
-              doctorInfo: result.data.doctor_info ? (typeof result.data.doctor_info === 'string' ? JSON.parse(result.data.doctor_info) : result.data.doctor_info) : null,
-              additionalNotes: result.data.additional_notes,
-              createdAt: new Date(result.data.created_at),
-              updatedAt: new Date(result.data.updated_at),
+              id: apiData.id,
+              childId: apiData.childId,
+              parentId: apiData.parentId,
+              feedingSchedule: apiData.feedingSchedule,
+              napSchedule: apiData.napSchedule,
+              bedtime: apiData.bedtime,
+              dietaryRestrictions: apiData.dietaryRestrictions,
+              allergies: apiData.allergies ? (typeof apiData.allergies === 'string' ? JSON.parse(apiData.allergies) : apiData.allergies) : [],
+              medications: apiData.medications ? (typeof apiData.medications === 'string' ? JSON.parse(apiData.medications) : apiData.medications) : [],
+              favoriteActivities: apiData.favoriteActivities ? (typeof apiData.favoriteActivities === 'string' ? JSON.parse(apiData.favoriteActivities) : apiData.favoriteActivities) : [],
+              comfortItems: apiData.comfortItems ? (typeof apiData.comfortItems === 'string' ? JSON.parse(apiData.comfortItems) : apiData.comfortItems) : [],
+              routines: apiData.routines,
+              specialNeeds: apiData.specialNeeds,
+              emergencyContacts: apiData.emergencyContacts ? (typeof apiData.emergencyContacts === 'string' ? JSON.parse(apiData.emergencyContacts) : apiData.emergencyContacts) : [],
+              doctorInfo: apiData.doctorInfo ? (typeof apiData.doctorInfo === 'string' ? JSON.parse(apiData.doctorInfo) : apiData.doctorInfo) : null,
+              additionalNotes: apiData.additionalNotes,
+              createdAt: new Date(apiData.createdAt),
+              updatedAt: new Date(apiData.updatedAt),
             };
-            console.log('✅ Instructions updated in Supabase:', updatedInstructions.id);
+            console.log('✅ Instructions updated in API:', updatedInstructions.id);
             
             // Update AsyncStorage with latest data
             try {
@@ -765,49 +729,55 @@ export async function saveChildInstructions(
             } catch (updateError) {
               console.warn('⚠️ Failed to update AsyncStorage:', updateError);
             }
-          } else if (result && result.error) {
-            console.warn('⚠️ Background Supabase update failed:', result.error.message);
+          } else {
+            console.warn('⚠️ Background API update failed:', result.error?.message);
           }
         } catch (error: any) {
-          console.warn('⚠️ Background Supabase update error:', error.message);
+          console.warn('⚠️ Background API update error:', error.message);
         }
       })(); // IIFE - runs in background, doesn't block
     } else {
       // Create new - sync in background
       (async () => {
         try {
-          console.log('💾 Background create instructions in Supabase...');
-          const result = await supabase
-            .from('child_instructions')
-            .upsert(supabaseData, { 
-              onConflict: 'child_id',
-              ignoreDuplicates: false 
-            })
-            .select()
-            .single();
+          console.log('💾 Background create instructions in API...');
+          
+          const apiData: any = {};
+          if (supabaseData.feeding_schedule !== undefined) apiData.feedingSchedule = supabaseData.feeding_schedule;
+          if (supabaseData.nap_schedule !== undefined) apiData.napSchedule = supabaseData.nap_schedule;
+          if (supabaseData.medication !== undefined) apiData.medication = supabaseData.medication;
+          if (supabaseData.allergies !== undefined) apiData.allergies = supabaseData.allergies;
+          if (supabaseData.emergency_contacts !== undefined) apiData.emergencyContacts = supabaseData.emergency_contacts;
+          if (supabaseData.special_instructions !== undefined) apiData.specialInstructions = supabaseData.special_instructions;
+          
+          const result = await apiRequest<any>(API_ENDPOINTS.CHILD_INSTRUCTIONS(instructions.childId), {
+            method: 'PUT',
+            body: JSON.stringify(apiData),
+          });
 
-          if (result && result.data && !result.error) {
+          if (result.success && result.data) {
+            const apiData = result.data;
             const createdInstructions = {
-              id: result.data.id,
-              childId: result.data.child_id,
-              parentId: result.data.parent_id,
-              feedingSchedule: result.data.feeding_schedule,
-              napSchedule: result.data.nap_schedule,
-              bedtime: result.data.bedtime,
-              dietaryRestrictions: result.data.dietary_restrictions,
-              allergies: result.data.allergies ? (typeof result.data.allergies === 'string' ? JSON.parse(result.data.allergies) : result.data.allergies) : [],
-              medications: result.data.medications ? (typeof result.data.medications === 'string' ? JSON.parse(result.data.medications) : result.data.medications) : [],
-              favoriteActivities: result.data.favorite_activities ? (typeof result.data.favorite_activities === 'string' ? JSON.parse(result.data.favorite_activities) : result.data.favorite_activities) : [],
-              comfortItems: result.data.comfort_items ? (typeof result.data.comfort_items === 'string' ? JSON.parse(result.data.comfort_items) : result.data.comfort_items) : [],
-              routines: result.data.routines,
-              specialNeeds: result.data.special_needs,
-              emergencyContacts: result.data.emergency_contacts ? (typeof result.data.emergency_contacts === 'string' ? JSON.parse(result.data.emergency_contacts) : result.data.emergency_contacts) : [],
-              doctorInfo: result.data.doctor_info ? (typeof result.data.doctor_info === 'string' ? JSON.parse(result.data.doctor_info) : result.data.doctor_info) : null,
-              additionalNotes: result.data.additional_notes,
-              createdAt: new Date(result.data.created_at),
-              updatedAt: new Date(result.data.updated_at),
+              id: apiData.id,
+              childId: apiData.childId,
+              parentId: apiData.parentId,
+              feedingSchedule: apiData.feedingSchedule,
+              napSchedule: apiData.napSchedule,
+              bedtime: apiData.bedtime,
+              dietaryRestrictions: apiData.dietaryRestrictions,
+              allergies: apiData.allergies ? (typeof apiData.allergies === 'string' ? JSON.parse(apiData.allergies) : apiData.allergies) : [],
+              medications: apiData.medications ? (typeof apiData.medications === 'string' ? JSON.parse(apiData.medications) : apiData.medications) : [],
+              favoriteActivities: apiData.favoriteActivities ? (typeof apiData.favoriteActivities === 'string' ? JSON.parse(apiData.favoriteActivities) : apiData.favoriteActivities) : [],
+              comfortItems: apiData.comfortItems ? (typeof apiData.comfortItems === 'string' ? JSON.parse(apiData.comfortItems) : apiData.comfortItems) : [],
+              routines: apiData.routines,
+              specialNeeds: apiData.specialNeeds,
+              emergencyContacts: apiData.emergencyContacts ? (typeof apiData.emergencyContacts === 'string' ? JSON.parse(apiData.emergencyContacts) : apiData.emergencyContacts) : [],
+              doctorInfo: apiData.doctorInfo ? (typeof apiData.doctorInfo === 'string' ? JSON.parse(apiData.doctorInfo) : apiData.doctorInfo) : null,
+              additionalNotes: apiData.additionalNotes,
+              createdAt: new Date(apiData.createdAt),
+              updatedAt: new Date(apiData.updatedAt),
             };
-            console.log('✅ Instructions created/updated in Supabase:', createdInstructions.id);
+            console.log('✅ Instructions created/updated in API:', createdInstructions.id);
             
             // Update AsyncStorage with real ID (replace temp ID)
             try {
@@ -818,15 +788,15 @@ export async function saveChildInstructions(
                 createdAt: createdInstructions.createdAt.getTime(),
                 updatedAt: createdInstructions.updatedAt.getTime(),
               });
-              console.log('✅ AsyncStorage updated with real ID from Supabase');
+              console.log('✅ AsyncStorage updated with real ID from API');
             } catch (updateError) {
               console.warn('⚠️ Failed to update AsyncStorage:', updateError);
             }
-          } else if (result && result.error) {
-            console.warn('⚠️ Background Supabase create failed:', result.error.message);
+          } else {
+            console.warn('⚠️ Background API create failed:', result.error?.message);
           }
         } catch (error: any) {
-          console.warn('⚠️ Background Supabase create error:', error.message);
+          console.warn('⚠️ Background API create error:', error.message);
         }
       })(); // IIFE - runs in background, doesn't block
     }

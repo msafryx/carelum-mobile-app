@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 env_path = Path(__file__).parent.parent / '.env'
 load_dotenv(dotenv_path=env_path)
 
-from app.routes import predict, bot, users, admin
+from app.routes import predict, bot, users, admin, sessions, children, alerts, gps, messages
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -73,6 +73,11 @@ app.include_router(predict.router, prefix="/predict", tags=["prediction"])
 app.include_router(bot.router, prefix="/bot", tags=["bot"])
 app.include_router(users.router, prefix="/api/users", tags=["users"])
 app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
+app.include_router(sessions.router, prefix="/api/sessions", tags=["sessions"])
+app.include_router(children.router, prefix="/api/children", tags=["children"])
+app.include_router(alerts.router, prefix="/api/alerts", tags=["alerts"])
+app.include_router(gps.router, prefix="/api/gps", tags=["gps"])
+app.include_router(messages.router, prefix="/api", tags=["messages"])
 
 # Health check endpoint
 @app.get("/health")
@@ -96,6 +101,26 @@ async def root():
             "admin": {
                 "users": "/api/admin/users",
                 "stats": "/api/admin/stats"
+            },
+            "sessions": {
+                "list": "/api/sessions",
+                "by_id": "/api/sessions/{session_id}"
+            },
+            "children": {
+                "list": "/api/children",
+                "by_id": "/api/children/{child_id}",
+                "instructions": "/api/children/{child_id}/instructions"
+            },
+            "alerts": {
+                "list": "/api/alerts",
+                "by_id": "/api/alerts/{alert_id}"
+            },
+            "gps": {
+                "track": "/api/gps/track",
+                "session_history": "/api/gps/sessions/{session_id}/gps"
+            },
+            "messages": {
+                "session_messages": "/api/sessions/{session_id}/messages"
             }
         }
     }

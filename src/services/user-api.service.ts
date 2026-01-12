@@ -2,6 +2,7 @@
  * User API Service
  * Handles all user/profile API calls to the backend
  */
+import { supabase } from '@/src/config/supabase';
 import { ServiceResult } from '@/src/types/error.types';
 import { User } from '@/src/types/user.types';
 import {
@@ -10,7 +11,6 @@ import {
   handleUnexpectedError,
   retryWithBackoff,
 } from '@/src/utils/errorHandler';
-import { supabase } from '@/src/config/supabase';
 
 // Base API URL - should be configured via environment variable
 const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:8000';
@@ -104,6 +104,9 @@ function apiResponseToUser(apiUser: any): User {
     verificationStatus: apiUser.verificationStatus,
     hourlyRate: apiUser.hourlyRate,
     bio: apiUser.bio,
+    address: apiUser.address,
+    city: apiUser.city,
+    country: apiUser.country,
   };
 }
 
@@ -124,6 +127,180 @@ export async function getCurrentUserProfileFromAPI(): Promise<ServiceResult<User
 }
 
 /**
+ * Update auth user metadata (for display_name sync)
+ */
+async function updateAuthMetadata(displayName?: string): Promise<void> {
+  try {
+    if (!displayName) return;
+    
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+
+    // Update auth metadata to keep display_name in sync
+    const { error } = await supabase.auth.updateUser({
+      data: {
+        display_name: displayName,
+        full_name: displayName, // Also set full_name for compatibility
+      },
+    });
+
+    if (error) {
+      console.warn('⚠️ Failed to update auth metadata:', error);
+    } else {
+      console.log('✅ Auth metadata updated with display_name:', displayName);
+    }
+  } catch (error: any) {
+    console.warn('⚠️ Exception updating auth metadata:', error);
+    // Don't throw - this is a non-critical sync operation
+  }
+}
+
+/**
+ * Ensure user row exists in users table (create if missing)
+ */
+export async function ensureUserRowExists(userId: string, email: string, displayName?: string): Promise<ServiceResult<void>> {
+  try {
+    // Check if user exists in users table
+    const { data: existingUser, error: fetchError } = await supabase
+      .from('users')
+      .select('id')
+      .eq('id', userId)
+      .single();
+
+    if (fetchError && fetchError.code !== 'PGRST116') { // PGRST116 = not found
+      console.warn('⚠️ Error checking user existence:', fetchError);
+    }
+
+    if (existingUser) {
+      // User exists - check if display_name needs updating
+      if (displayName) {
+        const { data: currentUser } = await supabase
+          .from('users')
+          .select('display_name')
+          .eq('id', userId)
+          .single();
+        
+        // Update display_name if it's missing or different
+        if (!currentUser?.display_name || currentUser.display_name !== displayName) {
+          console.log('📝 Updating display_name for existing user...');
+          const { error: updateError } = await supabase
+            .from('users')
+            .update({
+              display_name: displayName,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', userId);
+          
+          if (updateError) {
+            console.warn('⚠️ Failed to update display_name:', updateError);
+          } else {
+            console.log('✅ Display name updated for existing user');
+          }
+        }
+      }
+      return { success: true };
+    }
+
+    // User doesn't exist, create it using the RPC function
+    console.log('📝 User row missing, creating via RPC...');
+    let rpcError = null;
+    let rpcResult = await supabase.rpc('create_user_profile', {
+      p_id: userId,
+      p_email: email,
+      p_display_name: displayName || email.split('@')[0],
+      p_role: 'parent', // Default, will be updated if needed
+      p_preferred_language: 'en',
+      p_user_number: null, // Let DB generate or set later to avoid conflicts
+      p_phone_number: null,
+      p_photo_url: null,
+      p_theme: 'auto',
+      p_is_verified: false,
+      p_verification_status: null,
+      p_hourly_rate: null,
+      p_bio: null,
+    });
+
+    rpcError = rpcResult.error;
+
+    // If RPC fails due to duplicate user_number or other conflict, try direct insert/update
+    if (rpcError) {
+      console.warn('⚠️ RPC failed, trying direct insert/update:', rpcError.message);
+      
+      // Check if row exists (might have been created by trigger)
+      const { data: existingRow } = await supabase
+        .from('users')
+        .select('id')
+        .eq('id', userId)
+        .single();
+      
+      if (existingRow) {
+        // Row exists, just update display_name
+        const { error: updateError } = await supabase
+          .from('users')
+          .update({
+            display_name: displayName || email.split('@')[0],
+            email: email,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', userId);
+        
+        if (updateError) {
+          console.error('❌ Failed to update user row:', updateError);
+          return {
+            success: false,
+            error: {
+              code: 'CREATE_USER_ERROR',
+              message: `Failed to update user row: ${updateError.message}`,
+            },
+          };
+        }
+        console.log('✅ User row updated with display_name');
+        return { success: true };
+      } else {
+        // Row doesn't exist, try insert without user_number
+        const { error: insertError } = await supabase
+          .from('users')
+          .insert({
+            id: userId,
+            email: email,
+            display_name: displayName || email.split('@')[0],
+            role: 'parent',
+            preferred_language: 'en',
+            user_number: null, // Skip to avoid conflicts
+            theme: 'auto',
+            is_verified: false,
+          });
+        
+        if (insertError) {
+          console.error('❌ Failed to insert user row:', insertError);
+          return {
+            success: false,
+            error: {
+              code: 'CREATE_USER_ERROR',
+              message: `Failed to create user row: ${insertError.message}`,
+            },
+          };
+        }
+        console.log('✅ User row created with display_name');
+        return { success: true };
+      }
+    }
+
+    console.log('✅ User row created successfully via RPC');
+    return { success: true };
+  } catch (error: any) {
+    console.error('❌ Exception ensuring user row exists:', error);
+    return {
+      success: false,
+      error: {
+        code: 'CREATE_USER_ERROR',
+        message: `Failed to ensure user row exists: ${error.message}`,
+      },
+    };
+  }
+}
+
+/**
  * Update current user profile via API
  */
 export async function updateUserProfileViaAPI(
@@ -138,14 +315,31 @@ export async function updateUserProfileViaAPI(
   if (updates.theme !== undefined) apiUpdates.theme = updates.theme;
   if (updates.bio !== undefined) apiUpdates.bio = updates.bio;
   if (updates.hourlyRate !== undefined) apiUpdates.hourlyRate = updates.hourlyRate;
+  // Include address, city, country - use 'in' operator to allow null values to be sent
+  if ('address' in updates) apiUpdates.address = updates.address;
+  if ('city' in updates) apiUpdates.city = updates.city;
+  if ('country' in updates) apiUpdates.country = updates.country;
+
+  console.log('📤 Sending profile update to API:', JSON.stringify(apiUpdates, null, 2));
 
   const result = await apiRequest<any>('/api/users/me', {
     method: 'PUT',
     body: JSON.stringify(apiUpdates),
   });
 
+  console.log('📥 API response:', result);
+
   if (!result.success) {
+    // Don't log as error - this is expected when API is down, fallback will handle it
+    console.warn('⚠️ API update failed (fallback will handle):', result.error?.code || 'UNKNOWN_ERROR');
     return result;
+  }
+
+  console.log('✅ API update successful, converting response...');
+  
+  // Sync display_name to auth metadata if it was updated
+  if (updates.displayName !== undefined) {
+    await updateAuthMetadata(updates.displayName);
   }
 
   return {

@@ -128,3 +128,80 @@ export function calculateAge(dateOfBirth: Date | string | null | undefined): num
   
   return Math.max(0, age); // Ensure age is not negative
 }
+
+/**
+ * Calculate age with months from date of birth
+ * @param dateOfBirth - Date of birth
+ * @returns Object with years and months, or null if invalid
+ */
+export function calculateAgeWithMonths(
+  dateOfBirth: Date | string | null | undefined
+): { years: number; months: number; totalMonths: number } | null {
+  if (!dateOfBirth) return null;
+  
+  const dob = typeof dateOfBirth === 'string' ? new Date(dateOfBirth) : dateOfBirth;
+  if (isNaN(dob.getTime())) return null;
+  
+  const today = new Date();
+  let years = today.getFullYear() - dob.getFullYear();
+  let months = today.getMonth() - dob.getMonth();
+  
+  // Adjust if birthday hasn't occurred this month yet
+  if (today.getDate() < dob.getDate()) {
+    months--;
+  }
+  
+  // Adjust if months is negative
+  if (months < 0) {
+    months += 12;
+    years--;
+  }
+  
+  const totalMonths = years * 12 + months;
+  
+  return {
+    years: Math.max(0, years),
+    months: Math.max(0, months),
+    totalMonths: Math.max(0, totalMonths),
+  };
+}
+
+/**
+ * Format age with months for display
+ * @param dateOfBirth - Date of birth
+ * @returns Formatted age string (e.g., "1 year 3 months", "15 months", "2 years")
+ */
+export function formatAgeWithMonths(
+  dateOfBirth: Date | string | null | undefined
+): string {
+  const ageData = calculateAgeWithMonths(dateOfBirth);
+  
+  if (!ageData) return 'Age not available';
+  
+  const { years, months, totalMonths } = ageData;
+  
+  // If less than 1 year, show only months
+  if (years === 0) {
+    if (totalMonths === 0) {
+      return 'Newborn';
+    }
+    return `${totalMonths} month${totalMonths !== 1 ? 's' : ''}`;
+  }
+  
+  // If exactly 1 year with no extra months
+  if (years === 1 && months === 0) {
+    return '1 year';
+  }
+  
+  // If 1 year with months
+  if (years === 1) {
+    return `1 year ${months} month${months !== 1 ? 's' : ''}`;
+  }
+  
+  // Multiple years
+  if (months === 0) {
+    return `${years} years`;
+  }
+  
+  return `${years} years ${months} month${months !== 1 ? 's' : ''}`;
+}

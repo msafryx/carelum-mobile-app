@@ -4,6 +4,7 @@
  */
 import { isSupabaseConfigured, supabase } from '@/src/config/supabase';
 import { getCurrentUserProfile } from '@/src/services/auth.service';
+import { sessionManager } from '@/src/services/session-manager.service';
 import { User } from '@/src/types/user.types';
 import { useEffect, useState } from 'react';
 
@@ -57,6 +58,8 @@ export function useAuth() {
         await loadUserProfile(session.user);
       } else {
         console.log('👤 No user session');
+        // Clear session manager if no user
+        sessionManager.clearSession();
         setAuthState({
           user: null,
           userProfile: null,
@@ -75,22 +78,27 @@ export function useAuth() {
     try {
       console.log('🔍 Loading user profile...');
       
-      // Get profile (will return minimal profile if fetch fails - instant UI)
-      const result = await getCurrentUserProfile();
+      // Initialize session with SessionManager
+      const sessionResult = await sessionManager.initializeSession(user.id);
       
-      if (result.success && result.data) {
-        console.log('✅ User profile loaded:', result.data.email, result.data.role);
+      if (sessionResult.success && sessionResult.data) {
+        console.log('✅ User profile loaded via SessionManager:', sessionResult.data.email, sessionResult.data.role);
+        setAuthState({
+          user,
+          userProfile: sessionResult.data,
+          loading: false,
+          initialized: true,
+        });
       } else {
-        console.warn('⚠️ User profile load failed, using minimal profile');
+        // Fallback to getCurrentUserProfile
+        const result = await getCurrentUserProfile();
+        setAuthState({
+          user,
+          userProfile: result.success ? result.data || null : null,
+          loading: false,
+          initialized: true,
+        });
       }
-      
-      // Always set state - getCurrentUserProfile now always returns a profile
-      setAuthState({
-        user,
-        userProfile: result.success ? result.data || null : null,
-        loading: false,
-        initialized: true,
-      });
     } catch (error) {
       console.error('❌ Failed to load user profile:', error);
       // Still set state - user is authenticated
@@ -107,7 +115,20 @@ export function useAuth() {
     if (!supabase) return;
     const { data: { user } } = await supabase.auth.getUser();
     if (user) {
-      await loadUserProfile(user);
+      // Use SessionManager for professional refresh
+      try {
+        const result = await sessionManager.forceSync();
+        if (result.success && result.data) {
+          setAuthState(prev => ({
+            ...prev,
+            userProfile: result.data!,
+          }));
+        } else {
+          await loadUserProfile(user);
+        }
+      } catch (error) {
+        await loadUserProfile(user);
+      }
     }
   };
 

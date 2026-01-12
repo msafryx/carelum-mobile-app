@@ -1,10 +1,13 @@
 /**
- * Alert Service - Supabase
+ * Alert Service - REST API
  * Handles alert creation and management with real-time subscriptions
  */
 import { isSupabaseConfigured, supabase } from '@/src/config/supabase';
 import { ErrorCode, ServiceResult } from '@/src/types/error.types';
 import { handleUnexpectedError } from '@/src/utils/errorHandler';
+import { apiRequest } from './api-base.service';
+import { API_ENDPOINTS } from '@/src/config/constants';
+import { executeWrite } from './supabase-write.service';
 
 export interface Alert {
   id?: string;
@@ -43,7 +46,7 @@ export async function createAlert(alertData: Omit<Alert, 'id' | 'createdAt'>): P
       };
     }
 
-    const { data, error } = await supabase
+    const insertRes = await executeWrite(() => supabase
       .from('alerts')
       .insert({
         session_id: alertData.sessionId || null,
@@ -62,14 +65,17 @@ export async function createAlert(alertData: Omit<Alert, 'id' | 'createdAt'>): P
         resolved_at: null,
       })
       .select()
-      .single();
+      .single(), 'alerts_insert');
+
+    const data = insertRes.data;
+    const error = insertRes.error;
 
     if (error) {
       return {
         success: false,
         error: {
           code: ErrorCode.DB_INSERT_ERROR,
-          message: `Failed to create alert: ${error.message}`,
+          message: `Failed to create alert: ${error.message || JSON.stringify(error)}`,
         },
       };
     }
@@ -137,56 +143,33 @@ export async function getUserAlerts(
   status?: Alert['status']
 ): Promise<ServiceResult<Alert[]>> {
   try {
-    if (!isSupabaseConfigured() || !supabase) {
-      return {
-        success: false,
-        error: {
-          code: ErrorCode.DB_NOT_AVAILABLE,
-          message: 'Supabase is not configured',
-        },
-      };
+    const endpoint = status 
+      ? `${API_ENDPOINTS.ALERTS}?status=${status}`
+      : API_ENDPOINTS.ALERTS;
+
+    const result = await apiRequest<any[]>(endpoint);
+
+    if (!result.success) {
+      return result;
     }
 
-    let query = supabase
-      .from('alerts')
-      .select('*')
-      .eq('parent_id', userId)
-      .order('created_at', { ascending: false })
-      .limit(50);
-
-    if (status) {
-      query = query.eq('status', status);
-    }
-
-    const { data, error } = await query;
-
-    if (error) {
-      return {
-        success: false,
-        error: {
-          code: ErrorCode.DB_SELECT_ERROR,
-          message: `Failed to fetch alerts: ${error.message}`,
-        },
-      };
-    }
-
-    const alerts: Alert[] = (data || []).map((row: any) => ({
-      id: row.id,
-      sessionId: row.session_id,
-      childId: row.child_id,
-      parentId: row.parent_id,
-      sitterId: row.sitter_id,
-      type: row.type,
-      severity: row.severity,
-      title: row.title,
-      message: row.message,
-      status: row.status,
-      audioLogId: row.audio_log_id,
-      location: row.location ? (typeof row.location === 'string' ? JSON.parse(row.location) : row.location) : undefined,
-      viewedAt: row.viewed_at ? new Date(row.viewed_at) : undefined,
-      acknowledgedAt: row.acknowledged_at ? new Date(row.acknowledged_at) : undefined,
-      resolvedAt: row.resolved_at ? new Date(row.resolved_at) : undefined,
-      createdAt: new Date(row.created_at),
+    const alerts: Alert[] = (result.data || []).map((apiAlert: any) => ({
+      id: apiAlert.id,
+      sessionId: apiAlert.sessionId,
+      childId: apiAlert.childId,
+      parentId: apiAlert.parentId,
+      sitterId: apiAlert.sitterId,
+      type: apiAlert.type,
+      severity: apiAlert.severity,
+      title: apiAlert.title,
+      message: apiAlert.message,
+      status: apiAlert.status,
+      audioLogId: apiAlert.audioLogId,
+      location: apiAlert.location,
+      viewedAt: apiAlert.viewedAt ? new Date(apiAlert.viewedAt) : undefined,
+      acknowledgedAt: apiAlert.acknowledgedAt ? new Date(apiAlert.acknowledgedAt) : undefined,
+      resolvedAt: apiAlert.resolvedAt ? new Date(apiAlert.resolvedAt) : undefined,
+      createdAt: new Date(apiAlert.createdAt),
     }));
 
     return { success: true, data: alerts };
@@ -203,32 +186,12 @@ export async function getUserAlerts(
  */
 export async function markAlertAsViewed(alertId: string): Promise<ServiceResult<void>> {
   try {
-    if (!isSupabaseConfigured() || !supabase) {
-      return {
-        success: false,
-        error: {
-          code: ErrorCode.DB_NOT_AVAILABLE,
-          message: 'Supabase is not configured',
-        },
-      };
-    }
+    const result = await apiRequest<any>(API_ENDPOINTS.ALERT_VIEW(alertId), {
+      method: 'PUT',
+    });
 
-    const { error } = await supabase
-      .from('alerts')
-      .update({
-        status: 'viewed',
-        viewed_at: new Date().toISOString(),
-      })
-      .eq('id', alertId);
-
-    if (error) {
-      return {
-        success: false,
-        error: {
-          code: ErrorCode.DB_UPDATE_ERROR,
-          message: `Failed to mark alert as viewed: ${error.message}`,
-        },
-      };
+    if (!result.success) {
+      return result;
     }
 
     return { success: true };
@@ -245,32 +208,12 @@ export async function markAlertAsViewed(alertId: string): Promise<ServiceResult<
  */
 export async function acknowledgeAlert(alertId: string): Promise<ServiceResult<void>> {
   try {
-    if (!isSupabaseConfigured() || !supabase) {
-      return {
-        success: false,
-        error: {
-          code: ErrorCode.DB_NOT_AVAILABLE,
-          message: 'Supabase is not configured',
-        },
-      };
-    }
+    const result = await apiRequest<any>(API_ENDPOINTS.ALERT_ACKNOWLEDGE(alertId), {
+      method: 'PUT',
+    });
 
-    const { error } = await supabase
-      .from('alerts')
-      .update({
-        status: 'acknowledged',
-        acknowledged_at: new Date().toISOString(),
-      })
-      .eq('id', alertId);
-
-    if (error) {
-      return {
-        success: false,
-        error: {
-          code: ErrorCode.DB_UPDATE_ERROR,
-          message: `Failed to acknowledge alert: ${error.message}`,
-        },
-      };
+    if (!result.success) {
+      return result;
     }
 
     return { success: true };
@@ -287,32 +230,12 @@ export async function acknowledgeAlert(alertId: string): Promise<ServiceResult<v
  */
 export async function resolveAlert(alertId: string): Promise<ServiceResult<void>> {
   try {
-    if (!isSupabaseConfigured() || !supabase) {
-      return {
-        success: false,
-        error: {
-          code: ErrorCode.DB_NOT_AVAILABLE,
-          message: 'Supabase is not configured',
-        },
-      };
-    }
+    const result = await apiRequest<any>(API_ENDPOINTS.ALERT_RESOLVE(alertId), {
+      method: 'PUT',
+    });
 
-    const { error } = await supabase
-      .from('alerts')
-      .update({
-        status: 'resolved',
-        resolved_at: new Date().toISOString(),
-      })
-      .eq('id', alertId);
-
-    if (error) {
-      return {
-        success: false,
-        error: {
-          code: ErrorCode.DB_UPDATE_ERROR,
-          message: `Failed to resolve alert: ${error.message}`,
-        },
-      };
+    if (!result.success) {
+      return result;
     }
 
     return { success: true };
@@ -331,50 +254,30 @@ export async function getSessionAlerts(
   sessionId: string
 ): Promise<ServiceResult<Alert[]>> {
   try {
-    if (!isSupabaseConfigured() || !supabase) {
-      return {
-        success: false,
-        error: {
-          code: ErrorCode.DB_NOT_AVAILABLE,
-          message: 'Supabase is not configured',
-        },
-      };
+    const endpoint = `${API_ENDPOINTS.ALERTS}?session_id=${sessionId}`;
+    const result = await apiRequest<any[]>(endpoint);
+
+    if (!result.success) {
+      return result;
     }
 
-    const { data, error } = await supabase
-      .from('alerts')
-      .select('*')
-      .eq('session_id', sessionId)
-      .order('created_at', { ascending: false })
-      .limit(50);
-
-    if (error) {
-      return {
-        success: false,
-        error: {
-          code: ErrorCode.DB_SELECT_ERROR,
-          message: `Failed to fetch alerts: ${error.message}`,
-        },
-      };
-    }
-
-    const alerts: Alert[] = (data || []).map((row: any) => ({
-      id: row.id,
-      sessionId: row.session_id,
-      childId: row.child_id,
-      parentId: row.parent_id,
-      sitterId: row.sitter_id,
-      type: row.type,
-      severity: row.severity,
-      title: row.title,
-      message: row.message,
-      status: row.status,
-      audioLogId: row.audio_log_id,
-      location: row.location ? (typeof row.location === 'string' ? JSON.parse(row.location) : row.location) : undefined,
-      viewedAt: row.viewed_at ? new Date(row.viewed_at) : undefined,
-      acknowledgedAt: row.acknowledged_at ? new Date(row.acknowledged_at) : undefined,
-      resolvedAt: row.resolved_at ? new Date(row.resolved_at) : undefined,
-      createdAt: new Date(row.created_at),
+    const alerts: Alert[] = (result.data || []).map((apiAlert: any) => ({
+      id: apiAlert.id,
+      sessionId: apiAlert.sessionId,
+      childId: apiAlert.childId,
+      parentId: apiAlert.parentId,
+      sitterId: apiAlert.sitterId,
+      type: apiAlert.type,
+      severity: apiAlert.severity,
+      title: apiAlert.title,
+      message: apiAlert.message,
+      status: apiAlert.status,
+      audioLogId: apiAlert.audioLogId,
+      location: apiAlert.location,
+      viewedAt: apiAlert.viewedAt ? new Date(apiAlert.viewedAt) : undefined,
+      acknowledgedAt: apiAlert.acknowledgedAt ? new Date(apiAlert.acknowledgedAt) : undefined,
+      resolvedAt: apiAlert.resolvedAt ? new Date(apiAlert.resolvedAt) : undefined,
+      createdAt: new Date(apiAlert.createdAt),
     }));
 
     return { success: true, data: alerts };

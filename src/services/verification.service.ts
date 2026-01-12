@@ -5,6 +5,7 @@
 import { isSupabaseConfigured, supabase } from '@/src/config/supabase';
 import { ErrorCode, ServiceResult } from '@/src/types/error.types';
 import { handleUnexpectedError } from '@/src/utils/errorHandler';
+import { executeWrite } from './supabase-write.service';
 
 export interface VerificationRequest {
   id?: string;
@@ -49,7 +50,7 @@ export async function createVerificationRequest(
       };
     }
 
-    const { data, error } = await supabase
+    const insertRes = await executeWrite(() => supabase
       .from('verification_requests')
       .insert({
         sitter_id: requestData.sitterId,
@@ -71,14 +72,17 @@ export async function createVerificationRequest(
         reviewed_at: null,
       })
       .select()
-      .single();
+      .single(), 'verification_insert');
+
+    const data = insertRes.data;
+    const error = insertRes.error;
 
     if (error) {
       return {
         success: false,
         error: {
           code: ErrorCode.DB_INSERT_ERROR,
-          message: `Failed to create verification request: ${error.message}`,
+          message: `Failed to create verification request: ${error.message || JSON.stringify(error)}`,
         },
       };
     }
@@ -289,7 +293,7 @@ export async function updateVerificationStatus(
     const sitterId = requestData.sitter_id;
 
     // Update verification request
-    const { error: updateError } = await supabase
+    const verUpdateRes = await executeWrite(() => supabase
       .from('verification_requests')
       .update({
         status,
@@ -297,29 +301,32 @@ export async function updateVerificationStatus(
         reviewed_at: new Date().toISOString(),
         admin_notes: status === 'rejected' ? rejectionReason : null,
       })
-      .eq('id', requestId);
+      .eq('id', requestId), 'verification_update');
+
+    const updateError = verUpdateRes.error;
 
     if (updateError) {
       return {
         success: false,
         error: {
           code: ErrorCode.DB_UPDATE_ERROR,
-          message: `Failed to update verification: ${updateError.message}`,
+          message: `Failed to update verification: ${updateError.message || JSON.stringify(updateError)}`,
         },
       };
     }
 
     // Update sitter's user profile
-    const { error: userUpdateError } = await supabase
+    const userUpdateRes = await executeWrite(() => supabase
       .from('users')
       .update({
         is_verified: status === 'approved',
         verification_status: status === 'approved' ? 'approved' : 'rejected',
       })
-      .eq('id', sitterId);
+      .eq('id', sitterId), 'user_verification_update');
 
+    const userUpdateError = userUpdateRes.error;
     if (userUpdateError) {
-      console.warn('⚠️ Failed to update user profile:', userUpdateError.message);
+      console.warn('⚠️ Failed to update user profile:', userUpdateError.message || JSON.stringify(userUpdateError));
       // Don't fail the whole operation if user update fails
     }
 

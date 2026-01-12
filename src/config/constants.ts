@@ -70,6 +70,27 @@ export const API_ENDPOINTS = {
   // Admin endpoints
   ADMIN_USERS: '/api/admin/users',
   ADMIN_STATS: '/api/admin/stats',
+  // Sessions
+  SESSIONS: '/api/sessions',
+  SESSION_BY_ID: (id: string) => `/api/sessions/${id}`,
+  SESSION_ALERTS: (id: string) => `/api/sessions/${id}/alerts`,
+  SESSION_GPS: (id: string) => `/api/gps/sessions/${id}/gps`,
+  SESSION_GPS_LATEST: (id: string) => `/api/gps/sessions/${id}/gps/latest`,
+  // Children
+  CHILDREN: '/api/children',
+  CHILD_BY_ID: (id: string) => `/api/children/${id}`,
+  CHILD_INSTRUCTIONS: (id: string) => `/api/children/${id}/instructions`,
+  // Alerts
+  ALERTS: '/api/alerts',
+  ALERT_BY_ID: (id: string) => `/api/alerts/${id}`,
+  ALERT_VIEW: (id: string) => `/api/alerts/${id}/view`,
+  ALERT_ACKNOWLEDGE: (id: string) => `/api/alerts/${id}/acknowledge`,
+  ALERT_RESOLVE: (id: string) => `/api/alerts/${id}/resolve`,
+  // GPS
+  GPS_TRACK: '/api/gps/track',
+  // Messages
+  SESSION_MESSAGES: (id: string) => `/api/sessions/${id}/messages`,
+  MESSAGE_READ: (id: string) => `/api/messages/${id}/read`,
 } as const;
 
 // Audio monitoring constants

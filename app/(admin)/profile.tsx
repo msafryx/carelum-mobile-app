@@ -31,7 +31,10 @@ export default function AdminProfileScreen() {
   
   const [name, setName] = useState(userProfile?.displayName || 'Admin User');
   const [email, setEmail] = useState(userProfile?.email || 'admin@carelum.com');
-  const [phone, setPhone] = useState('');
+  const [phone, setPhone] = useState((userProfile as any)?.phoneNumber || '');
+  const [address, setAddress] = useState((userProfile as any)?.address || '');
+  const [city, setCity] = useState((userProfile as any)?.city || '');
+  const [country, setCountry] = useState((userProfile as any)?.country || '');
   
   const [notifications, setNotifications] = useState({
     verifications: true,
@@ -47,6 +50,10 @@ export default function AdminProfileScreen() {
     if (userProfile) {
       setName(userProfile.displayName);
       setEmail(userProfile.email);
+      setPhone((userProfile as any)?.phoneNumber || '');
+      setAddress((userProfile as any)?.address || '');
+      setCity((userProfile as any)?.city || '');
+      setCountry((userProfile as any)?.country || '');
     }
   }, [userProfile]);
 
@@ -54,7 +61,11 @@ export default function AdminProfileScreen() {
     setLoading(true);
     const result = await updateUserProfile({
       displayName: name,
-    });
+      phoneNumber: phone.trim() || null,
+      address: address.trim() || null,
+      city: city.trim() || null,
+      country: country.trim() || null,
+    } as any);
     
     if (result.success) {
       setEditing(false);
@@ -123,6 +134,27 @@ export default function AdminProfileScreen() {
                   keyboardType="phone-pad"
                   placeholderTextColor={colors.textSecondary}
                 />
+                <TextInput
+                  value={address}
+                  onChangeText={setAddress}
+                  style={[styles.input, { backgroundColor: colors.background, color: colors.text, borderColor: colors.border }]}
+                  placeholder="Address"
+                  placeholderTextColor={colors.textSecondary}
+                />
+                <TextInput
+                  value={city}
+                  onChangeText={setCity}
+                  style={[styles.input, { backgroundColor: colors.background, color: colors.text, borderColor: colors.border }]}
+                  placeholder="City"
+                  placeholderTextColor={colors.textSecondary}
+                />
+                <TextInput
+                  value={country}
+                  onChangeText={setCountry}
+                  style={[styles.input, { backgroundColor: colors.background, color: colors.text, borderColor: colors.border }]}
+                  placeholder="Country"
+                  placeholderTextColor={colors.textSecondary}
+                />
                 <View style={styles.buttonRow}>
                   <Button
                     title="Cancel"
@@ -143,6 +175,12 @@ export default function AdminProfileScreen() {
                 <Text style={[styles.name, { color: colors.text }]}>{name}</Text>
                 <Text style={[styles.email, { color: colors.textSecondary }]}>{email}</Text>
                 {phone && <Text style={[styles.phone, { color: colors.textSecondary }]}>{phone}</Text>}
+                {address && <Text style={[styles.phone, { color: colors.textSecondary }]}>{address}</Text>}
+                {(city || country) && (
+                  <Text style={[styles.phone, { color: colors.textSecondary }]}>
+                    {[city, country].filter(Boolean).join(', ') || ''}
+                  </Text>
+                )}
                 <View style={styles.badge}>
                   <Ionicons name="shield-checkmark" size={16} color={colors.success} />
                   <Text style={[styles.badgeText, { color: colors.success }]}>Administrator</Text>

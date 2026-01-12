@@ -51,7 +51,21 @@ BEGIN
     p_id, p_email, p_display_name, p_role, p_preferred_language, p_user_number,
     p_phone_number, p_photo_url, p_theme, p_is_verified, p_verification_status,
     p_hourly_rate, p_bio
-  );
+  )
+  ON CONFLICT (id) DO UPDATE SET
+    email = EXCLUDED.email,
+    display_name = COALESCE(EXCLUDED.display_name, users.display_name),
+    role = COALESCE(EXCLUDED.role, users.role),
+    preferred_language = COALESCE(EXCLUDED.preferred_language, users.preferred_language),
+    user_number = COALESCE(EXCLUDED.user_number, users.user_number),
+    phone_number = COALESCE(EXCLUDED.phone_number, users.phone_number),
+    photo_url = COALESCE(EXCLUDED.photo_url, users.photo_url),
+    theme = COALESCE(EXCLUDED.theme, users.theme),
+    is_verified = COALESCE(EXCLUDED.is_verified, users.is_verified),
+    verification_status = COALESCE(EXCLUDED.verification_status, users.verification_status),
+    hourly_rate = COALESCE(EXCLUDED.hourly_rate, users.hourly_rate),
+    bio = COALESCE(EXCLUDED.bio, users.bio),
+    updated_at = NOW();
 END;
 $$;
 

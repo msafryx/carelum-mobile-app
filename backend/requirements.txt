@@ -1,12 +1,13 @@
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
 python-multipart==0.0.6
-pydantic==2.5.0
+pydantic>=2.12.0
 firebase-admin==6.2.0
 python-dotenv==1.0.0
-supabase==2.3.0
-pyjwt==2.8.0
-httpx>=0.24.0,<0.25.0
+supabase>=2.27.0
+pyjwt>=2.10.0
+httpx>=0.26.0,<0.29.0
+websockets>=15.0.0
 
 # Audio processing (uncomment when implementing)
 # librosa==0.10.1

@@ -51,7 +51,12 @@ A cross-platform mobile application for connecting parents with verified babysit
    - Run the SQL schema in `scripts/create-supabase-schema.sql` in your Supabase SQL Editor
    - See `README_SUPABASE.md` for detailed setup instructions
 
-5. **Start the backend API server**
+5. **Set up Supabase Storage (for profile images)**
+
+   - Run `CREATE_BUCKET_NOW.sql` in Supabase SQL Editor to create the storage bucket and policies
+   - Or follow the step-by-step guide in `SUPABASE_STORAGE_SETUP.md`
+
+6. **Start the backend API server**
 
    ```bash
    cd backend
@@ -66,7 +71,7 @@ A cross-platform mobile application for connecting parents with verified babysit
    - Swagger UI: http://localhost:8000/docs
    - ReDoc: http://localhost:8000/redoc
 
-6. **Start the frontend development server**
+7. **Start the frontend development server**
 
    ```bash
    npm start
@@ -77,12 +82,13 @@ A cross-platform mobile application for connecting parents with verified babysit
 ### Essential Documentation
 
 - **[APP_FEATURES_STATUS.md](./APP_FEATURES_STATUS.md)** - Complete app features, UI screens, and implementation status
-- **[ADMIN_GUIDE.md](./ADMIN_GUIDE.md)** - Complete guide for creating and managing admin users
 - **[ADMIN.md](./ADMIN.md)** - Admin system documentation (features and usage)
 - **[README_SUPABASE.md](./README_SUPABASE.md)** - Complete Supabase setup and configuration guide
-- **[DATABASE_ARCHITECTURE.md](./DATABASE_ARCHITECTURE.md)** - Complete database architecture and schema documentation
+- **[SUPABASE_STORAGE_SETUP.md](./SUPABASE_STORAGE_SETUP.md)** - Supabase Storage setup for profile images
 - **[SECURITY.md](./SECURITY.md)** - Security best practices and guidelines
-- **[API_IMPLEMENTATION.md](./API_IMPLEMENTATION.md)** - REST API implementation guide and architecture
+- **[TESTING_GUIDE.md](./TESTING_GUIDE.md)** - Complete testing guide
+- **[QUICK_START_TESTING.md](./QUICK_START_TESTING.md)** - Quick testing reference
+- **[SESSION_MANAGEMENT.md](./SESSION_MANAGEMENT.md)** - Session management documentation
 - **[backend/API_GUIDE.md](./backend/API_GUIDE.md)** - Complete REST API documentation with setup, testing, and usage
 - **[backend/README_SETUP.md](./backend/README_SETUP.md)** - Backend setup and quick start guide
 
@@ -111,13 +117,14 @@ A cross-platform mobile application for connecting parents with verified babysit
 - ✅ Offline support
 - ✅ Real-time synchronization
 - ✅ Role-based access (Parent, Sitter, Admin)
-- ✅ Profile management
+- ✅ Profile management with image uploads
 - ✅ Child management
 - ✅ Session management
 - ✅ Verification system
 - ✅ Chat and messaging
 - ✅ GPS tracking
 - ✅ Audio monitoring and cry detection
+- ✅ Supabase Storage integration
 
 ## 📱 User Roles
 
@@ -174,7 +181,7 @@ frontend/
 - `session.service.ts` - Session management
 - `verification.service.ts` - Sitter verification
 - `admin.service.ts` - Admin operations (Supabase direct)
-- `storage.service.ts` - File uploads (Supabase Storage)
+- `storage.service.ts` - File uploads (Supabase Storage) with direct fetch fallback
 - `local-storage.service.ts` - AsyncStorage management
 
 **Backend API (FastAPI):**
@@ -185,9 +192,19 @@ frontend/
 
 ### Scripts
 
+**Database Setup:**
 - `scripts/create-supabase-schema.sql` - Main database schema
+- `scripts/FIX_USER_REGISTRATION_SYNC.sql` - User registration sync fix
+- `scripts/FIX_RLS_FINAL.sql` - Row Level Security policies
+- `scripts/FIX_CHILDREN_RLS.sql` - Children table RLS policies
+- `scripts/add-missing-user-columns.sql` - Schema migration
+
+**Storage Setup:**
+- `CREATE_BUCKET_NOW.sql` - Create storage bucket and policies (run in Supabase SQL Editor)
+- `CLEANUP_STORAGE_POLICIES.sql` - Clean up conflicting storage policies
+
+**Utilities:**
 - `scripts/createAdmin.ts` - Admin user creation script
-- `scripts/FIX_RLS_*.sql` - Row Level Security fixes
 
 ## 🚀 Deployment
 

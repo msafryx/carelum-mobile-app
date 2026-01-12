@@ -40,8 +40,13 @@ if (isSupabaseConfigured()) {
           eventsPerSecond: 10,
         },
       },
+      global: {
+        // Ensure fetch is available for Storage API
+        fetch: global.fetch,
+      },
     });
     console.log('✅ Supabase initialized successfully');
+    console.log(`🔗 Supabase URL: ${supabaseUrl.substring(0, 40)}...`);
   } catch (error) {
     console.error('❌ Supabase initialization error:', error);
     console.warn('⚠️ Supabase is not configured. Please update src/config/supabase.ts with your Supabase credentials.');
@@ -50,5 +55,5 @@ if (isSupabaseConfigured()) {
   console.warn('⚠️ Supabase is not configured. Please set EXPO_PUBLIC_SUPABASE_URL and EXPO_PUBLIC_SUPABASE_ANON_KEY');
 }
 
-export { supabase };
+export { supabase, supabaseUrl, supabaseAnonKey };
 export default supabase;

@@ -8,7 +8,7 @@ import { useAuth } from '@/src/hooks/useAuth';
 import { deleteChild, getParentChildren, saveChild, saveChildInstructions } from '@/src/services/child.service';
 import { uploadFile } from '@/src/services/storage.service';
 import { Child, ChildInstructions } from '@/src/types/child.types';
-import { calculateAge } from '@/src/utils/formatters';
+import { calculateAge, formatAgeWithMonths } from '@/src/utils/formatters';
 import { Ionicons } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import * as ImagePicker from 'expo-image-picker';
@@ -575,7 +575,7 @@ export default function InstructionsScreen() {
                         {child.name}
                       </Text>
                       <Text style={[styles.childAge, { color: colors.textSecondary }]}>
-                        {child.dateOfBirth ? calculateAge(child.dateOfBirth) : child.age} years old
+                        {child.dateOfBirth ? formatAgeWithMonths(child.dateOfBirth) : `${child.age} year${child.age !== 1 ? 's' : ''} old`}
                         {child.dateOfBirth && ` • Born: ${child.dateOfBirth.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })}`}
                         {child.gender && ` • ${child.gender.charAt(0).toUpperCase() + child.gender.slice(1)}`}
                       </Text>

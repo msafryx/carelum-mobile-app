@@ -8,6 +8,7 @@ import { handleUnexpectedError } from '@/src/utils/errorHandler';
 import { predictCry } from './api.service';
 import { createCryDetectionAlert } from './alert.service';
 import { uploadFile } from './storage.service';
+import { executeWrite } from './supabase-write.service';
 
 export interface AudioLog {
   id?: string;
@@ -160,7 +161,7 @@ export async function updateGPSLocation(
     };
 
     // Save GPS tracking
-    const { data, error } = await supabase
+    const insertRes = await executeWrite(() => supabase
       .from('gps_tracking')
       .insert({
         session_id: sessionId,
@@ -171,14 +172,17 @@ export async function updateGPSLocation(
         heading: null, // Can be calculated from previous location
       })
       .select()
-      .single();
+      .single(), 'gps_tracking_insert');
+
+    const data = insertRes.data;
+    const error = insertRes.error;
 
     if (error) {
       return {
         success: false,
         error: {
           code: ErrorCode.DB_INSERT_ERROR,
-          message: `Failed to save GPS tracking: ${error.message}`,
+          message: `Failed to save GPS tracking: ${error.message || JSON.stringify(error)}`,
         },
       };
     }

@@ -36,6 +36,8 @@
 
 #### **Profile** (`app/(parent)/profile.tsx`)
 - ✅ User profile management
+- ✅ Profile picture upload (Supabase Storage)
+- ✅ Real-time profile sync
 - ✅ Settings
 - ✅ Account information
 
@@ -92,6 +94,8 @@
 
 #### **Profile** (`app/(sitter)/profile.tsx`)
 - ✅ Profile management
+- ✅ Profile picture upload (Supabase Storage)
+- ✅ Real-time profile sync
 - ✅ Settings
 - ✅ Verification status
 
@@ -146,6 +150,13 @@
 - ✅ Platform configuration
 
 ### 🗄️ **Database & Storage**
+
+#### **Supabase Storage**
+- ✅ Profile image uploads
+- ✅ Storage bucket setup (`profile-images`)
+- ✅ RLS policies configured
+- ✅ Direct fetch fallback for uploads
+- ✅ Storage connectivity testing
 
 #### **Local Storage (AsyncStorage)**
 - ✅ Users collection

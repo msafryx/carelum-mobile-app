@@ -45,16 +45,9 @@ export default function LoginScreen() {
       const result = await signIn({ email, password });
 
       if (result.success) {
-        // Wait a moment for useAuth hook to load profile via onAuthStateChange
-        // This ensures the profile is loaded before navigation
-        await new Promise(resolve => setTimeout(resolve, 200));
-        
-        // Trigger profile refresh to ensure it's loaded
-        await refreshProfile();
-        
+        // INSTANT NAVIGATION - Profile loads from AsyncStorage instantly via useAuth
+        // No delays, no blocking API calls - SessionManager handles background sync
         setLoading(false);
-        
-        // Navigate to landing - it will wait for profile if needed
         router.replace('/landing'); // Landing will redirect based on auth state
       } else {
         setError(result.error || null);

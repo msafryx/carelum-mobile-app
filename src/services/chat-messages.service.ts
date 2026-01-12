@@ -1,10 +1,12 @@
 /**
- * Chat Messages Service - Supabase
+ * Chat Messages Service - REST API
  * Handles real-time chat messaging
  */
 import { isSupabaseConfigured, supabase } from '@/src/config/supabase';
 import { ErrorCode, ServiceResult } from '@/src/types/error.types';
 import { handleUnexpectedError } from '@/src/utils/errorHandler';
+import { apiRequest } from './api-base.service';
+import { API_ENDPOINTS } from '@/src/config/constants';
 
 export interface ChatMessage {
   id?: string;
@@ -25,50 +27,43 @@ export async function sendMessage(
   messageData: Omit<ChatMessage, 'id' | 'createdAt'>
 ): Promise<ServiceResult<ChatMessage>> {
   try {
-    if (!isSupabaseConfigured() || !supabase) {
+    if (!messageData.sessionId) {
       return {
         success: false,
         error: {
-          code: ErrorCode.DB_NOT_AVAILABLE,
-          message: 'Supabase is not configured',
+          code: ErrorCode.INVALID_INPUT,
+          message: 'Session ID is required',
         },
       };
     }
 
-    const { data, error } = await supabase
-      .from('chat_messages')
-      .insert({
-        session_id: messageData.sessionId || null,
-        sender_id: messageData.senderId,
-        receiver_id: messageData.receiverId,
-        message: messageData.message,
-        message_type: messageData.messageType || 'text',
-        attachment_url: messageData.attachmentUrl || null,
-        read_at: null,
-      })
-      .select()
-      .single();
+    const apiData = {
+      receiverId: messageData.receiverId,
+      message: messageData.message,
+      messageType: messageData.messageType || 'text',
+      attachmentUrl: messageData.attachmentUrl || undefined,
+    };
 
-    if (error) {
-      return {
-        success: false,
-        error: {
-          code: ErrorCode.DB_INSERT_ERROR,
-          message: `Failed to send message: ${error.message}`,
-        },
-      };
+    const result = await apiRequest<any>(API_ENDPOINTS.SESSION_MESSAGES(messageData.sessionId), {
+      method: 'POST',
+      body: JSON.stringify(apiData),
+    });
+
+    if (!result.success) {
+      return result;
     }
 
+    const apiMessage = result.data;
     const message: ChatMessage = {
-      id: data.id,
-      sessionId: data.session_id,
-      senderId: data.sender_id,
-      receiverId: data.receiver_id,
-      message: data.message,
-      messageType: data.message_type,
-      attachmentUrl: data.attachment_url,
-      readAt: data.read_at ? new Date(data.read_at) : undefined,
-      createdAt: new Date(data.created_at),
+      id: apiMessage.id,
+      sessionId: apiMessage.sessionId,
+      senderId: apiMessage.senderId,
+      receiverId: apiMessage.receiverId,
+      message: apiMessage.message,
+      messageType: apiMessage.messageType,
+      attachmentUrl: apiMessage.attachmentUrl,
+      readAt: apiMessage.readAt ? new Date(apiMessage.readAt) : undefined,
+      createdAt: new Date(apiMessage.createdAt),
     };
 
     return { success: true, data: message };
@@ -90,55 +85,37 @@ export async function getMessages(
   limitCount: number = 50
 ): Promise<ServiceResult<ChatMessage[]>> {
   try {
-    if (!isSupabaseConfigured() || !supabase) {
+    // API only supports session-based messages
+    if (!sessionId) {
       return {
         success: false,
         error: {
-          code: ErrorCode.DB_NOT_AVAILABLE,
-          message: 'Supabase is not configured',
+          code: ErrorCode.INVALID_INPUT,
+          message: 'Session ID is required for API',
         },
       };
     }
 
-    let query = supabase
-      .from('chat_messages')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .limit(limitCount);
+    const endpoint = `${API_ENDPOINTS.SESSION_MESSAGES(sessionId)}?limit=${limitCount}`;
+    const result = await apiRequest<any[]>(endpoint);
 
-    if (sessionId) {
-      query = query.eq('session_id', sessionId);
-    } else if (userId1 && userId2) {
-      query = query.or(`sender_id.eq.${userId1},receiver_id.eq.${userId1}`)
-        .or(`sender_id.eq.${userId2},receiver_id.eq.${userId2}`);
+    if (!result.success) {
+      return result;
     }
 
-    const { data, error } = await query;
-
-    if (error) {
-      return {
-        success: false,
-        error: {
-          code: ErrorCode.DB_SELECT_ERROR,
-          message: `Failed to fetch messages: ${error.message}`,
-        },
-      };
-    }
-
-    const messages: ChatMessage[] = (data || []).map((row: any) => ({
-      id: row.id,
-      sessionId: row.session_id,
-      senderId: row.sender_id,
-      receiverId: row.receiver_id,
-      message: row.message,
-      messageType: row.message_type,
-      attachmentUrl: row.attachment_url,
-      readAt: row.read_at ? new Date(row.read_at) : undefined,
-      createdAt: new Date(row.created_at),
+    const messages: ChatMessage[] = (result.data || []).map((apiMessage: any) => ({
+      id: apiMessage.id,
+      sessionId: apiMessage.sessionId,
+      senderId: apiMessage.senderId,
+      receiverId: apiMessage.receiverId,
+      message: apiMessage.message,
+      messageType: apiMessage.messageType,
+      attachmentUrl: apiMessage.attachmentUrl,
+      readAt: apiMessage.readAt ? new Date(apiMessage.readAt) : undefined,
+      createdAt: new Date(apiMessage.createdAt),
     }));
 
-    // Reverse to show oldest first
-    return { success: true, data: messages.reverse() };
+    return { success: true, data: messages };
   } catch (error: any) {
     return {
       success: false,
@@ -152,29 +129,12 @@ export async function getMessages(
  */
 export async function markMessageAsRead(messageId: string): Promise<ServiceResult<void>> {
   try {
-    if (!isSupabaseConfigured() || !supabase) {
-      return {
-        success: false,
-        error: {
-          code: ErrorCode.DB_NOT_AVAILABLE,
-          message: 'Supabase is not configured',
-        },
-      };
-    }
+    const result = await apiRequest<any>(API_ENDPOINTS.MESSAGE_READ(messageId), {
+      method: 'PUT',
+    });
 
-    const { error } = await supabase
-      .from('chat_messages')
-      .update({ read_at: new Date().toISOString() })
-      .eq('id', messageId);
-
-    if (error) {
-      return {
-        success: false,
-        error: {
-          code: ErrorCode.DB_UPDATE_ERROR,
-          message: `Failed to mark message as read: ${error.message}`,
-        },
-      };
+    if (!result.success) {
+      return result;
     }
 
     return { success: true };

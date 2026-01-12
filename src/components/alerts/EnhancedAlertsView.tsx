@@ -26,7 +26,45 @@ import {
   subscribeToSessionAlerts,
 } from '@/src/services/alert.service';
 import { format, formatDistanceToNow } from 'date-fns';
-import * as Notifications from 'expo-notifications';
+import Constants from 'expo-constants';
+
+// Conditionally import expo-notifications (not available in Expo Go SDK 53+)
+// Use lazy loading to avoid module-level errors in Expo Go
+let Notifications: any = null;
+let notificationsLoadAttempted = false;
+
+function loadNotificationsModule(): any {
+  if (notificationsLoadAttempted) {
+    return Notifications;
+  }
+  
+  notificationsLoadAttempted = true;
+  
+  // Detect if we're likely in Expo Go BEFORE requiring
+  // In Expo Go SDK 53+, expo-notifications throws on require
+  const isLikelyExpoGo = 
+    Constants.executionEnvironment === 'storeClient' ||
+    (Constants.executionEnvironment === undefined && Constants.appOwnership === 'expo');
+  
+  if (isLikelyExpoGo) {
+    // Don't even try in Expo Go - it will throw an error
+    return null;
+  }
+  
+  // Only try to require if we're likely NOT in Expo Go
+  try {
+    const notificationsModule = require('expo-notifications');
+    if (notificationsModule && typeof notificationsModule.getPermissionsAsync === 'function') {
+      Notifications = notificationsModule;
+      return Notifications;
+    }
+  } catch (error: any) {
+    // Silently handle - this is expected in Expo Go SDK 53+
+    return null;
+  }
+  
+  return null;
+}
 
 interface EnhancedAlertsViewProps {
   sessionId: string;
@@ -69,38 +107,61 @@ export default function EnhancedAlertsView({
   }, [sessionId]);
 
   const checkNotificationPermission = async () => {
-    const { status } = await Notifications.getPermissionsAsync();
-    setNotificationPermission(status === 'granted');
-    
-    if (status !== 'granted') {
-      const { status: newStatus } = await Notifications.requestPermissionsAsync();
-      setNotificationPermission(newStatus === 'granted');
+    const Notifs = loadNotificationsModule();
+    if (!Notifs) {
+      setNotificationPermission(false);
+      return;
+    }
+
+    try {
+      const { status } = await Notifs.getPermissionsAsync();
+      setNotificationPermission(status === 'granted');
+      
+      if (status !== 'granted') {
+        const { status: newStatus } = await Notifs.requestPermissionsAsync();
+        setNotificationPermission(newStatus === 'granted');
+      }
+    } catch (error) {
+      console.warn('⚠️ Failed to check notification permissions:', error);
+      setNotificationPermission(false);
     }
   };
 
   const setupNotificationListener = () => {
-    Notifications.setNotificationHandler({
-      handleNotification: async () => ({
-        shouldShowAlert: true,
-        shouldPlaySound: true,
-        shouldSetBadge: true,
-      }),
-    });
+    const Notifs = loadNotificationsModule();
+    if (!Notifs) return;
+
+    try {
+      Notifs.setNotificationHandler({
+        handleNotification: async () => ({
+          shouldShowAlert: true,
+          shouldPlaySound: true,
+          shouldSetBadge: true,
+        }),
+      });
+    } catch (error) {
+      console.warn('⚠️ Failed to setup notification listener:', error);
+    }
   };
 
   const showPushNotification = async (alert: AlertType) => {
-    if (!notificationPermission) return;
+    const Notifs = loadNotificationsModule();
+    if (!Notifs || !notificationPermission) return;
 
-    await Notifications.scheduleNotificationAsync({
-      content: {
-        title: alert.title,
-        body: alert.message,
-        sound: alert.severity === 'critical' || alert.severity === 'high' ? true : false,
-        priority: alert.severity === 'critical' ? Notifications.AndroidNotificationPriority.MAX : Notifications.AndroidNotificationPriority.HIGH,
-        data: { alertId: alert.id, sessionId },
-      },
-      trigger: null, // Show immediately
-    });
+    try {
+      await Notifs.scheduleNotificationAsync({
+        content: {
+          title: alert.title,
+          body: alert.message,
+          sound: alert.severity === 'critical' || alert.severity === 'high' ? true : false,
+          priority: alert.severity === 'critical' ? Notifs.AndroidNotificationPriority.MAX : Notifs.AndroidNotificationPriority.HIGH,
+          data: { alertId: alert.id, sessionId },
+        },
+        trigger: null, // Show immediately
+      });
+    } catch (error) {
+      console.warn('⚠️ Failed to show push notification:', error);
+    }
   };
 
   const loadAlerts = async (isRefresh = false) => {

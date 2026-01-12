@@ -6,6 +6,7 @@ import { isSupabaseConfigured, supabase } from '@/src/config/supabase';
 import { ErrorCode, ServiceResult } from '@/src/types/error.types';
 import { User } from '@/src/types/user.types';
 import { handleUnexpectedError } from '@/src/utils/errorHandler';
+import { executeWrite } from './supabase-write.service';
 
 /**
  * Get all users (admin only)
@@ -166,17 +167,18 @@ export async function updateUser(
     if (extendedUpdates.hourlyRate !== undefined) supabaseUpdates.hourly_rate = extendedUpdates.hourlyRate;
     if (extendedUpdates.bio !== undefined) supabaseUpdates.bio = extendedUpdates.bio;
 
-    const { error } = await supabase
+    const res = await executeWrite(() => supabase
       .from('users')
       .update(supabaseUpdates)
-      .eq('id', userId);
+      .eq('id', userId), 'admin_user_update');
 
+    const error = res.error;
     if (error) {
       return {
         success: false,
         error: {
           code: ErrorCode.DB_UPDATE_ERROR,
-          message: `Failed to update user: ${error.message}`,
+          message: `Failed to update user: ${error.message || JSON.stringify(error)}`,
         },
       };
     }

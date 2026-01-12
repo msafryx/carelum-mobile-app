@@ -11,6 +11,9 @@ export interface User {
   updatedAt?: Date;
   profileImageUrl?: string;
   phoneNumber?: string | null;
+  address?: string | null;
+  city?: string | null;
+  country?: string | null;
   theme?: string;
   isVerified?: boolean;
   verificationStatus?: string | null;
@@ -19,5 +22,5 @@ export interface User {
 }
 
 export interface UserProfile extends User {
-  address?: string;
+  // UserProfile is same as User now
 }

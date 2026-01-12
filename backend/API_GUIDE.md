@@ -377,6 +377,443 @@ Get admin statistics.
 }
 ```
 
+### Session Endpoints
+
+All session endpoints require authentication. Users can only access sessions they're involved in (as parent or sitter).
+
+#### GET `/api/sessions`
+Get current user's sessions.
+
+**Authentication:** Required
+
+**Query Parameters:**
+- `status` (optional): Filter by status (`requested`, `accepted`, `active`, `completed`, `cancelled`)
+
+**Response:**
+```json
+[
+  {
+    "id": "uuid",
+    "parentId": "uuid",
+    "sitterId": "uuid",
+    "childId": "uuid",
+    "status": "active",
+    "startTime": "2024-01-01T10:00:00Z",
+    "endTime": null,
+    "location": "123 Main St",
+    "hourlyRate": 25.50,
+    "totalAmount": null,
+    "notes": null,
+    "createdAt": "2024-01-01T09:00:00Z",
+    "updatedAt": "2024-01-01T10:00:00Z"
+  }
+]
+```
+
+#### GET `/api/sessions/{session_id}`
+Get session by ID.
+
+**Authentication:** Required (must be parent or sitter in session)
+
+**Response:** Same format as session in list
+
+#### POST `/api/sessions`
+Create a new session request.
+
+**Authentication:** Required (Parent only)
+
+**Request Body:**
+```json
+{
+  "parentId": "uuid",
+  "sitterId": "uuid",
+  "childId": "uuid",
+  "startTime": "2024-01-01T10:00:00Z",
+  "location": "123 Main St",
+  "hourlyRate": 25.50,
+  "notes": "Please arrive 10 minutes early"
+}
+```
+
+**Response:** Created session
+
+#### PUT `/api/sessions/{session_id}`
+Update session (status, notes, etc.).
+
+**Authentication:** Required (must be parent or sitter in session)
+
+**Request Body:**
+```json
+{
+  "status": "active",
+  "endTime": "2024-01-01T14:00:00Z",
+  "totalAmount": 100.00,
+  "notes": "Session completed successfully"
+}
+```
+
+**Response:** Updated session
+
+#### DELETE `/api/sessions/{session_id}`
+Cancel a session.
+
+**Authentication:** Required (must be parent or sitter in session)
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Session cancelled successfully"
+}
+```
+
+### Children Endpoints
+
+All children endpoints require authentication. Only parents can access their own children.
+
+#### GET `/api/children`
+Get current user's children (parent only).
+
+**Authentication:** Required (Parent only)
+
+**Response:**
+```json
+[
+  {
+    "id": "uuid",
+    "parentId": "uuid",
+    "name": "Emma",
+    "age": 5,
+    "dateOfBirth": "2019-01-15",
+    "gender": "female",
+    "photoUrl": "https://...",
+    "childNumber": "c1",
+    "parentNumber": "p1",
+    "sitterNumber": null,
+    "createdAt": "2024-01-01T00:00:00Z",
+    "updatedAt": "2024-01-01T00:00:00Z"
+  }
+]
+```
+
+#### GET `/api/children/{child_id}`
+Get child by ID.
+
+**Authentication:** Required (must be parent of child)
+
+**Response:** Same format as child in list
+
+#### POST `/api/children`
+Create a new child profile.
+
+**Authentication:** Required (Parent only)
+
+**Request Body:**
+```json
+{
+  "name": "Emma",
+  "age": 5,
+  "dateOfBirth": "2019-01-15",
+  "gender": "female",
+  "photoUrl": "https://...",
+  "childNumber": "c1",
+  "parentNumber": "p1"
+}
+```
+
+**Response:** Created child
+
+#### PUT `/api/children/{child_id}`
+Update child profile.
+
+**Authentication:** Required (must be parent of child)
+
+**Request Body:**
+```json
+{
+  "name": "Emma Smith",
+  "age": 6,
+  "photoUrl": "https://..."
+}
+```
+
+**Response:** Updated child
+
+#### DELETE `/api/children/{child_id}`
+Delete child profile.
+
+**Authentication:** Required (must be parent of child)
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Child deleted successfully"
+}
+```
+
+#### GET `/api/children/{child_id}/instructions`
+Get child instructions.
+
+**Authentication:** Required (must be parent of child)
+
+**Response:**
+```json
+{
+  "id": "uuid",
+  "childId": "uuid",
+  "parentId": "uuid",
+  "feedingSchedule": "Every 3 hours",
+  "napSchedule": "2-4 PM",
+  "medication": "None",
+  "allergies": "Peanuts, Dairy",
+  "emergencyContacts": {
+    "doctor": {
+      "name": "Dr. Smith",
+      "phone": "+1234567890"
+    }
+  },
+  "specialInstructions": "Likes to be read to before nap",
+  "createdAt": "2024-01-01T00:00:00Z",
+  "updatedAt": "2024-01-01T00:00:00Z"
+}
+```
+
+#### PUT `/api/children/{child_id}/instructions`
+Update child instructions.
+
+**Authentication:** Required (must be parent of child)
+
+**Request Body:**
+```json
+{
+  "feedingSchedule": "Every 3 hours",
+  "napSchedule": "2-4 PM",
+  "medication": "None",
+  "allergies": "Peanuts, Dairy",
+  "emergencyContacts": {
+    "doctor": {
+      "name": "Dr. Smith",
+      "phone": "+1234567890"
+    }
+  },
+  "specialInstructions": "Likes to be read to before nap"
+}
+```
+
+**Response:** Updated instructions
+
+### Alert Endpoints
+
+All alert endpoints require authentication. Users can only access alerts they're involved in.
+
+#### GET `/api/alerts`
+Get current user's alerts.
+
+**Authentication:** Required
+
+**Query Parameters:**
+- `session_id` (optional): Filter by session ID
+- `status` (optional): Filter by status (`new`, `viewed`, `acknowledged`, `resolved`)
+- `type` (optional): Filter by alert type (`cry_detection`, `emergency`, `gps_anomaly`, `session_reminder`)
+
+**Response:**
+```json
+[
+  {
+    "id": "uuid",
+    "sessionId": "uuid",
+    "childId": "uuid",
+    "parentId": "uuid",
+    "sitterId": "uuid",
+    "type": "cry_detection",
+    "severity": "high",
+    "title": "Cry Detected",
+    "message": "Baby crying detected with 85% confidence",
+    "status": "new",
+    "audioLogId": "uuid",
+    "location": {
+      "latitude": 40.7128,
+      "longitude": -74.0060
+    },
+    "viewedAt": null,
+    "acknowledgedAt": null,
+    "resolvedAt": null,
+    "createdAt": "2024-01-01T12:00:00Z"
+  }
+]
+```
+
+#### GET `/api/alerts/{alert_id}`
+Get alert by ID.
+
+**Authentication:** Required (must be parent or sitter in alert)
+
+**Response:** Same format as alert in list
+
+#### POST `/api/alerts`
+Create a new alert (for system/internal use).
+
+**Authentication:** Required
+
+**Request Body:**
+```json
+{
+  "sessionId": "uuid",
+  "childId": "uuid",
+  "parentId": "uuid",
+  "sitterId": "uuid",
+  "type": "cry_detection",
+  "severity": "high",
+  "title": "Cry Detected",
+  "message": "Baby crying detected",
+  "audioLogId": "uuid",
+  "location": {
+    "latitude": 40.7128,
+    "longitude": -74.0060
+  }
+}
+```
+
+**Response:** Created alert
+
+#### PUT `/api/alerts/{alert_id}/view`
+Mark alert as viewed.
+
+**Authentication:** Required (must be parent or sitter in alert)
+
+**Response:** Updated alert
+
+#### PUT `/api/alerts/{alert_id}/acknowledge`
+Acknowledge alert.
+
+**Authentication:** Required (must be parent or sitter in alert)
+
+**Response:** Updated alert
+
+#### PUT `/api/alerts/{alert_id}/resolve`
+Resolve alert.
+
+**Authentication:** Required (must be parent or sitter in alert)
+
+**Response:** Updated alert
+
+### GPS Tracking Endpoints
+
+GPS tracking endpoints require authentication. Sitters can track GPS for their active sessions, parents can view GPS for their sessions.
+
+#### POST `/api/gps/track`
+Record GPS location update.
+
+**Authentication:** Required (Sitter for active sessions)
+
+**Request Body:**
+```json
+{
+  "sessionId": "uuid",
+  "latitude": 40.7128,
+  "longitude": -74.0060,
+  "accuracy": 10.5,
+  "speed": 5.2,
+  "heading": 90.0
+}
+```
+
+**Response:**
+```json
+{
+  "id": "uuid",
+  "sessionId": "uuid",
+  "latitude": 40.7128,
+  "longitude": -74.0060,
+  "accuracy": 10.5,
+  "speed": 5.2,
+  "heading": 90.0,
+  "createdAt": "2024-01-01T12:00:00Z"
+}
+```
+
+#### GET `/api/gps/sessions/{session_id}/gps`
+Get GPS history for a session.
+
+**Authentication:** Required (must be parent or sitter in session)
+
+**Response:**
+```json
+[
+  {
+    "id": "uuid",
+    "sessionId": "uuid",
+    "latitude": 40.7128,
+    "longitude": -74.0060,
+    "accuracy": 10.5,
+    "speed": 5.2,
+    "heading": 90.0,
+    "createdAt": "2024-01-01T12:00:00Z"
+  }
+]
+```
+
+#### GET `/api/gps/sessions/{session_id}/gps/latest`
+Get latest GPS location for a session.
+
+**Authentication:** Required (must be parent or sitter in session)
+
+**Response:** Single GPS location object (same format as in history)
+
+### Chat Message Endpoints
+
+Chat message endpoints require authentication. Users can only access messages for sessions they're involved in.
+
+#### GET `/api/sessions/{session_id}/messages`
+Get chat messages for a session.
+
+**Authentication:** Required (must be parent or sitter in session)
+
+**Query Parameters:**
+- `limit` (optional): Maximum number of messages (default: 50, max: 200)
+
+**Response:**
+```json
+[
+  {
+    "id": "uuid",
+    "sessionId": "uuid",
+    "senderId": "uuid",
+    "receiverId": "uuid",
+    "message": "How is everything going?",
+    "messageType": "text",
+    "attachmentUrl": null,
+    "readAt": null,
+    "createdAt": "2024-01-01T12:00:00Z"
+  }
+]
+```
+
+#### POST `/api/sessions/{session_id}/messages`
+Send a message in a session.
+
+**Authentication:** Required (must be parent or sitter in session)
+
+**Request Body:**
+```json
+{
+  "receiverId": "uuid",
+  "message": "Everything is going well!",
+  "messageType": "text",
+  "attachmentUrl": null
+}
+```
+
+**Response:** Created message (same format as in list)
+
+#### PUT `/api/messages/{message_id}/read`
+Mark message as read.
+
+**Authentication:** Required (must be receiver of message)
+
+**Response:** Updated message
+
 ### AI Endpoints
 
 #### POST `/predict`
@@ -411,11 +848,19 @@ All endpoints return errors in the following format:
 ### Common Error Codes
 
 - `UNAUTHORIZED`: No token provided or token invalid
-- `FORBIDDEN`: User doesn't have permission (e.g., not admin)
+- `FORBIDDEN`: User doesn't have permission (e.g., not admin, not session participant)
 - `PROFILE_NOT_FOUND`: User profile not found
 - `USER_NOT_FOUND`: User not found (admin endpoints)
+- `SESSION_NOT_FOUND`: Session not found
+- `CHILD_NOT_FOUND`: Child not found
+- `ALERT_NOT_FOUND`: Alert not found
+- `MESSAGE_NOT_FOUND`: Message not found
+- `GPS_NOT_FOUND`: GPS location not found
 - `DB_NOT_AVAILABLE`: Database connection unavailable
+- `CREATE_FAILED`: Failed to create resource
 - `UPDATE_FAILED`: Failed to update resource
+- `INVALID_SESSION_STATUS`: Invalid session status for operation
+- `INVALID_RECEIVER`: Receiver is not part of session
 - `INTERNAL_SERVER_ERROR`: Server error
 
 ## Updating the API

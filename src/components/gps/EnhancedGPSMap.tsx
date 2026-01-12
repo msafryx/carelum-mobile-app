@@ -279,7 +279,7 @@ export default function EnhancedGPSMap({
             )}
           </MapView>
         ) : (
-          /* Web Fallback - Show location data without map */
+          /* Fallback - Show location data without map (web or when react-native-maps unavailable) */
           <>
             <View style={styles.header}>
               <View style={styles.headerLeft}>
@@ -296,7 +296,7 @@ export default function EnhancedGPSMap({
               <View style={styles.mapPlaceholder}>
                 <Ionicons name="map" size={48} color={colors.textSecondary} />
                 <Text style={[styles.mapText, { color: colors.textSecondary }]}>
-                  Map View (Native Only)
+                  {Platform.OS === 'web' ? 'Map View (Native Only)' : 'Map View Unavailable'}
                 </Text>
                 {currentLocation && (
                   <>

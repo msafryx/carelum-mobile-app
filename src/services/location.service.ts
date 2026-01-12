@@ -1,12 +1,13 @@
 /**
- * Location Service - Supabase
+ * Location Service - REST API
  * Handles location tracking and updates
  */
 import * as Location from 'expo-location';
 import { isSupabaseConfigured, supabase } from '@/src/config/supabase';
-import { LOCATION_UPDATE_INTERVAL } from '@/src/config/constants';
+import { LOCATION_UPDATE_INTERVAL, API_ENDPOINTS } from '@/src/config/constants';
 import { ErrorCode, ServiceResult } from '@/src/types/error.types';
 import { LocationUpdate } from '@/src/types/session.types';
+import { apiRequest } from './api-base.service';
 
 /**
  * Request location permissions
@@ -70,60 +71,29 @@ export async function getCurrentLocation(): Promise<ServiceResult<LocationUpdate
 }
 
 /**
- * Update session location in Supabase
+ * Update session location via API
  */
 export async function updateSessionLocation(
   sessionId: string,
   location: LocationUpdate
 ): Promise<ServiceResult<void>> {
   try {
-    if (!isSupabaseConfigured() || !supabase) {
-      return {
-        success: false,
-        error: {
-          code: ErrorCode.DB_NOT_AVAILABLE,
-          message: 'Supabase is not configured',
-        },
-      };
-    }
+    const apiData = {
+      sessionId,
+      latitude: location.latitude,
+      longitude: location.longitude,
+      accuracy: location.accuracy || undefined,
+      speed: location.speed || undefined,
+      heading: undefined, // Not in LocationUpdate type
+    };
 
-    // Get current session to get sitter_id
-    const { data: sessionData, error: sessionError } = await supabase
-      .from('sessions')
-      .select('sitter_id')
-      .eq('id', sessionId)
-      .single();
+    const result = await apiRequest<any>(API_ENDPOINTS.GPS_TRACK, {
+      method: 'POST',
+      body: JSON.stringify(apiData),
+    });
 
-    if (sessionError || !sessionData) {
-      return {
-        success: false,
-        error: {
-          code: ErrorCode.DOCUMENT_NOT_FOUND,
-          message: 'Session not found',
-        },
-      };
-    }
-
-    // Save GPS tracking
-    const { error: trackingError } = await supabase
-      .from('gps_tracking')
-      .insert({
-        session_id: sessionId,
-        latitude: location.latitude,
-        longitude: location.longitude,
-        accuracy: null,
-        speed: null,
-        heading: null,
-      });
-
-    if (trackingError) {
-      return {
-        success: false,
-        error: {
-          code: ErrorCode.DB_INSERT_ERROR,
-          message: `Failed to save GPS tracking: ${trackingError.message}`,
-        },
-      };
+    if (!result.success) {
+      return result;
     }
 
     return { success: true };
