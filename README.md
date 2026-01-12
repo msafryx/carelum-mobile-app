@@ -200,8 +200,7 @@ frontend/
 - `scripts/add-missing-user-columns.sql` - Schema migration
 
 **Storage Setup:**
-- `CREATE_BUCKET_NOW.sql` - Create storage bucket and policies (run in Supabase SQL Editor)
-- `CLEANUP_STORAGE_POLICIES.sql` - Clean up conflicting storage policies
+- `STORAGE_SETUP.sql` - Complete storage setup (creates both profile-images and child-images buckets with policies)
 
 **Utilities:**
 - `scripts/createAdmin.ts` - Admin user creation script
