@@ -9,6 +9,7 @@ import {
   Image,
   Switch,
   Alert,
+  ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/src/components/ui/ThemeProvider';
@@ -19,15 +20,18 @@ import AdminHamburgerMenu from '@/src/components/ui/AdminHamburgerMenu';
 import { useAuth } from '@/src/hooks/useAuth';
 import { updateUserProfile } from '@/src/services/auth.service';
 import { signOut } from '@/src/services/auth.service';
+import { uploadFile } from '@/src/services/storage.service';
 import { useRouter } from 'expo-router';
+import * as ImagePicker from 'expo-image-picker';
 
 export default function AdminProfileScreen() {
   const { colors, setTheme, manualTheme } = useTheme();
-  const { userProfile } = useAuth();
+  const { user, userProfile } = useAuth();
   const router = useRouter();
   const [editing, setEditing] = useState(false);
   const [menuVisible, setMenuVisible] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [uploadingImage, setUploadingImage] = useState(false);
   
   const [name, setName] = useState(userProfile?.displayName || 'Admin User');
   const [email, setEmail] = useState(userProfile?.email || 'admin@carelum.com');
@@ -35,6 +39,7 @@ export default function AdminProfileScreen() {
   const [address, setAddress] = useState((userProfile as any)?.address || '');
   const [city, setCity] = useState((userProfile as any)?.city || '');
   const [country, setCountry] = useState((userProfile as any)?.country || '');
+  const [profileImageUrl, setProfileImageUrl] = useState<string | null>(userProfile?.profileImageUrl || null);
   
   const [notifications, setNotifications] = useState({
     verifications: true,
@@ -54,8 +59,93 @@ export default function AdminProfileScreen() {
       setAddress((userProfile as any)?.address || '');
       setCity((userProfile as any)?.city || '');
       setCountry((userProfile as any)?.country || '');
+      setProfileImageUrl(userProfile.profileImageUrl || null);
     }
   }, [userProfile]);
+
+  const handlePickImage = async () => {
+    if (!editing) return;
+    
+    try {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission needed', 'Please grant camera roll permissions to upload a profile picture');
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.8,
+      });
+
+      if (!result.canceled && result.assets[0] && user) {
+        setUploadingImage(true);
+        const asset = result.assets[0];
+        
+        try {
+          // Convert to blob - handle both local file URIs and network URIs
+          console.log('📸 Converting image to blob, URI:', asset.uri);
+          const response = await fetch(asset.uri);
+          
+          if (!response.ok) {
+            throw new Error(`Failed to fetch image: ${response.status} ${response.statusText}`);
+          }
+          
+          const blob = await response.blob();
+          console.log('✅ Blob created, size:', blob.size, 'bytes, type:', blob.type);
+          
+          if (blob.size === 0) {
+            throw new Error('Image file is empty');
+          }
+        
+          // Upload to Supabase Storage
+          const imagePath = `profileImages/${user.id}/${Date.now()}.jpg`;
+          console.log('📤 Starting upload to:', imagePath);
+          const uploadResult = await uploadFile(imagePath, blob, 'image/jpeg', {
+            maxSize: 5 * 1024 * 1024, // 5MB
+          });
+
+          if (uploadResult.success && uploadResult.data) {
+            // Update state immediately
+            setProfileImageUrl(uploadResult.data);
+            Alert.alert('Success', 'Profile picture selected! Click save to update.');
+          } else {
+            // Show helpful error message
+            const errorMsg = uploadResult.error?.message || 'Failed to upload image';
+            console.error('❌ Upload failed:', errorMsg);
+            
+            // Check if it's a bucket configuration issue
+            if (errorMsg.includes('bucket') || errorMsg.includes('Storage') || errorMsg.includes('policy') || errorMsg.includes('RLS')) {
+              Alert.alert(
+                'Storage Setup Required',
+                'Please set up Supabase Storage first:\n\n1. Go to Supabase Dashboard → Storage\n2. Create bucket "profile-images" (public)\n3. Set up RLS policies\n\nSee SUPABASE_STORAGE_SETUP.md for details.',
+                [{ text: 'OK' }]
+              );
+            } else if (errorMsg.includes('Network') || errorMsg.includes('fetch')) {
+              Alert.alert(
+                'Network Error',
+                'Failed to upload image. This might be:\n\n1. Network connectivity issue\n2. Supabase Storage policies not set up\n3. CORS configuration issue\n\nPlease check your internet connection and verify Storage policies in Supabase Dashboard.',
+                [{ text: 'OK' }]
+              );
+            } else {
+              Alert.alert('Upload Error', errorMsg);
+            }
+          }
+          setUploadingImage(false);
+        } catch (fetchError: any) {
+          console.error('❌ Error converting image to blob:', fetchError);
+          setUploadingImage(false);
+          Alert.alert('Error', `Failed to process image: ${fetchError.message || 'Unknown error'}`);
+        }
+      }
+    } catch (error: any) {
+      setUploadingImage(false);
+      console.error('❌ Image picker error:', error);
+      Alert.alert('Error', error.message || 'Failed to pick image');
+    }
+  };
 
   const handleSave = async () => {
     setLoading(true);
@@ -65,6 +155,7 @@ export default function AdminProfileScreen() {
       address: address.trim() || null,
       city: city.trim() || null,
       country: country.trim() || null,
+      profileImageUrl: profileImageUrl || undefined,
     } as any);
     
     if (result.success) {
@@ -106,10 +197,24 @@ export default function AdminProfileScreen() {
       <ScrollView contentContainerStyle={styles.content}>
         <Card>
           <View style={styles.section}>
-            <Image
-              source={require('@/assets/images/adult.webp')}
-              style={styles.avatar}
-            />
+            <TouchableOpacity
+              onPress={editing ? handlePickImage : undefined}
+              disabled={!editing || uploadingImage}
+              style={styles.avatarContainer}
+            >
+              {uploadingImage ? (
+                <ActivityIndicator size="large" color={colors.primary} />
+              ) : profileImageUrl ? (
+                <Image source={{ uri: profileImageUrl }} style={styles.avatar} />
+              ) : (
+                <Image source={require('@/assets/images/adult.webp')} style={styles.avatar} />
+              )}
+              {editing && (
+                <View style={[styles.avatarOverlay, { backgroundColor: colors.primary + '80' }]}>
+                  <Ionicons name="camera" size={24} color="#fff" />
+                </View>
+              )}
+            </TouchableOpacity>
             {editing ? (
               <>
                 <TextInput
@@ -327,11 +432,24 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     position: 'relative',
   },
+  avatarContainer: {
+    position: 'relative',
+    marginBottom: 10,
+  },
   avatar: {
     width: 100,
     height: 100,
     borderRadius: 50,
-    marginBottom: 12,
+  },
+  avatarOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    borderRadius: 50,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   name: {
     fontSize: 20,
