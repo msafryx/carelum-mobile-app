@@ -168,12 +168,13 @@ export async function uploadFile(
       bucket = 'child-images';
     } else if (path.startsWith('chat-attachments/')) {
       bucket = 'chat-attachments';
-    } else if (path.startsWith('verification-documents/')) {
+    } else if (path.startsWith('verificationDocuments/') || path.startsWith('verification-documents/')) {
       bucket = 'verification-documents';
     }
 
     // Extract file path (remove bucket prefix)
-    const filePath = path.replace(/^(profileImages|profile-images|childImages|child-images|chat-attachments|verification-documents)\//, '');
+    // Handle both camelCase and kebab-case for verification documents
+    const filePath = path.replace(/^(profileImages|profile-images|childImages|child-images|chat-attachments|verificationDocuments|verification-documents)\//, '');
 
     console.log(`📤 Uploading to bucket: ${bucket}, path: ${filePath}`);
     console.log(`📦 File type: ${file instanceof Blob ? 'Blob' : file instanceof Uint8Array ? 'Uint8Array' : file instanceof ArrayBuffer ? 'ArrayBuffer' : typeof file}`);
@@ -242,12 +243,12 @@ export async function uploadFile(
         const requestStartTime = Date.now();
         
         const result = await supabase.storage
-          .from(bucket)
+      .from(bucket)
           .upload(filePath, fileToUpload, {
-            contentType: contentType || 'image/jpeg',
-            upsert: true, // Overwrite if exists
+        contentType: contentType || 'image/jpeg',
+        upsert: true, // Overwrite if exists
             cacheControl: '3600',
-          });
+      });
         
         const requestDuration = Date.now() - requestStartTime;
         console.log(`⏱️ Request completed in ${requestDuration}ms`);

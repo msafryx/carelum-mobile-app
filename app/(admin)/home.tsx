@@ -9,6 +9,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { supabase } from '@/src/config/supabase';
 
 export default function AdminHomeScreen() {
   const { colors, spacing } = useTheme();
@@ -28,12 +29,73 @@ export default function AdminHomeScreen() {
     loadStats();
   }, []);
 
+  // Realtime subscription for stats updates
+  useEffect(() => {
+    if (!supabase) return;
+
+    console.log('🔄 Setting up realtime subscription for admin stats...');
+    const channel = supabase
+      .channel('admin_stats_changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'users',
+        },
+        (payload) => {
+          console.log('🔄 User changed, refreshing stats:', payload.eventType);
+          loadStats();
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'verification_requests',
+        },
+        (payload) => {
+          console.log('🔄 Verification changed, refreshing stats:', payload.eventType);
+          loadStats();
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'sessions',
+        },
+        (payload) => {
+          console.log('🔄 Session changed, refreshing stats:', payload.eventType);
+          loadStats();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      console.log('🔄 Cleaning up realtime subscription...');
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
   const loadStats = async () => {
-    const result = await getAdminStats();
-    if (result.success && result.data) {
-      setStats(result.data);
+    try {
+      console.log('🔄 Loading admin stats...');
+      const result = await getAdminStats();
+      if (result.success && result.data) {
+        console.log('✅ Admin stats loaded:', result.data);
+        setStats(result.data);
+      } else {
+        console.error('❌ Failed to load admin stats:', result.error);
+        // Don't show alert, just log - stats will show 0
+      }
+    } catch (error: any) {
+      console.error('❌ Exception loading admin stats:', error);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   const QuickStat = ({ icon, label, value, color, onPress }: any) => (

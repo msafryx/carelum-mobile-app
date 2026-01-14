@@ -7,11 +7,18 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { useAuth } from '@/src/hooks/useAuth';
 
 export default function SitterHomeScreen() {
   const { colors, spacing } = useTheme();
   const router = useRouter();
+  const { userProfile } = useAuth();
   const [menuVisible, setMenuVisible] = useState(false);
+
+  const handleProfilePress = () => {
+    // Always route to profile setup from homepage
+    router.push('/(sitter)/profile-setup');
+  };
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
@@ -47,7 +54,7 @@ export default function SitterHomeScreen() {
           </TouchableOpacity>
           <TouchableOpacity
             style={[styles.quickButton, { backgroundColor: colors.primary }]}
-            onPress={() => router.push('/(sitter)/profile')}
+            onPress={handleProfilePress}
           >
             <Ionicons name="person" size={24} color="#fff" />
             <Text style={styles.quickText}>Profile</Text>

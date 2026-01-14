@@ -718,13 +718,13 @@ export async function deleteChild(childId: string): Promise<ServiceResult<void>>
 
     // Delete from API, fallback to direct Supabase if API fails
     if (!isTempId) {
-      try {
+        try {
         console.log('💾 Deleting child from API...');
-        const result = await apiRequest<any>(API_ENDPOINTS.CHILD_BY_ID(childId), {
-          method: 'DELETE',
-        });
+          const result = await apiRequest<any>(API_ENDPOINTS.CHILD_BY_ID(childId), {
+            method: 'DELETE',
+          });
 
-        if (!result.success) {
+          if (!result.success) {
           console.warn('⚠️ API delete failed, trying direct Supabase delete...');
           
           // Fallback to direct Supabase delete
@@ -767,10 +767,10 @@ export async function deleteChild(childId: string): Promise<ServiceResult<void>>
               },
             };
           }
-        } else {
-          console.log('✅ Child deleted from API (child_instructions deleted via cascade)');
-        }
-      } catch (error: any) {
+          } else {
+            console.log('✅ Child deleted from API (child_instructions deleted via cascade)');
+          }
+        } catch (error: any) {
         console.error('❌ Delete error:', error);
         
         // Try Supabase fallback even on exception
@@ -801,7 +801,7 @@ export async function deleteChild(childId: string): Promise<ServiceResult<void>>
               },
             };
           }
-        } else {
+    } else {
           return {
             success: false,
             error: {
@@ -877,8 +877,8 @@ export async function getChildInstructions(
             
             if (supabaseError) {
               console.warn('⚠️ Supabase fetch failed:', supabaseError);
-              return { success: true, data: null };
-            }
+        return { success: true, data: null };
+      }
             
             if (!supabaseData) {
               return { success: true, data: null };
@@ -1458,11 +1458,11 @@ export async function saveChildInstructions(
         // Keep for backward compatibility
         specialInstructions: supabaseData.special_instructions,
       };
-      
-      const result = await apiRequest<any>(API_ENDPOINTS.CHILD_INSTRUCTIONS(instructions.childId), {
-        method: 'PUT',
-        body: JSON.stringify(apiData),
-      });
+          
+          const result = await apiRequest<any>(API_ENDPOINTS.CHILD_INSTRUCTIONS(instructions.childId), {
+            method: 'PUT',
+            body: JSON.stringify(apiData),
+          });
 
       if (!result.success) {
         console.warn('⚠️ API save failed, trying direct Supabase save...');
@@ -1545,26 +1545,26 @@ export async function saveChildInstructions(
                 additionalNotes: upsertData.additional_notes || upsertData.special_instructions || undefined,
                 createdAt: new Date(upsertData.created_at),
                 updatedAt: new Date(upsertData.updated_at),
-              };
-              
+            };
+            
               // Update AsyncStorage with real data
-              try {
+            try {
                 const { save, remove, STORAGE_KEYS } = await import('./local-storage.service');
                 if (!isUpdate) {
                   await remove(STORAGE_KEYS.CHILD_INSTRUCTIONS, tempId);
                 }
-                await save(STORAGE_KEYS.CHILD_INSTRUCTIONS, {
+              await save(STORAGE_KEYS.CHILD_INSTRUCTIONS, {
                   ...savedInstructions,
                   createdAt: savedInstructions.createdAt.getTime(),
                   updatedAt: savedInstructions.updatedAt.getTime(),
-                });
+              });
               } catch (storageError) {
                 console.warn('⚠️ Failed to update AsyncStorage:', storageError);
-              }
+            }
               
               console.log('✅ Instructions saved in Supabase (direct fallback)');
               return { success: true, data: savedInstructions };
-            }
+          }
           } catch (supabaseError: any) {
             console.error('❌ Direct Supabase save failed:', supabaseError);
             return {
@@ -1575,7 +1575,7 @@ export async function saveChildInstructions(
               },
             };
           }
-        } else {
+    } else {
           return {
             success: false,
             error: {
@@ -1632,45 +1632,45 @@ export async function saveChildInstructions(
         }
         
         const savedInstructions: ChildInstructions = {
-          id: apiData.id,
-          childId: apiData.childId,
-          parentId: apiData.parentId,
-          feedingSchedule: apiData.feedingSchedule,
-          napSchedule: apiData.napSchedule,
-          bedtime: apiData.bedtime,
-          dietaryRestrictions: apiData.dietaryRestrictions,
+              id: apiData.id,
+              childId: apiData.childId,
+              parentId: apiData.parentId,
+              feedingSchedule: apiData.feedingSchedule,
+              napSchedule: apiData.napSchedule,
+              bedtime: apiData.bedtime,
+              dietaryRestrictions: apiData.dietaryRestrictions,
           medications,
           allergies,
           favoriteActivities,
           comfortItems,
-          routines: apiData.routines,
-          specialNeeds: apiData.specialNeeds,
+              routines: apiData.routines,
+              specialNeeds: apiData.specialNeeds,
           emergencyContacts: apiData.emergencyContacts ? (typeof apiData.emergencyContacts === 'string' ? JSON.parse(apiData.emergencyContacts) : apiData.emergencyContacts) : undefined,
           doctorInfo,
           additionalNotes: apiData.additionalNotes || apiData.specialInstructions || undefined,
-          createdAt: new Date(apiData.createdAt),
-          updatedAt: new Date(apiData.updatedAt),
-        };
-        
+              createdAt: new Date(apiData.createdAt),
+              updatedAt: new Date(apiData.updatedAt),
+            };
+            
         // Update AsyncStorage with real data
-        try {
-          const { save, remove, STORAGE_KEYS } = await import('./local-storage.service');
+            try {
+              const { save, remove, STORAGE_KEYS } = await import('./local-storage.service');
           if (!isUpdate) {
-            await remove(STORAGE_KEYS.CHILD_INSTRUCTIONS, tempId);
+              await remove(STORAGE_KEYS.CHILD_INSTRUCTIONS, tempId);
           }
-          await save(STORAGE_KEYS.CHILD_INSTRUCTIONS, {
+              await save(STORAGE_KEYS.CHILD_INSTRUCTIONS, {
             ...savedInstructions,
             createdAt: savedInstructions.createdAt.getTime(),
             updatedAt: savedInstructions.updatedAt.getTime(),
-          });
+              });
         } catch (storageError) {
           console.warn('⚠️ Failed to update AsyncStorage:', storageError);
-        }
+            }
         
         console.log('✅ Instructions saved to API');
         return { success: true, data: savedInstructions };
-      }
-    } catch (error: any) {
+          }
+        } catch (error: any) {
       console.error('❌ Save instructions error:', error);
       
       // Try Supabase fallback even on exception - use upsert to handle both insert and update
@@ -1721,7 +1721,7 @@ export async function saveChildInstructions(
               comfortItems = Array.isArray(upsertData.comfort_items) 
                 ? upsertData.comfort_items 
                 : (typeof upsertData.comfort_items === 'string' ? JSON.parse(upsertData.comfort_items) : undefined);
-            }
+        }
             
             let doctorInfo: {name: string; phone: string; clinic?: string} | undefined;
             if (upsertData.doctor_info) {

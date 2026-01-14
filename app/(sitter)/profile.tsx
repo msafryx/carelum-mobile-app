@@ -13,22 +13,27 @@ import {
   Pressable,
   Platform,
   RefreshControl,
+  Linking,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/src/components/ui/ThemeProvider';
 import Header from '@/src/components/ui/Header';
 import Card from '@/src/components/ui/Card';
 import SitterHamburgerMenu from '@/src/components/ui/SitterHamburgerMenu';
+import Badge from '@/src/components/ui/Badge';
 import { useRouter } from 'expo-router';
 import { useAuth } from '@/src/hooks/useAuth';
 import { updateUserProfile } from '@/src/services/auth.service';
 import { uploadFile } from '@/src/services/storage.service';
 import { ensureUserRowExists } from '@/src/services/user-api.service';
+import { getSitterVerification } from '@/src/services/verification.service';
 import { supabase } from '@/src/config/supabase';
 import { useFocusEffect } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import { User } from '@/src/types/user.types';
 import { isSupabaseConfigured } from '@/src/config/supabase';
+import { format } from 'date-fns';
+import type { VerificationRequest } from '@/src/services/verification.service';
 
 export default function SitterProfileScreen() {
   const { colors, spacing, setTheme, manualTheme } = useTheme();
@@ -58,6 +63,8 @@ export default function SitterProfileScreen() {
   const [menuVisible, setMenuVisible] = useState(false);
   // Removed fetchingProfile - profile loads in background without blocking UI
   const [saving, setSaving] = useState(false);
+  const [verification, setVerification] = useState<VerificationRequest | null>(null);
+  const [loadingVerification, setLoadingVerification] = useState(false);
   const fetchingRef = useRef(false);
   const hasFetchedRef = useRef(false);
 
@@ -96,6 +103,14 @@ export default function SitterProfileScreen() {
       await refreshProfile().catch((err) => {
         console.warn('⚠️ Failed to refresh profile:', err);
       });
+
+      // Fetch verification data
+      if (user) {
+        const verificationResult = await getSitterVerification(user.id);
+        if (verificationResult.success && verificationResult.data) {
+          setVerification(verificationResult.data);
+        }
+      }
     } catch (error: any) {
       console.error('❌ Error fetching profile:', error);
     } finally {
@@ -264,7 +279,7 @@ export default function SitterProfileScreen() {
         } else {
               Alert.alert('Upload Error', errorMsg);
             }
-          }
+        }
           setUploadingImage(false);
         } catch (fetchError: any) {
           console.error('❌ Error converting image to blob:', fetchError);
@@ -637,6 +652,90 @@ export default function SitterProfileScreen() {
           )}
           </View>
 
+        {/* Verification Status Card */}
+        {verification && (
+          <Card>
+            <View style={styles.verificationHeader}>
+              <Text style={[styles.sectionTitle, { color: colors.text }]}>Verification Status</Text>
+              <Badge
+                variant={
+                  verification.status === 'approved' ? 'success' :
+                  verification.status === 'rejected' ? 'error' :
+                  verification.status === 'under_review' ? 'warning' : 'default'
+                }
+              >
+                {verification.status === 'approved' ? 'Verified' :
+                 verification.status === 'rejected' ? 'Rejected' :
+                 verification.status === 'under_review' ? 'Under Review' : 'Pending'}
+              </Badge>
+            </View>
+            {verification.status === 'rejected' && verification.rejectionReason && (
+              <View style={[styles.rejectionBox, { backgroundColor: colors.error + '20', borderColor: colors.error }]}>
+                <Text style={[styles.rejectionTitle, { color: colors.error }]}>Rejection Reason:</Text>
+                <Text style={[styles.rejectionText, { color: colors.text }]}>{verification.rejectionReason}</Text>
+              </View>
+            )}
+            {verification.idDocumentUrl && (
+              <TouchableOpacity
+                style={[styles.documentItem, { borderColor: colors.border }]}
+                onPress={() => verification.idDocumentUrl && Linking.openURL(verification.idDocumentUrl)}
+              >
+                <Ionicons name="document-text" size={20} color={colors.primary} />
+                <Text style={[styles.documentText, { color: colors.text }]}>ID Document</Text>
+                <Ionicons name="open-outline" size={16} color={colors.textSecondary} />
+              </TouchableOpacity>
+            )}
+            {verification.backgroundCheckUrl && (
+              <TouchableOpacity
+                style={[styles.documentItem, { borderColor: colors.border }]}
+                onPress={() => verification.backgroundCheckUrl && Linking.openURL(verification.backgroundCheckUrl)}
+              >
+                <Ionicons name="document-text" size={20} color={colors.primary} />
+                <Text style={[styles.documentText, { color: colors.text }]}>Background Check</Text>
+                <Ionicons name="open-outline" size={16} color={colors.textSecondary} />
+              </TouchableOpacity>
+            )}
+            {verification.qualificationDocumentUrl && (
+              <TouchableOpacity
+                style={[styles.documentItem, { borderColor: colors.border }]}
+                onPress={() => verification.qualificationDocumentUrl && Linking.openURL(verification.qualificationDocumentUrl)}
+              >
+                <Ionicons name="school" size={20} color={colors.primary} />
+                <Text style={[styles.documentText, { color: colors.text }]}>Qualification Document</Text>
+                <Ionicons name="open-outline" size={16} color={colors.textSecondary} />
+              </TouchableOpacity>
+            )}
+            {verification.certifications && verification.certifications.length > 0 && (
+              <View style={styles.certificationsSection}>
+                <Text style={[styles.certificationsTitle, { color: colors.text }]}>Certifications:</Text>
+                {verification.certifications.map((cert, index) => (
+                  <TouchableOpacity
+                    key={index}
+                    style={[styles.documentItem, { borderColor: colors.border }]}
+                    onPress={() => cert.url && Linking.openURL(cert.url)}
+                  >
+                    <Ionicons name="ribbon-outline" size={20} color={colors.primary} />
+                    <View style={styles.certInfo}>
+                      <Text style={[styles.documentText, { color: colors.text }]}>{cert.name}</Text>
+                      {cert.issuedDate && (
+                        <Text style={[styles.certDate, { color: colors.textSecondary }]}>
+                          Issued: {format(cert.issuedDate, 'MMM dd, yyyy')}
+                        </Text>
+                      )}
+                    </View>
+                    <Ionicons name="open-outline" size={16} color={colors.textSecondary} />
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+            {verification.reviewedAt && (
+              <Text style={[styles.reviewDate, { color: colors.textSecondary }]}>
+                Reviewed: {format(verification.reviewedAt, 'MMM dd, yyyy')}
+              </Text>
+            )}
+          </Card>
+        )}
+
         <Card>
           <Text style={[styles.sectionTitle, { color: colors.text }]}>Appearance</Text>
           <View style={styles.switchRow}>
@@ -852,5 +951,59 @@ const styles = StyleSheet.create({
   menuText: {
     flex: 1,
     fontSize: 16,
+  },
+  verificationHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  rejectionBox: {
+    padding: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    marginBottom: 12,
+  },
+  rejectionTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  rejectionText: {
+    fontSize: 14,
+  },
+  documentItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    marginBottom: 8,
+  },
+  documentText: {
+    flex: 1,
+    marginLeft: 12,
+    fontSize: 14,
+  },
+  certificationsSection: {
+    marginTop: 12,
+  },
+  certificationsTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 8,
+  },
+  certInfo: {
+    flex: 1,
+    marginLeft: 12,
+  },
+  certDate: {
+    fontSize: 12,
+    marginTop: 2,
+  },
+  reviewDate: {
+    fontSize: 12,
+    marginTop: 8,
+    fontStyle: 'italic',
   },
 });

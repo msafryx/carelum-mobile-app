@@ -41,9 +41,9 @@ export default function InstructionsScreen() {
 
   // Load children on mount
   useEffect(() => {
-    if (user) {
-      loadChildren();
-    }
+      if (user) {
+        loadChildren();
+      }
   }, [user]);
 
   // Listen for children updates from real-time sync (cross-platform)
@@ -219,11 +219,11 @@ export default function InstructionsScreen() {
         // Convert to blob - works on both web and native
         // The uploadFile service handles Blob conversion internally
         console.log('🔄 Converting image to blob...');
-        const response = await fetch(asset.uri);
-        if (!response.ok) {
-          throw new Error(`Failed to fetch image: ${response.statusText}`);
-        }
-        const blob = await response.blob();
+            const response = await fetch(asset.uri);
+            if (!response.ok) {
+              throw new Error(`Failed to fetch image: ${response.statusText}`);
+            }
+            const blob = await response.blob();
         console.log('✅ Blob created, size:', blob.size, 'bytes, type:', blob.type);
         
         if (blob.size === 0) {

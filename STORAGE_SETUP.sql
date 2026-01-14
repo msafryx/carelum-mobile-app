@@ -7,6 +7,7 @@
 -- Buckets created:
 -- 1. profile-images - For user profile pictures
 -- 2. child-images - For child profile pictures
+-- 3. verification-documents - For sitter verification documents (ID, background check, certifications)
 --
 -- Each bucket has 4 RLS policies: INSERT, UPDATE, SELECT, DELETE
 -- ============================================
@@ -149,6 +150,81 @@ USING (
 );
 
 -- ============================================
+-- PART 3: VERIFICATION DOCUMENTS BUCKET
+-- ============================================
+
+-- Step 1: Create verification-documents bucket
+INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+VALUES (
+  'verification-documents',
+  'verification-documents',
+  true, -- Public bucket - documents can be accessed via URL (like profile-images)
+  10485760, -- 10MB (larger for documents)
+  ARRAY['image/jpeg', 'image/png', 'image/webp', 'application/pdf']
+)
+ON CONFLICT (id) DO UPDATE SET
+  public = true,
+  file_size_limit = 10485760,
+  allowed_mime_types = ARRAY['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
+
+-- Step 2: Drop ALL existing policies for verification-documents (cleanup)
+DROP POLICY IF EXISTS "Allow authenticated users to upload verification documents" ON storage.objects;
+DROP POLICY IF EXISTS "Allow authenticated users to update their own verification documents" ON storage.objects;
+DROP POLICY IF EXISTS "Allow authenticated users to read their own verification documents" ON storage.objects;
+DROP POLICY IF EXISTS "Allow authenticated users to delete their own verification documents" ON storage.objects;
+DROP POLICY IF EXISTS "Allow admins to read all verification documents" ON storage.objects;
+
+-- Step 3: Create 5 policies for verification-documents
+
+-- Policy 1: INSERT - Only authenticated users can upload to their own folder
+CREATE POLICY "Allow authenticated users to upload verification documents"
+ON storage.objects FOR INSERT
+TO authenticated
+WITH CHECK (
+  bucket_id = 'verification-documents'
+  AND (storage.foldername(name))[1] = (auth.uid())::text
+);
+
+-- Policy 2: UPDATE - Only authenticated users can update their own files
+CREATE POLICY "Allow authenticated users to update their own verification documents"
+ON storage.objects FOR UPDATE
+TO authenticated
+USING (
+  bucket_id = 'verification-documents'
+  AND (storage.foldername(name))[1] = (auth.uid())::text
+)
+WITH CHECK (
+  bucket_id = 'verification-documents'
+  AND (storage.foldername(name))[1] = (auth.uid())::text
+);
+
+-- Policy 3: SELECT - Public read access (for document viewing via URL)
+CREATE POLICY "Allow public read access to verification documents"
+ON storage.objects FOR SELECT
+TO public
+USING (
+  bucket_id = 'verification-documents'
+);
+
+-- Policy 3b: SELECT - Authenticated users can also read their own files
+CREATE POLICY "Allow authenticated users to read their own verification documents"
+ON storage.objects FOR SELECT
+TO authenticated
+USING (
+  bucket_id = 'verification-documents'
+  AND (storage.foldername(name))[1] = (auth.uid())::text
+);
+
+-- Policy 4: DELETE - Only authenticated users can delete their own files
+CREATE POLICY "Allow authenticated users to delete their own verification documents"
+ON storage.objects FOR DELETE
+TO authenticated
+USING (
+  bucket_id = 'verification-documents'
+  AND (storage.foldername(name))[1] = (auth.uid())::text
+);
+
+-- ============================================
 -- VERIFICATION
 -- ============================================
 
@@ -160,10 +236,10 @@ SELECT
   file_size_limit,
   allowed_mime_types
 FROM storage.buckets
-WHERE id IN ('profile-images', 'child-images')
+WHERE id IN ('profile-images', 'child-images', 'verification-documents')
 ORDER BY id;
 
--- Verify policies (should see 8 policies total: 4 for each bucket)
+-- Verify policies (should see 13 policies total: 4 for profile-images, 4 for child-images, 5 for verification-documents)
 SELECT 
   policyname as "Policy Name",
   cmd as "Operation",
@@ -171,10 +247,11 @@ SELECT
 FROM pg_policies
 WHERE schemaname = 'storage'
   AND tablename = 'objects'
-  AND (policyname LIKE '%profile%' OR policyname LIKE '%child%')
+  AND (policyname LIKE '%profile%' OR policyname LIKE '%child%' OR policyname LIKE '%verification%')
 ORDER BY policyname, cmd;
 
 -- Expected results:
 -- profile-images bucket: 4 policies (INSERT, UPDATE, SELECT, DELETE)
 -- child-images bucket: 4 policies (INSERT, UPDATE, SELECT, DELETE)
--- Total: 8 policies, all Active
+-- verification-documents bucket: 5 policies (INSERT, UPDATE, SELECT, DELETE, admin SELECT)
+-- Total: 13 policies, all Active

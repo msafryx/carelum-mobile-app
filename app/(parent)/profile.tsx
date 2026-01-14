@@ -315,16 +315,16 @@ export default function ProfileScreen() {
           // Use ID as key for deduplication
           if (c.id) {
             childrenMap.set(c.id, {
-              ...c,
-              createdAt: new Date(c.createdAt || Date.now()),
-              updatedAt: new Date(c.updatedAt || Date.now()),
-              dateOfBirth: c.dateOfBirth ? new Date(c.dateOfBirth) : undefined,
+            ...c,
+            createdAt: new Date(c.createdAt || Date.now()),
+            updatedAt: new Date(c.updatedAt || Date.now()),
+            dateOfBirth: c.dateOfBirth ? new Date(c.dateOfBirth) : undefined,
             } as Child);
           }
         }
         
         const formattedChildren = Array.from(childrenMap.values());
-        setChildren(formattedChildren);
+          setChildren(formattedChildren);
         console.log(`✅ Loaded ${formattedChildren.length} children from AsyncStorage (deduplicated by ID, temp IDs filtered)`);
       } else {
         setChildren([]);
@@ -465,8 +465,8 @@ export default function ProfileScreen() {
             }
           } else {
             // If in modal, just update the form
-            setChildForm({ ...childForm, photoUrl: uploadResult.data });
-            Alert.alert('Success', 'Child photo uploaded!');
+          setChildForm({ ...childForm, photoUrl: uploadResult.data });
+          Alert.alert('Success', 'Child photo uploaded!');
           }
         } else {
           Alert.alert('Error', uploadResult.error?.message || 'Failed to upload image');

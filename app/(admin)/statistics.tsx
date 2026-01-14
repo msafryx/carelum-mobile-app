@@ -14,6 +14,7 @@ import Card from '@/src/components/ui/Card';
 import AdminHamburgerMenu from '@/src/components/ui/AdminHamburgerMenu';
 import LoadingSpinner from '@/src/components/ui/LoadingSpinner';
 import { getAdminStats } from '@/src/services/admin.service';
+import { supabase } from '@/src/config/supabase';
 
 export default function StatisticsScreen() {
   const { colors } = useTheme();
@@ -30,16 +31,76 @@ export default function StatisticsScreen() {
   });
 
   const loadStats = async () => {
-    const result = await getAdminStats();
-    if (result.success && result.data) {
-      setStats(result.data);
+    try {
+      console.log('🔄 Loading statistics...');
+      const result = await getAdminStats();
+      if (result.success && result.data) {
+        console.log('✅ Statistics loaded:', result.data);
+        setStats(result.data);
+      } else {
+        console.error('❌ Failed to load statistics:', result.error);
+      }
+    } catch (error: any) {
+      console.error('❌ Exception loading statistics:', error);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
     }
-    setLoading(false);
-    setRefreshing(false);
   };
 
   useEffect(() => {
     loadStats();
+  }, []);
+
+  // Realtime subscription for stats updates
+  useEffect(() => {
+    if (!supabase) return;
+
+    console.log('🔄 Setting up realtime subscription for statistics...');
+    const channel = supabase
+      .channel('statistics_changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'users',
+        },
+        (payload) => {
+          console.log('🔄 User changed, refreshing stats:', payload.eventType);
+          loadStats();
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'verification_requests',
+        },
+        (payload) => {
+          console.log('🔄 Verification changed, refreshing stats:', payload.eventType);
+          loadStats();
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'sessions',
+        },
+        (payload) => {
+          console.log('🔄 Session changed, refreshing stats:', payload.eventType);
+          loadStats();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      console.log('🔄 Cleaning up realtime subscription...');
+      supabase.removeChannel(channel);
+    };
   }, []);
 
   const onRefresh = () => {
