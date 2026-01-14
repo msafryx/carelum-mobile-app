@@ -476,7 +476,7 @@ export default function UsersScreen() {
                         <View style={[styles.detailRow, { borderBottomColor: colors.border }]}>
                           <Text style={[styles.detailLabel, { color: colors.textSecondary }]}>Hourly Rate:</Text>
                           <Text style={[styles.detailValue, { color: colors.text }]}>
-                            ${(userDetail as any).hourlyRate?.toFixed(2) || 'Not set'}
+                            LKR {(userDetail as any).hourlyRate?.toFixed(2) || 'Not set'}
                           </Text>
                         </View>
                         <View style={[styles.detailRow, { borderBottomColor: colors.border }]}>

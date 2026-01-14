@@ -20,7 +20,7 @@ import { useRouter } from 'expo-router';
 import { useAuth } from '@/src/hooks/useAuth';
 import { updateUserProfile } from '@/src/services/auth.service';
 import { uploadFile } from '@/src/services/storage.service';
-import { createVerificationRequest } from '@/src/services/verification.service';
+import { createVerificationRequest, getSitterVerification } from '@/src/services/verification.service';
 import * as ImagePicker from 'expo-image-picker';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { format } from 'date-fns';
@@ -68,6 +68,37 @@ export default function ProfileSetupScreen() {
 
   const [isSaved, setIsSaved] = useState(false);
   const [hasVerificationRequest, setHasVerificationRequest] = useState(false);
+  const [hasVerifiedMandatoryDocs, setHasVerifiedMandatoryDocs] = useState(false);
+
+  // Check if ID and background check are already verified
+  useEffect(() => {
+    const checkVerifiedDocs = async () => {
+      if (!user) return;
+      
+      try {
+        const result = await getSitterVerification(user.id);
+        if (result.success && result.data) {
+          const verification = result.data;
+          // Check if both ID and background check are verified
+          const idVerified = verification.idDocumentVerified === true;
+          const bgVerified = verification.backgroundCheckVerified === true;
+          setHasVerifiedMandatoryDocs(idVerified && bgVerified);
+          
+          // Load existing document URLs if verified
+          if (idVerified && verification.idDocumentUrl) {
+            setIdDocumentUrl(verification.idDocumentUrl);
+          }
+          if (bgVerified && verification.backgroundCheckUrl) {
+            setBackgroundCheckUrl(verification.backgroundCheckUrl);
+          }
+        }
+      } catch (error) {
+        console.warn('Failed to check verified documents:', error);
+      }
+    };
+    
+    checkVerifiedDocs();
+  }, [user]);
 
   // Load existing profile data
   useEffect(() => {
@@ -205,9 +236,17 @@ export default function ProfileSetupScreen() {
       return;
     }
 
-    if (!idDocumentUri && !idDocumentUrl) {
-      Alert.alert('Required Document', 'Please upload an ID document (passport or ID card).');
-      return;
+    // ID and background check are mandatory only on first submission
+    // If they're already verified, they're optional for updates
+    if (!hasVerifiedMandatoryDocs) {
+      if (!idDocumentUri && !idDocumentUrl) {
+        Alert.alert('Required Document', 'Please upload an ID document (passport or ID card).');
+        return;
+      }
+      if (!backgroundCheckUri && !backgroundCheckUrl) {
+        Alert.alert('Required Document', 'Please upload a background check document.');
+        return;
+      }
     }
 
     setSaving(true);
@@ -506,9 +545,13 @@ export default function ProfileSetupScreen() {
           </TouchableOpacity>
 
           {/* Background Check */}
-          <Text style={[styles.label, { color: colors.text }]}>Background Check (Optional)</Text>
+          <Text style={[styles.label, { color: colors.text }]}>
+            Background Check {!hasVerifiedMandatoryDocs ? '(Required)' : '(Already Verified)'}
+          </Text>
           <Text style={[styles.hintText, { color: colors.textSecondary }]}>
-            Upload a clear photo or scanned copy of your background check document
+            {hasVerifiedMandatoryDocs 
+              ? 'Your background check is already verified. You can update it if needed.'
+              : 'Upload a clear photo or scanned copy of your background check document'}
           </Text>
           <TouchableOpacity
             style={[styles.documentButton, { borderColor: colors.border }]}

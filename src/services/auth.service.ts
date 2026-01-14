@@ -39,7 +39,7 @@ export async function signUp(data: SignUpData): Promise<ServiceResult<any>> {
       };
     }
 
-    // Create auth user with display_name in metadata
+    // Create auth user
     // Note: Supabase requires email confirmation by default
     // To disable: Supabase Dashboard → Authentication → Settings → Disable "Enable email confirmations"
     const { data: authData, error: authError } = await supabase.auth.signUp({
@@ -47,11 +47,6 @@ export async function signUp(data: SignUpData): Promise<ServiceResult<any>> {
       password: data.password,
       options: {
         emailRedirectTo: undefined, // Optional: set redirect URL after email confirmation
-        data: {
-          display_name: data.displayName.trim(), // Set display_name in auth metadata immediately
-          full_name: data.displayName.trim(), // Also set full_name for compatibility
-          role: data.role === 'babysitter' ? 'sitter' : data.role,
-        },
       },
     });
 
@@ -84,10 +79,9 @@ export async function signUp(data: SignUpData): Promise<ServiceResult<any>> {
       };
     }
 
-    // Skip user_number generation during sign-up to avoid duplicate key conflicts
-    // The database trigger or a background job will assign user_number later
-    // This prevents race conditions where multiple users get the same number
-    const userNumber = null; // Let DB handle user_number assignment to avoid conflicts
+    // Generate user number (use local fallback to avoid RLS recursion during sign-up)
+    // During sign-up, we can't query users table due to RLS, so use local generation
+    const userNumber = await (await import('./user-number.service')).getNextUserNumberFromLocal(data.role);
 
     // Normalize role: 'babysitter' -> 'sitter' for database compatibility
     const dbRole = data.role === 'babysitter' ? 'sitter' : data.role;
@@ -142,7 +136,7 @@ export async function signUp(data: SignUpData): Promise<ServiceResult<any>> {
           p_display_name: data.displayName.trim(), // Always set display_name from user input
           p_role: dbRole,
           p_preferred_language: data.preferredLanguage || LANGUAGES.ENGLISH,
-          p_user_number: null, // Skip user_number during sign-up to avoid duplicate key conflicts
+          p_user_number: userNumber, // Always set user number
           p_phone_number: data.phoneNumber && data.phoneNumber.trim() ? data.phoneNumber.trim() : null,
           p_photo_url: null,
           p_theme: 'auto',
@@ -167,83 +161,14 @@ export async function signUp(data: SignUpData): Promise<ServiceResult<any>> {
           console.error('❌ RPC create_user_profile failed:', rpcError);
           console.error('❌ Error details:', JSON.stringify(rpcError, null, 2));
           
-          // Check if error is due to duplicate user_number
-          const isDuplicateUserNumber = rpcError.code === '23505' && 
-            (rpcError.message?.includes('user_number') || rpcError.message?.includes('users_user_number_key'));
-          
-          if (isDuplicateUserNumber) {
-            console.warn('⚠️ Duplicate user_number detected, trying update without user_number...');
-            
-            // Try to update existing row with display_name (user_number conflict, but row might exist from trigger)
-            // First, check if row exists
-            const { data: existingUser } = await supabase
-              .from('users')
-              .select('id, user_number')
-              .eq('id', authData.user!.id)
-              .single();
-            
-            if (existingUser) {
-              // Row exists, just update display_name and other fields (preserve existing user_number)
-              const updateData: any = {
-                email: data.email,
-                display_name: data.displayName.trim(), // CRITICAL: Save display_name
-                role: dbRole,
-                preferred_language: data.preferredLanguage || LANGUAGES.ENGLISH,
-                phone_number: data.phoneNumber && data.phoneNumber.trim() ? data.phoneNumber.trim() : null,
-                theme: 'auto',
-                updated_at: new Date().toISOString(),
-              };
-              
-              const updateRes = await executeWrite(() => supabase
-                .from('users')
-                .update(updateData)
-                .eq('id', authData.user!.id), 'users_update_display_name');
-              
-              if (updateRes.error) {
-                console.error('❌ Update display_name failed:', updateRes.error);
-              } else {
-                console.log('✅ Display name saved via update (user_number conflict handled)');
-              }
-            } else {
-              // Row doesn't exist, try insert without user_number (let DB handle it or set later)
-              const insertData = {
-                id: authData.user!.id,
-                email: data.email,
-                display_name: data.displayName.trim(), // CRITICAL: Save display_name
-                role: dbRole,
-                preferred_language: data.preferredLanguage || LANGUAGES.ENGLISH,
-                user_number: null, // Skip user_number to avoid conflict
-                phone_number: data.phoneNumber && data.phoneNumber.trim() ? data.phoneNumber.trim() : null,
-                photo_url: null,
-                theme: 'auto',
-                is_verified: false,
-                verification_status: null,
-                hourly_rate: null,
-                bio: null,
-                address: null,
-                city: null,
-                country: 'Sri Lanka',
-              };
-              
-              const insertRes = await executeWrite(() => supabase
-                .from('users')
-                .insert(insertData), 'users_insert_no_user_number');
-              
-              if (insertRes.error) {
-                console.error('❌ Insert without user_number failed:', insertRes.error);
-              } else {
-                console.log('✅ Profile created without user_number (will be set later)');
-              }
-            }
-          } else {
-            // Other error, try upsert as fallback
+          // Try upsert as fallback (non-blocking)
           const upsertData = {
             id: authData.user!.id,
             email: data.email,
-              display_name: data.displayName.trim(), // CRITICAL: Save display_name
+            display_name: data.displayName.trim(),
             role: dbRole,
             preferred_language: data.preferredLanguage || LANGUAGES.ENGLISH,
-            user_number: null, // Skip user_number to avoid conflicts
+            user_number: userNumber,
             phone_number: data.phoneNumber && data.phoneNumber.trim() ? data.phoneNumber.trim() : null,
             photo_url: null,
             theme: 'auto',
@@ -260,6 +185,7 @@ export async function signUp(data: SignUpData): Promise<ServiceResult<any>> {
             ...upsertData,
             display_name: upsertData.display_name,
             user_number: upsertData.user_number,
+            phone_number: upsertData.phone_number,
           });
           
           const upsertRes = await executeWrite(() => supabase
@@ -270,30 +196,8 @@ export async function signUp(data: SignUpData): Promise<ServiceResult<any>> {
           if (upsertError) {
             console.error('❌ Upsert fallback also failed:', upsertError);
             console.error('❌ Upsert error details:', JSON.stringify(upsertError, null, 2));
-              
-              // Last resort: Try update if row exists (might have been created by trigger)
-              if (upsertError.code === '23505' && upsertError.message?.includes('user_number')) {
-                console.log('🔄 Last resort: Updating existing row with display_name...');
-                const { error: updateError } = await supabase
-                  .from('users')
-                  .update({
-                    display_name: data.displayName.trim(), // CRITICAL: Save display_name
-                    email: data.email,
-                    role: dbRole,
-                    preferred_language: data.preferredLanguage || LANGUAGES.ENGLISH,
-                    updated_at: new Date().toISOString(),
-                  })
-                  .eq('id', authData.user!.id);
-                
-                if (updateError) {
-                  console.error('❌ Last resort update also failed:', updateError);
-                } else {
-                  console.log('✅ Display name saved via last resort update');
-                }
-              }
           } else {
             console.log('✅ Profile created in Supabase via upsert fallback');
-            }
           }
         } else {
           console.log('✅ Profile created in Supabase via RPC');

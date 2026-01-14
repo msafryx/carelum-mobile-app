@@ -244,6 +244,7 @@ export default function VerificationStatusScreen() {
             </Badge>
           </View>
 
+          {/* Admin Comment for Rejected Status */}
           {verification.status === 'rejected' && verification.rejectionReason && (
             <View style={[styles.rejectionBox, { backgroundColor: colors.error + '20', borderColor: colors.error }]}>
               <Text style={[styles.rejectionTitle, { color: colors.error }]}>Rejection Reason:</Text>
@@ -251,11 +252,12 @@ export default function VerificationStatusScreen() {
             </View>
           )}
 
+          {/* Admin Comment for Approved Status */}
           {verification.status === 'approved' && verification.rejectionReason && (
             <View style={[styles.successBox, { backgroundColor: colors.success + '20', borderColor: colors.success }]}>
               <Ionicons name="information-circle" size={20} color={colors.success || '#10b981'} />
               <Text style={[styles.successText, { color: colors.text, marginLeft: 8 }]}>
-                Admin Note: {verification.rejectionReason}
+                Admin Comment: {verification.rejectionReason}
               </Text>
             </View>
           )}
@@ -276,6 +278,21 @@ export default function VerificationStatusScreen() {
                 {format(verification.reviewedAt, 'MMM dd, yyyy HH:mm')}
               </Text>
             </View>
+          )}
+
+          {/* Resubmit Button - Show if rejected or any document is rejected */}
+          {(verification.status === 'rejected' || 
+            verification.idDocumentVerified === false ||
+            verification.backgroundCheckVerified === false ||
+            verification.qualificationDocumentVerified === false ||
+            (verification.certifications && verification.certifications.some(c => c.verified === false))) && (
+            <TouchableOpacity
+              style={[styles.resubmitButton, { backgroundColor: colors.primary }]}
+              onPress={() => router.push('/(sitter)/profile-setup')}
+            >
+              <Ionicons name="refresh" size={20} color="#fff" />
+              <Text style={styles.resubmitButtonText}>Resubmit Documents</Text>
+            </TouchableOpacity>
           )}
         </Card>
 
@@ -311,7 +328,16 @@ export default function VerificationStatusScreen() {
                     </Badge>
                   )}
                 </View>
-                <Text style={[styles.documentSubtitle, { color: colors.textSecondary }]}>Tap to view</Text>
+                <View style={styles.documentMeta}>
+                  <Text style={[styles.documentSubtitle, { color: colors.textSecondary }]}>
+                    Submitted: {format(verification.submittedAt, 'MMM dd, yyyy HH:mm')}
+                  </Text>
+                  {verification.idDocumentVerified !== undefined && verification.reviewedAt && (
+                    <Text style={[styles.documentSubtitle, { color: colors.textSecondary, marginTop: 2 }]}>
+                      Reviewed: {format(verification.reviewedAt, 'MMM dd, yyyy HH:mm')}
+                    </Text>
+                  )}
+                </View>
                 {verification.idDocumentComment && (
                   <Text style={[styles.adminComment, { color: verification.idDocumentVerified ? colors.success : colors.error }]}>
                     Admin: {verification.idDocumentComment}
@@ -350,7 +376,16 @@ export default function VerificationStatusScreen() {
                     </Badge>
                   )}
                 </View>
-                <Text style={[styles.documentSubtitle, { color: colors.textSecondary }]}>Tap to view</Text>
+                <View style={styles.documentMeta}>
+                  <Text style={[styles.documentSubtitle, { color: colors.textSecondary }]}>
+                    Submitted: {format(verification.submittedAt, 'MMM dd, yyyy HH:mm')}
+                  </Text>
+                  {verification.backgroundCheckVerified !== undefined && verification.reviewedAt && (
+                    <Text style={[styles.documentSubtitle, { color: colors.textSecondary, marginTop: 2 }]}>
+                      Reviewed: {format(verification.reviewedAt, 'MMM dd, yyyy HH:mm')}
+                    </Text>
+                  )}
+                </View>
                 {verification.backgroundCheckComment && (
                   <Text style={[styles.adminComment, { color: verification.backgroundCheckVerified ? colors.success : colors.error }]}>
                     Admin: {verification.backgroundCheckComment}
@@ -389,7 +424,16 @@ export default function VerificationStatusScreen() {
                     </Badge>
                   )}
                 </View>
-                <Text style={[styles.documentSubtitle, { color: colors.textSecondary }]}>Tap to view</Text>
+                <View style={styles.documentMeta}>
+                  <Text style={[styles.documentSubtitle, { color: colors.textSecondary }]}>
+                    Submitted: {format(verification.submittedAt, 'MMM dd, yyyy HH:mm')}
+                  </Text>
+                  {verification.qualificationDocumentVerified !== undefined && verification.reviewedAt && (
+                    <Text style={[styles.documentSubtitle, { color: colors.textSecondary, marginTop: 2 }]}>
+                      Reviewed: {format(verification.reviewedAt, 'MMM dd, yyyy HH:mm')}
+                    </Text>
+                  )}
+                </View>
                 {verification.qualificationDocumentComment && (
                   <Text style={[styles.adminComment, { color: verification.qualificationDocumentVerified ? colors.success : colors.error }]}>
                     Admin: {verification.qualificationDocumentComment}
@@ -432,10 +476,20 @@ export default function VerificationStatusScreen() {
                         </Badge>
                       )}
                     </View>
-                    <Text style={[styles.documentSubtitle, { color: colors.textSecondary }]}>
-                      Issued: {format(cert.issuedDate, 'MMM dd, yyyy')}
-                      {cert.expiryDate && ` • Expires: ${format(cert.expiryDate, 'MMM dd, yyyy')}`}
-                    </Text>
+                    <View style={styles.documentMeta}>
+                      <Text style={[styles.documentSubtitle, { color: colors.textSecondary }]}>
+                        Issued: {format(cert.issuedDate, 'MMM dd, yyyy')}
+                        {cert.expiryDate && ` • Expires: ${format(cert.expiryDate, 'MMM dd, yyyy')}`}
+                      </Text>
+                      <Text style={[styles.documentSubtitle, { color: colors.textSecondary, marginTop: 2 }]}>
+                        Submitted: {format(verification.submittedAt, 'MMM dd, yyyy HH:mm')}
+                      </Text>
+                      {cert.verified !== undefined && verification.reviewedAt && (
+                        <Text style={[styles.documentSubtitle, { color: colors.textSecondary, marginTop: 2 }]}>
+                          Reviewed: {format(verification.reviewedAt, 'MMM dd, yyyy HH:mm')}
+                        </Text>
+                      )}
+                    </View>
                     {cert.adminComment && (
                       <Text style={[styles.adminComment, { color: cert.verified ? colors.success : colors.error }]}>
                         Admin: {cert.adminComment}
@@ -582,6 +636,9 @@ const styles = StyleSheet.create({
   documentSubtitle: {
     fontSize: 12,
   },
+  documentMeta: {
+    marginTop: 4,
+  },
   certificationsSection: {
     marginTop: 16,
   },
@@ -605,6 +662,26 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
     fontWeight: '600',
+  },
+  resubmitButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    marginTop: 16,
+    gap: 8,
+  },
+  resubmitButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  adminComment: {
+    fontSize: 12,
+    marginTop: 4,
+    fontStyle: 'italic',
   },
   actionButton: {
     flexDirection: 'row',

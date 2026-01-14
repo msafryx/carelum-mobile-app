@@ -26,17 +26,14 @@ export async function getAllUsers(
       };
     }
 
-    // RLS policy should allow admins to read all users
-    // If this fails, it means the current user is not an admin or RLS is blocking
-    // Note: Database stores 'sitter' but UI uses 'babysitter', so we need to map
     let query = supabase
       .from('users')
       .select('*')
       .order('created_at', { ascending: false })
       .limit(limitCount);
 
+    // Map frontend role to database role
     if (role) {
-      // Map 'babysitter' (UI) to 'sitter' (DB) for querying
       const dbRole = role === 'babysitter' ? 'sitter' : role;
       query = query.eq('role', dbRole);
     }
@@ -44,24 +41,20 @@ export async function getAllUsers(
     const { data, error } = await query;
 
     if (error) {
-      console.error('❌ Failed to fetch users:', error);
-      console.error('Error details:', JSON.stringify(error, null, 2));
       return {
         success: false,
         error: {
           code: ErrorCode.DB_SELECT_ERROR,
-          message: `Failed to fetch users: ${error.message || JSON.stringify(error)}`,
+          message: `Failed to fetch users: ${error.message}`,
         },
       };
     }
-
-    console.log(`✅ Fetched ${data?.length || 0} users from database`);
 
     const users: User[] = (data || []).map((row: any) => ({
       id: row.id,
       email: row.email,
       displayName: row.display_name,
-      // Map 'sitter' (DB) to 'babysitter' (UI) for consistency
+      // Map database role to frontend role
       role: row.role === 'sitter' ? 'babysitter' : row.role,
       preferredLanguage: row.preferred_language,
       userNumber: row.user_number,
@@ -120,7 +113,7 @@ export async function getUserById(userId: string): Promise<ServiceResult<User>> 
       id: data.id,
       email: data.email,
       displayName: data.display_name,
-      // Map 'sitter' (DB) to 'babysitter' (UI) for consistency
+      // Map database role to frontend role
       role: data.role === 'sitter' ? 'babysitter' : data.role,
       preferredLanguage: data.preferred_language,
       userNumber: data.user_number,
@@ -166,8 +159,8 @@ export async function updateUser(
 
     const supabaseUpdates: any = {};
     if (updates.displayName !== undefined) supabaseUpdates.display_name = updates.displayName;
+    // Map frontend role to database role
     if (updates.role !== undefined) {
-      // Map 'babysitter' (UI) to 'sitter' (DB) for saving
       supabaseUpdates.role = updates.role === 'babysitter' ? 'sitter' : updates.role;
     }
     if (updates.preferredLanguage !== undefined) supabaseUpdates.preferred_language = updates.preferredLanguage;
@@ -305,6 +298,7 @@ export async function changeUserRole(
   userId: string,
   newRole: 'parent' | 'babysitter' | 'admin'
 ): Promise<ServiceResult<void>> {
+  // Map frontend role to database role - updateUser will handle the mapping
   return updateUser(userId, { role: newRole } as any);
 }
 
@@ -330,33 +324,15 @@ export async function getAdminStats(): Promise<ServiceResult<{
       };
     }
 
-    // Get user counts - RLS should allow admins to read all
-    // Note: Database stores 'sitter' but UI uses 'babysitter'
+    // Get user counts - map 'babysitter' to 'sitter' for database query
     const [allUsersResult, parentsResult, sittersResult, adminsResult, pendingVerificationsResult, activeSessionsResult] = await Promise.all([
       supabase.from('users').select('id', { count: 'exact', head: true }),
       supabase.from('users').select('id', { count: 'exact', head: true }).eq('role', 'parent'),
-      supabase.from('users').select('id', { count: 'exact', head: true }).eq('role', 'sitter'), // DB uses 'sitter', not 'babysitter'
+      supabase.from('users').select('id', { count: 'exact', head: true }).eq('role', 'sitter'), // Database uses 'sitter'
       supabase.from('users').select('id', { count: 'exact', head: true }).eq('role', 'admin'),
       supabase.from('verification_requests').select('id', { count: 'exact', head: true }).eq('status', 'pending'),
       supabase.from('sessions').select('id', { count: 'exact', head: true }).eq('status', 'active'),
     ]);
-
-    // Log any errors for debugging
-    if (allUsersResult.error) console.error('❌ Error fetching total users:', allUsersResult.error);
-    if (parentsResult.error) console.error('❌ Error fetching parents:', parentsResult.error);
-    if (sittersResult.error) console.error('❌ Error fetching sitters:', sittersResult.error);
-    if (adminsResult.error) console.error('❌ Error fetching admins:', adminsResult.error);
-    if (pendingVerificationsResult.error) console.error('❌ Error fetching pending verifications:', pendingVerificationsResult.error);
-    if (activeSessionsResult.error) console.error('❌ Error fetching active sessions:', activeSessionsResult.error);
-
-    console.log('📊 Admin stats:', {
-      totalUsers: allUsersResult.count || 0,
-      totalParents: parentsResult.count || 0,
-      totalSitters: sittersResult.count || 0,
-      totalAdmins: adminsResult.count || 0,
-      pendingVerifications: pendingVerificationsResult.count || 0,
-      activeSessions: activeSessionsResult.count || 0,
-    });
 
     return {
       success: true,

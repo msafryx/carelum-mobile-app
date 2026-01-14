@@ -255,7 +255,7 @@ export default function VerificationsScreen() {
 
               {verification.hourlyRate && (
                 <Text style={[styles.hourlyRate, { color: colors.text }]}>
-                  Hourly Rate: ${verification.hourlyRate.toFixed(2)}
+                  Hourly Rate: LKR {verification.hourlyRate.toFixed(2)}
                 </Text>
               )}
 
@@ -520,7 +520,7 @@ export default function VerificationsScreen() {
               </View>
 
               {/* Document Verification Progress */}
-              <View style={styles.progressSection}>
+              <View style={[styles.progressSection, { backgroundColor: colors.card, borderColor: colors.border }]}>
                 <Text style={[styles.progressTitle, { color: colors.text }]}>Document Verification Progress:</Text>
                 <View style={styles.progressBar}>
                   {(() => {
@@ -586,11 +586,11 @@ export default function VerificationsScreen() {
       {/* Review Modal */}
       <Modal
         visible={reviewModalVisible}
-        transparent={true}
+        transparent={false}
         animationType="slide"
         onRequestClose={() => setReviewModalVisible(false)}
       >
-        <View style={styles.modalOverlay}>
+        <View style={[styles.modalOverlay, { backgroundColor: colors.background }]}>
           <View style={[styles.modalContent, { backgroundColor: colors.card }]}>
             <View style={styles.modalHeader}>
               <Text style={[styles.modalTitle, { color: colors.text }]}>Review Verification</Text>
@@ -673,11 +673,11 @@ export default function VerificationsScreen() {
       {/* Document Verification Modal */}
       <Modal
         visible={docVerifyModalVisible}
-        transparent={true}
+        transparent={false}
         animationType="slide"
         onRequestClose={() => setDocVerifyModalVisible(false)}
       >
-        <View style={styles.modalOverlay}>
+        <View style={[styles.modalOverlay, { backgroundColor: colors.background }]}>
           <View style={[styles.modalContent, { backgroundColor: colors.card }]}>
             <View style={styles.modalHeader}>
               <Text style={[styles.modalTitle, { color: colors.text }]}>
@@ -723,7 +723,7 @@ export default function VerificationsScreen() {
                           selectedDocType,
                           true,
                           docVerifyComment.trim() || undefined,
-                          selectedDocType === 'certification' ? selectedCertIndex || undefined : undefined
+                          selectedDocType === 'certification' ? (selectedCertIndex !== null ? selectedCertIndex : undefined) : undefined
                         );
                         if (result.success) {
                           Alert.alert('Success', 'Document verified successfully!', [
@@ -765,7 +765,7 @@ export default function VerificationsScreen() {
                           selectedDocType,
                           false,
                           docVerifyComment.trim() || 'Document rejected',
-                          selectedDocType === 'certification' ? selectedCertIndex || undefined : undefined
+                          selectedDocType === 'certification' ? (selectedCertIndex !== null ? selectedCertIndex : undefined) : undefined
                         );
                         if (result.success) {
                           Alert.alert('Success', 'Document rejected.', [
@@ -905,7 +905,7 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     padding: 12,
     borderRadius: 8,
-    backgroundColor: '#f5f5f5',
+    borderWidth: 1,
   },
   progressTitle: {
     fontSize: 14,
@@ -953,15 +953,11 @@ const styles = StyleSheet.create({
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
   },
   modalContent: {
-    width: '90%',
-    maxWidth: 500,
-    borderRadius: 16,
+    flex: 1,
     padding: 20,
+    borderRadius: 0,
   },
   modalHeader: {
     flexDirection: 'row',
