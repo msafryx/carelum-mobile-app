@@ -96,21 +96,77 @@ export async function createVerificationRequest(
     documentsObj.bio = requestData.bio;
     documentsObj.hourlyRate = requestData.hourlyRate;
 
-    const insertRes = await executeWrite(() => supabase
+    // Check if there's an existing verification request for this sitter
+    const { data: existingRequests, error: checkError } = await supabase
       .from('verification_requests')
-      .insert({
-        sitter_id: requestData.sitterId,
-        status: 'pending',
-        documents: Object.keys(documentsObj).length > 0 ? JSON.stringify(documentsObj) : null,
-        qualifications_text: requestData.qualifications && requestData.qualifications.length > 0 
-          ? requestData.qualifications.join('; ') 
-          : null,
-        admin_notes: null,
-        reviewed_by: null,
-        reviewed_at: null,
-      })
-      .select()
-      .single(), 'verification_insert');
+      .select('id, status')
+      .eq('sitter_id', requestData.sitterId)
+      .order('created_at', { ascending: false })
+      .limit(1);
+
+    const existingRequest = existingRequests && existingRequests.length > 0 ? existingRequests[0] : null;
+    
+    if (checkError && checkError.code !== 'PGRST116') {
+      console.warn('⚠️ Error checking for existing verification request:', checkError);
+    }
+
+    let data: any;
+    let error: any;
+
+    if (existingRequest) {
+      console.log('🔄 Updating existing verification request:', existingRequest.id, 'from status:', existingRequest.status);
+      // Update existing request - reset to pending and clear previous review data
+      const updateRes = await executeWrite(() => supabase
+        .from('verification_requests')
+        .update({
+          status: 'pending',
+          documents: Object.keys(documentsObj).length > 0 ? JSON.stringify(documentsObj) : null,
+          qualifications_text: requestData.qualifications && requestData.qualifications.length > 0 
+            ? requestData.qualifications.join('; ') 
+            : null,
+          admin_notes: null,
+          reviewed_by: null,
+          reviewed_at: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', existingRequest.id)
+        .select()
+        .single(), 'verification_update');
+
+      data = updateRes.data;
+      error = updateRes.error;
+      if (error) {
+        console.error('❌ Error updating verification request:', error);
+      } else {
+        console.log('✅ Successfully updated verification request');
+      }
+    } else {
+      console.log('➕ Creating new verification request for sitter:', requestData.sitterId);
+      // Create new request
+      const insertRes = await executeWrite(() => supabase
+        .from('verification_requests')
+        .insert({
+          sitter_id: requestData.sitterId,
+          status: 'pending',
+          documents: Object.keys(documentsObj).length > 0 ? JSON.stringify(documentsObj) : null,
+          qualifications_text: requestData.qualifications && requestData.qualifications.length > 0 
+            ? requestData.qualifications.join('; ') 
+            : null,
+          admin_notes: null,
+          reviewed_by: null,
+          reviewed_at: null,
+        })
+        .select()
+        .single(), 'verification_insert');
+
+      data = insertRes.data;
+      error = insertRes.error;
+      if (error) {
+        console.error('❌ Error creating verification request:', error);
+      } else {
+        console.log('✅ Successfully created verification request');
+      }
+    }
 
     const data = insertRes.data;
     const error = insertRes.error;
@@ -345,10 +401,11 @@ export async function getPendingVerifications(): Promise<ServiceResult<Verificat
           role
         )
       `)
-      .eq('status', 'pending')
+      .in('status', ['pending', 'under_review'])
       .order('created_at', { ascending: true });
 
     if (error) {
+      console.error('❌ Error fetching pending verifications:', error);
       return {
         success: false,
         error: {
@@ -357,6 +414,8 @@ export async function getPendingVerifications(): Promise<ServiceResult<Verificat
         },
       };
     }
+
+    console.log(`📋 Found ${data?.length || 0} pending/under_review verification requests`);
 
     // Convert document paths to full URLs for all requests (same logic as getSitterVerification)
     const requests: VerificationRequest[] = await Promise.all(
