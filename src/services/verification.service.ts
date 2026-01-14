@@ -304,7 +304,7 @@ export async function getSitterVerification(
       qualificationDocumentVerified,
       qualificationDocumentComment,
       certifications,
-      rejectionReason: data.admin_notes && data.status === 'rejected' ? data.admin_notes : undefined,
+      rejectionReason: data.admin_notes || undefined, // Show admin notes for both approved and rejected
       bio: documents?.bio,
       qualifications: data.qualifications_text ? data.qualifications_text.split('; ') : (documents?.qualifications || undefined),
       hourlyRate: documents?.hourlyRate,
@@ -459,7 +459,7 @@ export async function getPendingVerifications(): Promise<ServiceResult<Verificat
           qualificationDocumentVerified,
           qualificationDocumentComment,
           certifications,
-          rejectionReason: row.admin_notes && row.status === 'rejected' ? row.admin_notes : undefined,
+          rejectionReason: row.admin_notes || undefined, // Show admin notes for both approved and rejected
           bio: documents?.bio,
           qualifications: row.qualifications_text ? row.qualifications_text.split('; ') : (documents?.qualifications || undefined),
           hourlyRate: documents?.hourlyRate,
@@ -481,9 +481,9 @@ export async function getPendingVerifications(): Promise<ServiceResult<Verificat
  */
 export async function updateVerificationStatus(
   requestId: string,
-  status: 'approved' | 'rejected',
+  status: 'approved' | 'rejected' | 'under_review',
   reviewedBy: string,
-  rejectionReason?: string
+  adminComment?: string
 ): Promise<ServiceResult<void>> {
   try {
     if (!isSupabaseConfigured() || !supabase) {
@@ -522,7 +522,7 @@ export async function updateVerificationStatus(
         status,
         reviewed_by: reviewedBy,
         reviewed_at: new Date().toISOString(),
-        admin_notes: status === 'rejected' ? rejectionReason : null,
+        admin_notes: adminComment || (status === 'rejected' ? 'Verification rejected' : null),
       })
       .eq('id', requestId), 'verification_update');
 

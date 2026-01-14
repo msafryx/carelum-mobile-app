@@ -35,6 +35,7 @@ export default function VerificationsScreen() {
   const [selectedVerification, setSelectedVerification] = useState<VerificationRequest | null>(null);
   const [reviewModalVisible, setReviewModalVisible] = useState(false);
   const [rejectionReason, setRejectionReason] = useState('');
+  const [approvalComment, setApprovalComment] = useState('');
   const [processing, setProcessing] = useState(false);
   const [docVerifyModalVisible, setDocVerifyModalVisible] = useState(false);
   const [selectedDocType, setSelectedDocType] = useState<'idDocument' | 'backgroundCheck' | 'qualificationDocument' | 'certification' | null>(null);
@@ -100,6 +101,7 @@ export default function VerificationsScreen() {
   const handleReview = (verification: VerificationRequest) => {
     setSelectedVerification(verification);
     setRejectionReason('');
+    setApprovalComment('');
     setReviewModalVisible(true);
   };
 
@@ -111,13 +113,15 @@ export default function VerificationsScreen() {
       const result = await updateVerificationStatus(
         selectedVerification.id!,
         'approved',
-        user.id
+        user.id,
+        approvalComment.trim() || undefined
       );
 
       if (result.success) {
         Alert.alert('Success', 'Verification request approved successfully!', [
           { text: 'OK', onPress: () => {
             setReviewModalVisible(false);
+            setApprovalComment('');
             loadVerifications();
           }},
         ]);
@@ -145,7 +149,7 @@ export default function VerificationsScreen() {
         selectedVerification.id!,
         'rejected',
         user.id,
-        rejectionReason.trim()
+        rejectionReason.trim() || 'Verification rejected'
       );
 
       if (result.success) {
@@ -229,7 +233,17 @@ export default function VerificationsScreen() {
                     Submitted: {format(verification.submittedAt, 'MMM dd, yyyy HH:mm')}
                   </Text>
                 </View>
-                <Badge variant="warning">Pending</Badge>
+                <Badge 
+                  variant={
+                    verification.status === 'approved' ? 'success' :
+                    verification.status === 'rejected' ? 'error' :
+                    verification.status === 'under_review' ? 'warning' : 'info'
+                  }
+                >
+                  {verification.status === 'approved' ? 'Approved' :
+                   verification.status === 'rejected' ? 'Rejected' :
+                   verification.status === 'under_review' ? 'Under Review' : 'Pending'}
+                </Badge>
               </View>
 
               {verification.bio && (
@@ -505,13 +519,63 @@ export default function VerificationsScreen() {
                 )}
               </View>
 
+              {/* Document Verification Progress */}
+              <View style={styles.progressSection}>
+                <Text style={[styles.progressTitle, { color: colors.text }]}>Document Verification Progress:</Text>
+                <View style={styles.progressBar}>
+                  {(() => {
+                    const totalDocs = [
+                      verification.idDocumentUrl,
+                      verification.backgroundCheckUrl,
+                      verification.qualificationDocumentUrl,
+                      ...(verification.certifications || [])
+                    ].filter(Boolean).length;
+                    const verifiedDocs = [
+                      verification.idDocumentVerified === true,
+                      verification.backgroundCheckVerified === true,
+                      verification.qualificationDocumentVerified === true,
+                      ...(verification.certifications || []).map(c => c.verified === true)
+                    ].filter(Boolean).length;
+                    const rejectedDocs = [
+                      verification.idDocumentVerified === false,
+                      verification.backgroundCheckVerified === false,
+                      verification.qualificationDocumentVerified === false,
+                      ...(verification.certifications || []).map(c => c.verified === false)
+                    ].filter(Boolean).length;
+                    return (
+                      <>
+                        <View style={styles.progressStats}>
+                          <Text style={[styles.progressText, { color: colors.textSecondary }]}>
+                            {verifiedDocs}/{totalDocs} Verified
+                            {rejectedDocs > 0 && ` • ${rejectedDocs} Rejected`}
+                          </Text>
+                        </View>
+                        <View style={[styles.progressBarContainer, { backgroundColor: colors.border }]}>
+                          <View 
+                            style={[
+                              styles.progressBarFill, 
+                              { 
+                                width: `${totalDocs > 0 ? (verifiedDocs / totalDocs) * 100 : 0}%`,
+                                backgroundColor: colors.success || '#10b981'
+                              }
+                            ]} 
+                          />
+                        </View>
+                      </>
+                    );
+                  })()}
+                </View>
+              </View>
+
               <View style={styles.actionButtons}>
                 <TouchableOpacity
                   style={[styles.approveButton, { backgroundColor: colors.success || '#10b981' }]}
                   onPress={() => handleReview(verification)}
                 >
                   <Ionicons name="checkmark-circle" size={20} color="#fff" />
-                  <Text style={styles.actionButtonText}>Review</Text>
+                  <Text style={styles.actionButtonText}>
+                    {verification.status === 'under_review' ? 'Final Review' : 'Review & Approve'}
+                  </Text>
                 </TouchableOpacity>
               </View>
             </Card>
@@ -542,24 +606,38 @@ export default function VerificationsScreen() {
                 </Text>
 
                 <View style={styles.modalActions}>
-                  <TouchableOpacity
-                    style={[styles.modalApproveButton, { backgroundColor: colors.success || '#10b981' }]}
-                    onPress={handleApprove}
-                    disabled={processing}
-                  >
-                    {processing ? (
-                      <ActivityIndicator color="#fff" />
-                    ) : (
-                      <>
-                        <Ionicons name="checkmark-circle" size={20} color="#fff" />
-                        <Text style={styles.modalButtonText}>Approve</Text>
-                      </>
-                    )}
-                  </TouchableOpacity>
+                  <View style={styles.approvalSection}>
+                    <Text style={[styles.rejectionLabel, { color: colors.text }]}>
+                      Approval Comment (optional):
+                    </Text>
+                    <TextInput
+                      style={[styles.rejectionInput, { backgroundColor: colors.background, color: colors.text, borderColor: colors.border }]}
+                      placeholder="Add a comment about this verification..."
+                      placeholderTextColor={colors.textSecondary}
+                      multiline
+                      numberOfLines={3}
+                      value={approvalComment}
+                      onChangeText={setApprovalComment}
+                    />
+                    <TouchableOpacity
+                      style={[styles.modalApproveButton, { backgroundColor: colors.success || '#10b981' }]}
+                      onPress={handleApprove}
+                      disabled={processing}
+                    >
+                      {processing ? (
+                        <ActivityIndicator color="#fff" />
+                      ) : (
+                        <>
+                          <Ionicons name="checkmark-circle" size={20} color="#fff" />
+                          <Text style={styles.modalButtonText}>Approve</Text>
+                        </>
+                      )}
+                    </TouchableOpacity>
+                  </View>
 
                   <View style={styles.rejectionSection}>
                     <Text style={[styles.rejectionLabel, { color: colors.text }]}>
-                      Rejection Reason (if rejecting):
+                      Rejection Reason (required if rejecting):
                     </Text>
                     <TextInput
                       style={[styles.rejectionInput, { backgroundColor: colors.background, color: colors.text, borderColor: colors.border }]}
@@ -822,6 +900,38 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: 2,
   },
+  progressSection: {
+    marginTop: 12,
+    marginBottom: 12,
+    padding: 12,
+    borderRadius: 8,
+    backgroundColor: '#f5f5f5',
+  },
+  progressTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 8,
+  },
+  progressBar: {
+    marginTop: 4,
+  },
+  progressStats: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 6,
+  },
+  progressText: {
+    fontSize: 12,
+  },
+  progressBarContainer: {
+    height: 8,
+    borderRadius: 4,
+    overflow: 'hidden',
+  },
+  progressBarFill: {
+    height: '100%',
+    borderRadius: 4,
+  },
   actionButtons: {
     flexDirection: 'row',
     gap: 12,
@@ -877,6 +987,9 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     borderRadius: 8,
     gap: 8,
+  },
+  approvalSection: {
+    marginBottom: 20,
   },
   rejectionSection: {
     marginTop: 16,

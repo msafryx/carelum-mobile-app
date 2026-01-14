@@ -251,6 +251,15 @@ export default function VerificationStatusScreen() {
             </View>
           )}
 
+          {verification.status === 'approved' && verification.rejectionReason && (
+            <View style={[styles.successBox, { backgroundColor: colors.success + '20', borderColor: colors.success }]}>
+              <Ionicons name="information-circle" size={20} color={colors.success || '#10b981'} />
+              <Text style={[styles.successText, { color: colors.text, marginLeft: 8 }]}>
+                Admin Note: {verification.rejectionReason}
+              </Text>
+            </View>
+          )}
+
           {verification.status === 'approved' && (
             <View style={[styles.successBox, { backgroundColor: colors.success + '20', borderColor: colors.success }]}>
               <Ionicons name="checkmark-circle" size={24} color={colors.success || '#10b981'} />
