@@ -20,17 +20,31 @@ export async function createSessionRequest(
       parentId: sessionData.parentId,
       sitterId: sessionData.sitterId || undefined,
       childId: sessionData.childId,
+      status: sessionData.status || 'requested', // Include status field (required by database)
       startTime: sessionData.startTime.toISOString(),
       endTime: sessionData.endTime ? sessionData.endTime.toISOString() : undefined,
       location: sessionData.location ? (typeof sessionData.location === 'string' ? sessionData.location : JSON.stringify(sessionData.location)) : undefined,
       hourlyRate: sessionData.hourlyRate || undefined,
       notes: sessionData.notes || undefined,
+      searchScope: sessionData.searchScope || undefined,
+      maxDistanceKm: sessionData.maxDistanceKm || undefined,
     };
+
+    console.log('📤 Creating session request:', {
+      ...apiData,
+      location: typeof apiData.location === 'string' ? apiData.location.substring(0, 50) + '...' : apiData.location,
+    });
 
     const result = await apiRequest<any>(API_ENDPOINTS.SESSIONS, {
       method: 'POST',
       body: JSON.stringify(apiData),
     });
+
+    if (!result.success) {
+      console.error('❌ Session creation failed:', result.error);
+    } else {
+      console.log('✅ Session created successfully:', result.data?.id);
+    }
 
     if (!result.success) {
       return result;
@@ -49,6 +63,8 @@ export async function createSessionRequest(
       hourlyRate: apiSession.hourlyRate,
       totalAmount: apiSession.totalAmount,
       notes: apiSession.notes,
+      searchScope: apiSession.searchScope || apiSession.search_scope,
+      maxDistanceKm: apiSession.maxDistanceKm || apiSession.max_distance_km,
       createdAt: new Date(apiSession.createdAt),
       updatedAt: new Date(apiSession.updatedAt),
     };
@@ -86,6 +102,8 @@ export async function getSessionById(sessionId: string): Promise<ServiceResult<S
           hourlyRate: s.hourlyRate,
           totalAmount: s.totalAmount,
           notes: s.notes,
+          searchScope: s.searchScope || s.search_scope,
+          maxDistanceKm: s.maxDistanceKm || s.max_distance_km,
           createdAt: new Date(s.createdAt || Date.now()),
           updatedAt: new Date(s.updatedAt || Date.now()),
         };
@@ -134,6 +152,8 @@ async function syncSessionFromAPI(sessionId: string): Promise<ServiceResult<Sess
       hourlyRate: apiSession.hourlyRate,
       totalAmount: apiSession.totalAmount,
       notes: apiSession.notes,
+      searchScope: apiSession.searchScope || apiSession.search_scope,
+      maxDistanceKm: apiSession.maxDistanceKm || apiSession.max_distance_km,
       createdAt: new Date(apiSession.createdAt),
       updatedAt: new Date(apiSession.updatedAt),
     };
@@ -199,6 +219,8 @@ export async function getUserSessions(
             hourlyRate: s.hourlyRate,
             totalAmount: s.totalAmount,
             notes: s.notes,
+            searchScope: s.searchScope || s.search_scope,
+            maxDistanceKm: s.maxDistanceKm || s.max_distance_km,
             createdAt: new Date(s.createdAt || Date.now()),
             updatedAt: new Date(s.updatedAt || Date.now()),
           }));
@@ -255,6 +277,8 @@ async function syncSessionsFromAPI(
       hourlyRate: apiSession.hourlyRate,
       totalAmount: apiSession.totalAmount,
       notes: apiSession.notes,
+      searchScope: apiSession.searchScope || apiSession.search_scope,
+      maxDistanceKm: apiSession.maxDistanceKm || apiSession.max_distance_km,
       createdAt: new Date(apiSession.createdAt),
       updatedAt: new Date(apiSession.updatedAt),
     }));

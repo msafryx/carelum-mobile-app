@@ -12,9 +12,11 @@ module.exports = {
     userInterfaceStyle: 'automatic',
     newArchEnabled: true,
     ios: {
+      bundleIdentifier: 'com.anonymous.CarelumFrontend',
       supportsTablet: true,
     },
     android: {
+      package: 'com.anonymous.CarelumFrontend',
       adaptiveIcon: {
         foregroundImage: './assets/images/adaptive-icon.png',
         backgroundColor: '#ffffff',
@@ -35,6 +37,12 @@ module.exports = {
           imageWidth: 200,
           resizeMode: 'contain',
           backgroundColor: '#ffffff',
+        },
+      ],
+      [
+        'react-native-maps',
+        {
+          googleMapsApiKey: '',
         },
       ],
     ],

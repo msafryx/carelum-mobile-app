@@ -20,7 +20,7 @@ import { LocationUpdate } from '@/src/types/session.types';
 import { format, formatDistanceToNow } from 'date-fns';
 
 // Platform-specific imports - Metro will automatically use .native.ts or .web.ts
-import { MapView, Marker, Polyline, Circle } from './maps';
+// DO NOT load at module level - load inside component to avoid codegenNativeCommands errors
 
 const { width, height } = Dimensions.get('window');
 
@@ -49,9 +49,55 @@ export default function EnhancedGPSMap({
   const [mapType, setMapType] = useState<'standard' | 'satellite' | 'hybrid'>('standard');
   const [showHistory, setShowHistory] = useState(true);
   const mapRef = useRef<any>(null);
+  
+  // Lazy load maps components only when component mounts (not at module load time)
+  const [MapView, setMapView] = useState<any>(null);
+  const [Marker, setMarker] = useState<any>(null);
+  const [Polyline, setPolyline] = useState<any>(null);
+  const [Circle, setCircle] = useState<any>(null);
+  const [mapComponentsLoaded, setMapComponentsLoaded] = useState(false);
 
+  // Load maps module only when component mounts (deferred from module load time)
   useEffect(() => {
-    setMapReady(true);
+    if (Platform.OS === 'web') {
+      setMapReady(true);
+      return;
+    }
+
+    // Load maps module asynchronously to avoid codegenNativeCommands errors
+    // Use setTimeout to ensure React Native is fully initialized before requiring native modules
+    const timer = setTimeout(() => {
+      try {
+        // Require inside useEffect, not at module level
+        const mapsModule = require('./maps.native');
+        
+        // Use getter functions which defer the actual require
+        const MapViewComponent = mapsModule.getMapView();
+        const MarkerComponent = mapsModule.getMarker();
+        const PolylineComponent = mapsModule.getPolyline();
+        const CircleComponent = mapsModule.getCircle();
+        
+        // Check if components are actually functions/components
+        if (MapViewComponent && typeof MapViewComponent !== 'undefined') {
+          setMapView(() => MapViewComponent);
+          setMarker(() => MarkerComponent);
+          setPolyline(() => PolylineComponent);
+          setCircle(() => CircleComponent);
+          setMapComponentsLoaded(true);
+          setMapReady(true);
+          console.log('✅ EnhancedGPSMap: Map components loaded successfully');
+        } else {
+          console.warn('⚠️ EnhancedGPSMap: Map components not available');
+          setMapReady(true);
+        }
+      } catch (error: any) {
+        console.warn('⚠️ EnhancedGPSMap: Failed to load maps module:', error?.message || error);
+        console.warn('💡 Note: Maps require a development build and do not work in Expo Go');
+        setMapReady(true);
+      }
+    }, 500); // Increased delay to ensure React Native is fully initialized
+
+    return () => clearTimeout(timer);
   }, []);
 
   useEffect(() => {
@@ -151,7 +197,7 @@ export default function EnhancedGPSMap({
     <View style={styles.container}>
       <Card style={styles.mapCard}>
         {/* Map Controls - Only show on native */}
-        {Platform.OS !== 'web' && MapView && (
+        {Platform.OS !== 'web' && mapComponentsLoaded && MapView && (
           <View style={styles.mapControls}>
             <TouchableOpacity
               style={[styles.controlButton, { backgroundColor: colors.white }]}
@@ -197,87 +243,86 @@ export default function EnhancedGPSMap({
         )}
 
         {/* Map View - Only render on native platforms */}
-        {Platform.OS !== 'web' && MapView ? (
-          <MapView
-            ref={mapRef}
-            style={styles.map}
-            initialRegion={initialRegion}
-            mapType={mapType}
-            showsUserLocation={false}
-            showsMyLocationButton={false}
-            showsCompass={true}
-            showsScale={true}
-          >
-            {/* Geofence Circle */}
-            {geofenceCenter && geofenceRadius && Circle && (
-              <Circle
-                center={{
-                  latitude: geofenceCenter.latitude,
-                  longitude: geofenceCenter.longitude,
-                }}
-                radius={geofenceRadius}
-                strokeColor={colors.primary + '80'}
-                fillColor={colors.primary + '20'}
-                strokeWidth={2}
-              />
-            )}
-
-            {/* Location History Path */}
-            {showHistory && locationHistory.length > 1 && Polyline && (
-              <Polyline
-                coordinates={getHistoryCoordinates()}
-                strokeColor={colors.primary}
-                strokeWidth={3}
-                lineDashPattern={[5, 5]}
-              />
-            )}
-
-            {/* History Markers */}
-            {showHistory &&
-              Marker &&
-              locationHistory.map((loc, index) => (
-                <Marker
-                  key={`history-${index}`}
-                  coordinate={{
-                    latitude: loc.latitude,
-                    longitude: loc.longitude,
-                  }}
-                  title={`Location ${index + 1}`}
-                  description={format(loc.timestamp, 'h:mm a')}
-                  pinColor={colors.textSecondary}
-                />
-              ))}
-
-            {/* Current Location Marker */}
-            {currentLocation && Marker && (
-              <Marker
-                coordinate={{
-                  latitude: currentLocation.latitude,
-                  longitude: currentLocation.longitude,
-                }}
-                title="Current Location"
-                description={format(currentLocation.timestamp, 'h:mm a')}
-                pinColor={isTracking ? colors.success : colors.primary}
-                onPress={() => onLocationPress?.(currentLocation)}
-              >
-                <View style={[styles.currentMarker, { backgroundColor: colors.primary }]}>
-                  <View style={[styles.markerDot, { backgroundColor: colors.white }]} />
-                </View>
-              </Marker>
-            )}
-
-            {/* Geofence Center Marker */}
-            {geofenceCenter && Marker && (
-              <Marker
-                coordinate={{
-                  latitude: geofenceCenter.latitude,
-                  longitude: geofenceCenter.longitude,
-                }}
-                title="Geofence Center"
-                pinColor={colors.warning}
-              />
-            )}
-          </MapView>
+        {Platform.OS !== 'web' && mapComponentsLoaded && MapView ? (
+          React.createElement(
+            MapView,
+            {
+              ref: mapRef,
+              style: styles.map,
+              initialRegion: initialRegion,
+              mapType: mapType,
+              showsUserLocation: false,
+              showsMyLocationButton: false,
+              showsCompass: true,
+              showsScale: true,
+            },
+            geofenceCenter && geofenceRadius && Circle
+              ? React.createElement(Circle, {
+                  center: {
+                    latitude: geofenceCenter.latitude,
+                    longitude: geofenceCenter.longitude,
+                  },
+                  radius: geofenceRadius,
+                  strokeColor: colors.primary + '80',
+                  fillColor: colors.primary + '20',
+                  strokeWidth: 2,
+                })
+              : null,
+            showHistory && locationHistory.length > 1 && Polyline
+              ? React.createElement(Polyline, {
+                  coordinates: getHistoryCoordinates(),
+                  strokeColor: colors.primary,
+                  strokeWidth: 3,
+                  lineDashPattern: [5, 5],
+                })
+              : null,
+            showHistory && Marker
+              ? locationHistory.map((loc, index) =>
+                  React.createElement(Marker, {
+                    key: `history-${index}`,
+                    coordinate: {
+                      latitude: loc.latitude,
+                      longitude: loc.longitude,
+                    },
+                    title: `Location ${index + 1}`,
+                    description: format(loc.timestamp, 'h:mm a'),
+                    pinColor: colors.textSecondary,
+                  })
+                )
+              : null,
+            currentLocation && Marker
+              ? React.createElement(
+                  Marker,
+                  {
+                    coordinate: {
+                      latitude: currentLocation.latitude,
+                      longitude: currentLocation.longitude,
+                    },
+                    title: 'Current Location',
+                    description: format(currentLocation.timestamp, 'h:mm a'),
+                    pinColor: isTracking ? colors.success : colors.primary,
+                    onPress: () => onLocationPress?.(currentLocation),
+                  },
+                  React.createElement(
+                    View,
+                    { style: [styles.currentMarker, { backgroundColor: colors.primary }] },
+                    React.createElement(View, {
+                      style: [styles.markerDot, { backgroundColor: colors.white }],
+                    })
+                  )
+                )
+              : null,
+            geofenceCenter && Marker
+              ? React.createElement(Marker, {
+                  coordinate: {
+                    latitude: geofenceCenter.latitude,
+                    longitude: geofenceCenter.longitude,
+                  },
+                  title: 'Geofence Center',
+                  pinColor: colors.warning,
+                })
+              : null
+          )
         ) : (
           /* Fallback - Show location data without map (web or when react-native-maps unavailable) */
           <>

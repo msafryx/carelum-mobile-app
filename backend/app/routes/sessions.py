@@ -27,6 +27,8 @@ class SessionResponse(BaseModel):
     hourlyRate: Optional[float] = None
     totalAmount: Optional[float] = None
     notes: Optional[str] = None
+    searchScope: Optional[str] = None
+    maxDistanceKm: Optional[float] = None
     createdAt: str
     updatedAt: str
 
@@ -40,6 +42,8 @@ class CreateSessionRequest(BaseModel):
     location: Optional[str] = None
     hourlyRate: Optional[float] = None
     notes: Optional[str] = None
+    searchScope: Optional[str] = None  # 'invite' | 'nearby' | 'city' | 'nationwide'
+    maxDistanceKm: Optional[float] = None  # Only used when searchScope = 'nearby'
 
 
 class UpdateSessionRequest(BaseModel):
@@ -66,6 +70,8 @@ def db_to_session_response(session_data: dict) -> SessionResponse:
         hourlyRate=float(session_data["hourly_rate"]) if session_data.get("hourly_rate") else None,
         totalAmount=float(session_data["total_amount"]) if session_data.get("total_amount") else None,
         notes=session_data.get("notes"),
+        searchScope=session_data.get("search_scope"),
+        maxDistanceKm=float(session_data["max_distance_km"]) if session_data.get("max_distance_km") else None,
         createdAt=session_data["created_at"],
         updatedAt=session_data.get("updated_at", session_data["created_at"])
     )
@@ -208,16 +214,51 @@ async def create_session(
                 status_code=403
             )
         
+        # Validate search scope
+        valid_scopes = ['invite', 'nearby', 'city', 'nationwide']
+        search_scope = session_data.searchScope or 'invite'  # Default to invite for backward compatibility
+        
+        if search_scope not in valid_scopes:
+            raise AppError(
+                code="INVALID_SCOPE",
+                message=f"Invalid search scope. Must be one of: {', '.join(valid_scopes)}",
+                status_code=400
+            )
+        
+        # Validate scope-specific requirements
+        if search_scope == 'invite' and not session_data.sitterId:
+            raise AppError(
+                code="INVALID_REQUEST",
+                message="sitterId is required when searchScope is 'invite'",
+                status_code=400
+            )
+        
+        if search_scope == 'nearby' and not session_data.maxDistanceKm:
+            raise AppError(
+                code="INVALID_REQUEST",
+                message="maxDistanceKm is required when searchScope is 'nearby'",
+                status_code=400
+            )
+        
+        if search_scope == 'nearby' and session_data.maxDistanceKm not in [5, 10, 25]:
+            raise AppError(
+                code="INVALID_REQUEST",
+                message="maxDistanceKm must be 5, 10, or 25 when searchScope is 'nearby'",
+                status_code=400
+            )
+        
         # Insert session
         insert_data = {
             "parent_id": session_data.parentId,
-            "sitter_id": session_data.sitterId,
+            "sitter_id": session_data.sitterId if search_scope == 'invite' else None,
             "child_id": session_data.childId,
             "status": "requested",
             "start_time": session_data.startTime,
             "location": session_data.location,
             "hourly_rate": Decimal(str(session_data.hourlyRate)) if session_data.hourlyRate else None,
             "notes": session_data.notes,
+            "search_scope": search_scope,
+            "max_distance_km": Decimal(str(session_data.maxDistanceKm)) if session_data.maxDistanceKm else None,
         }
         
         response = supabase.table("sessions").insert(insert_data).select().execute()
