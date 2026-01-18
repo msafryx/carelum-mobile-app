@@ -12,23 +12,29 @@ import { SessionSearchScope } from '@/src/types/session.types';
 import { User } from '@/src/types/user.types';
 import { Ionicons } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import { format } from 'date-fns';
+import { format, parse, isValid } from 'date-fns';
+import * as Location from 'expo-location';
 import { useRouter } from 'expo-router';
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   Image,
   Modal,
   Platform,
+  Pressable,
   RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
-  View,
+  View
 } from 'react-native';
+import WebMapView from '@/src/components/gps/WebMapView';
+import FullscreenMapModal from '@/src/components/gps/FullscreenMapModal';
+// Platform-specific map imports - DO NOT load at module level
+// Will be loaded dynamically only when needed to avoid native module errors
 
 interface Sitter extends User {
   rating?: number;
@@ -39,6 +45,9 @@ export default function SearchScreen() {
   const { colors, spacing } = useTheme();
   const router = useRouter();
   const { user, userProfile } = useAuth();
+  const [mapViewAvailable, setMapViewAvailable] = useState(false);
+  const [MapViewComponent, setMapViewComponent] = useState<any>(null);
+  const [MarkerComponent, setMarkerComponent] = useState<any>(null);
   const [search, setSearch] = useState('');
   const [location, setLocation] = useState('');
   const [rating, setRating] = useState('');
@@ -48,14 +57,21 @@ export default function SearchScreen() {
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [selected, setSelected] = useState<Sitter | null>(null);
-  const [selectedChild, setSelectedChild] = useState<Child | null>(null);
+  const [selectedChildren, setSelectedChildren] = useState<Child[]>([]);
   const [bookingVisible, setBookingVisible] = useState(false);
-  const [selectedDate, setSelectedDate] = useState(new Date());
-  const [selectedTime, setSelectedTime] = useState(new Date());
-  const [showDatePicker, setShowDatePicker] = useState(false);
-  const [showTimePicker, setShowTimePicker] = useState(false);
-  const [duration, setDuration] = useState('2');
+  const [startDate, setStartDate] = useState(new Date());
+  const [startTime, setStartTime] = useState(new Date());
+  const [endDate, setEndDate] = useState(new Date());
+  const [endTime, setEndTime] = useState(new Date());
+  const [showStartDatePicker, setShowStartDatePicker] = useState(false);
+  const [showStartTimePicker, setShowStartTimePicker] = useState(false);
+  const [showEndDatePicker, setShowEndDatePicker] = useState(false);
+  const [showEndTimePicker, setShowEndTimePicker] = useState(false);
+  const [calculatedHours, setCalculatedHours] = useState<number>(0);
+  const [useTimeSlotMode, setUseTimeSlotMode] = useState(false);
+  const [dailyTimeSlots, setDailyTimeSlots] = useState<Record<string, { startTime: Date; endTime: Date; hours: number }>>({});
   const [notes, setNotes] = useState('');
+  const [slotTimePickers, setSlotTimePickers] = useState<Record<string, { showStart: boolean; showEnd: boolean }>>({});
   const [creating, setCreating] = useState(false);
   const [menuVisible, setMenuVisible] = useState(false);
   const [requestMode, setRequestMode] = useState<SessionSearchScope>('invite');
@@ -69,9 +85,210 @@ export default function SearchScreen() {
     latitude?: number;
     longitude?: number;
   } | null>(null);
+  const [filterLocation, setFilterLocation] = useState<{
+    address: string;
+    city?: string;
+    latitude?: number;
+    longitude?: number;
+  } | null>(null);
+  const [filterMapRegion, setFilterMapRegion] = useState<{
+    latitude: number;
+    longitude: number;
+    latitudeDelta: number;
+    longitudeDelta: number;
+  } | null>(null);
+  const [filterGeocodingLoading, setFilterGeocodingLoading] = useState(false);
+  const filterMapRef = useRef<any>(null);
+  const [geocodingLoading, setGeocodingLoading] = useState(false);
+  const [locationLoading, setLocationLoading] = useState(false);
+  const [mapRegion, setMapRegion] = useState<{
+    latitude: number;
+    longitude: number;
+    latitudeDelta: number;
+    longitudeDelta: number;
+  } | null>(null);
+  const mapRef = useRef<any>(null);
+  const [fullscreenMapVisible, setFullscreenMapVisible] = useState(false);
 
   const rate = selected?.hourlyRate || 0;
-  const total = rate * parseFloat(duration || '0');
+  
+  // Calculate hours and days breakdown from start and end date/time
+  const [daysBreakdown, setDaysBreakdown] = useState<Array<{ date: string; hours: number }>>([]);
+  
+  // Initialize time slots for each day when daysBreakdown changes
+  useEffect(() => {
+    if (useTimeSlotMode && daysBreakdown.length > 0) {
+      setDailyTimeSlots(prev => {
+        const updated = { ...prev };
+        daysBreakdown.forEach(day => {
+          if (!updated[day.date]) {
+            // Parse the formatted date string back to a Date object
+            // day.date is in format "MMM dd, yyyy" (e.g., "Jan 15, 2024")
+            let dayDate: Date;
+            try {
+              // Try parsing the formatted date
+              dayDate = parse(day.date, 'MMM dd, yyyy', new Date());
+              // Validate the date
+              if (isNaN(dayDate.getTime())) {
+                // Fallback: use current date
+                dayDate = new Date();
+              }
+            } catch (error) {
+              // Fallback: use current date
+              dayDate = new Date();
+            }
+            
+            const defaultStart = new Date(dayDate);
+            defaultStart.setHours(9, 0, 0, 0);
+            defaultStart.setMinutes(0);
+            defaultStart.setSeconds(0);
+            defaultStart.setMilliseconds(0);
+            
+            const defaultEnd = new Date(dayDate);
+            defaultEnd.setHours(12, 0, 0, 0);
+            defaultEnd.setMinutes(0);
+            defaultEnd.setSeconds(0);
+            defaultEnd.setMilliseconds(0);
+            
+            // Validate dates before storing
+            if (!isNaN(defaultStart.getTime()) && !isNaN(defaultEnd.getTime())) {
+              updated[day.date] = {
+                startTime: defaultStart,
+                endTime: defaultEnd,
+                hours: 3,
+              };
+            }
+          }
+        });
+        // Recalculate total
+        const newTotal = Object.values(updated).reduce((sum, s) => sum + (s.hours || 0), 0);
+        setCalculatedHours(newTotal);
+        return updated;
+      });
+    }
+  }, [daysBreakdown, useTimeSlotMode]);
+  
+  useEffect(() => {
+    const start = new Date(startDate);
+    start.setHours(startTime.getHours());
+    start.setMinutes(startTime.getMinutes());
+    start.setSeconds(0);
+    start.setMilliseconds(0);
+    
+    const end = new Date(endDate);
+    end.setHours(endTime.getHours());
+    end.setMinutes(endTime.getMinutes());
+    end.setSeconds(0);
+    end.setMilliseconds(0);
+    
+    if (end > start) {
+      // Calculate total hours difference
+      const diffMs = end.getTime() - start.getTime();
+      const diffHours = diffMs / (1000 * 60 * 60);
+      
+      if (!useTimeSlotMode) {
+        // Continuous mode: calculate total hours from start to end
+        setCalculatedHours(diffHours);
+      }
+      // Time slot mode: hours are calculated from daily slots
+      
+      // Calculate days and hours breakdown
+      const breakdown: Array<{ date: string; hours: number }> = [];
+      const current = new Date(start);
+      const totalDays = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
+      
+      if (useTimeSlotMode) {
+        // Time slots mode: include all days in the range
+        const currentDay = new Date(start);
+        currentDay.setHours(0, 0, 0, 0);
+        const endDay = new Date(end);
+        endDay.setHours(23, 59, 59, 999);
+        
+        while (currentDay <= endDay) {
+          const dayStr = format(currentDay, 'MMM dd, yyyy');
+          const dayDateStr = format(currentDay, 'yyyy-MM-dd');
+          
+          // For time slots, each day will have its own time configured
+          // Default hours will be set when slot is initialized
+          breakdown.push({
+            date: dayStr,
+            hours: 0, // Will be set by user in time slot configuration
+          });
+          
+          // Move to next day
+          currentDay.setDate(currentDay.getDate() + 1);
+        }
+      } else {
+        // Continuous mode: calculate actual hours per day
+        if (totalDays === 1) {
+          // Same day
+          breakdown.push({
+            date: format(start, 'MMM dd, yyyy'),
+            hours: diffHours,
+          });
+        } else {
+          // Multiple days - calculate actual hours per day
+          const currentDay = new Date(start);
+          currentDay.setHours(0, 0, 0, 0);
+          const endDay = new Date(end);
+          endDay.setHours(23, 59, 59, 999);
+          
+          while (currentDay <= endDay) {
+            const dayStart = new Date(currentDay);
+            const dayEnd = new Date(currentDay);
+            
+            // First day: use start time
+            if (format(currentDay, 'yyyy-MM-dd') === format(start, 'yyyy-MM-dd')) {
+              dayStart.setHours(startTime.getHours());
+              dayStart.setMinutes(startTime.getMinutes());
+              dayEnd.setHours(23);
+              dayEnd.setMinutes(59);
+              dayEnd.setSeconds(59);
+            }
+            // Last day: use end time
+            else if (format(currentDay, 'yyyy-MM-dd') === format(end, 'yyyy-MM-dd')) {
+              dayStart.setHours(0);
+              dayStart.setMinutes(0);
+              dayEnd.setHours(endTime.getHours());
+              dayEnd.setMinutes(endTime.getMinutes());
+              dayEnd.setSeconds(59);
+            }
+            // Middle days: full 24 hours
+            else {
+              dayStart.setHours(0);
+              dayStart.setMinutes(0);
+              dayEnd.setHours(23);
+              dayEnd.setMinutes(59);
+              dayEnd.setSeconds(59);
+            }
+            
+            // Calculate hours for this day
+            const dayStartTime = Math.max(dayStart.getTime(), start.getTime());
+            const dayEndTime = Math.min(dayEnd.getTime(), end.getTime());
+            const dayHours = Math.max(0, (dayEndTime - dayStartTime) / (1000 * 60 * 60));
+            
+            // Only add days with actual hours
+            if (dayHours > 0) {
+              breakdown.push({
+                date: format(currentDay, 'MMM dd, yyyy'),
+                hours: dayHours,
+              });
+            }
+            
+            // Move to next day
+            currentDay.setDate(currentDay.getDate() + 1);
+          }
+        }
+      }
+      
+      setDaysBreakdown(breakdown);
+    } else {
+      setCalculatedHours(0);
+      setDaysBreakdown([]);
+    }
+  }, [startDate, startTime, endDate, endTime, useTimeSlotMode]);
+  
+  const total = rate * calculatedHours;
 
   const loadSitters = useCallback(async (isRefresh = false) => {
     if (!user) return;
@@ -119,27 +336,378 @@ export default function SearchScreen() {
     }
   }, [user, search, rating, price]);
 
-  const loadChildren = useCallback(async () => {
+  const loadChildren = useCallback(async (forceRefresh: boolean = false) => {
     if (!user) return;
 
     try {
-      const result = await getParentChildren(user.id);
+      // Force refresh from API to get latest data (bypasses AsyncStorage)
+      const result = await getParentChildren(user.id, forceRefresh);
       if (result.success && result.data) {
-        setChildren(result.data);
-        // Auto-select first child if available
-        if (result.data.length > 0 && !selectedChild) {
-          setSelectedChild(result.data[0]);
-        }
+        // Use Map for better deduplication by id (last one wins)
+        const childrenMap = new Map<string, Child>();
+        result.data.forEach((child) => {
+          if (child.id && child.id !== 'temp_' && !child.id.startsWith('temp_')) {
+            childrenMap.set(child.id, child);
+          }
+        });
+        const uniqueChildren = Array.from(childrenMap.values());
+        
+        console.log(`✅ Loaded ${uniqueChildren.length} unique children (deduplicated from ${result.data.length}, forceRefresh: ${forceRefresh})`);
+        setChildren(uniqueChildren);
+        
+        // Clean up selectedChildren - remove any that no longer exist
+        setSelectedChildren((prev) => {
+          const validSelected = prev.filter((selected) =>
+            uniqueChildren.some((child) => child.id === selected.id)
+          );
+          // Auto-select first child if available and none selected
+          if (validSelected.length === 0 && uniqueChildren.length > 0) {
+            return [uniqueChildren[0]];
+          }
+          return validSelected;
+        });
+      } else {
+        // If no children, clear selection
+        setChildren([]);
+        setSelectedChildren([]);
       }
     } catch (error: any) {
       console.error('Failed to load children:', error);
+      // On error, don't clear existing children to avoid flicker
     }
-  }, [user, selectedChild]);
+  }, [user]);
 
   useEffect(() => {
     loadSitters();
     loadChildren();
+    // Dynamically load MapView after component mounts to avoid module load errors
+    // Use lazy loading approach from maps.native.ts
+    if (Platform.OS !== 'web') {
+      const loadMaps = () => {
+        try {
+          // Use the lazy loading approach from maps.native.ts
+          const mapsModule = require('@/src/components/gps/maps.native');
+          
+          // Wrap getMapView() and getMarker() calls in try-catch to handle codegenNativeCommands errors
+          let MapViewComponent: any = null;
+          let MarkerComponent: any = null;
+          
+          try {
+            MapViewComponent = mapsModule.getMapView();
+            MarkerComponent = mapsModule.getMarker();
+          } catch (nativeError: any) {
+            // This error is expected in Expo Go - react-native-maps requires a development build
+            console.warn('⚠️ Native maps not available (requires development build):', nativeError?.message || nativeError);
+            setMapViewAvailable(false);
+            return;
+          }
+          
+          if (MapViewComponent && MarkerComponent) {
+            setMapViewComponent(() => MapViewComponent);
+            setMarkerComponent(() => MarkerComponent);
+            setMapViewAvailable(true);
+            console.log('✅ MapView loaded successfully');
+          } else {
+            console.warn('⚠️ MapView components not available');
+            setMapViewAvailable(false);
+          }
+        } catch (error: any) {
+          console.warn('⚠️ Failed to load MapView:', error?.message || error);
+          console.warn('💡 Note: react-native-maps requires a development build and does not work in Expo Go');
+          setMapViewAvailable(false);
+        }
+      };
+      // Load after a delay to ensure React Native is fully initialized
+      const timeout = setTimeout(loadMaps, 500);
+      return () => clearTimeout(timeout);
+    } else {
+      setMapViewAvailable(false);
+    }
   }, [loadSitters, loadChildren]);
+
+  // Real-time sync for children updates
+  useEffect(() => {
+    if (!user) return;
+    
+    let unsubscribe: (() => void) | undefined;
+    let handleWebEvent: (() => void) | undefined;
+    
+    // Import the emitter (works on all platforms)
+    import('@/src/hooks/useRealtimeSync').then((module) => {
+      if (module.childrenUpdateEmitter) {
+        console.log('✅ Children update listener registered in search screen');
+        unsubscribe = module.childrenUpdateEmitter.on(() => {
+          console.log('📢 Children updated event received, force refreshing children...');
+          loadChildren(true); // Force refresh from API
+        });
+      }
+    }).catch((error) => {
+      console.error('❌ Failed to import childrenUpdateEmitter:', error);
+    });
+    
+    // Also listen on web for CustomEvent (web only)
+    if (Platform.OS === 'web' && typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+      handleWebEvent = () => {
+        console.log('📢 Web children updated event received, force refreshing...');
+        loadChildren(true); // Force refresh from API
+      };
+      window.addEventListener('childrenUpdated', handleWebEvent);
+    }
+    
+    return () => {
+      if (unsubscribe) {
+        unsubscribe();
+      }
+      if (handleWebEvent && Platform.OS === 'web' && typeof window !== 'undefined' && typeof window.removeEventListener === 'function') {
+        window.removeEventListener('childrenUpdated', handleWebEvent);
+      }
+    };
+  }, [user, loadChildren]);
+
+  // Refresh children when booking modal opens - force refresh to get latest
+  useEffect(() => {
+    if (bookingVisible) {
+      loadChildren(true); // Force refresh from API to ensure latest data
+    }
+  }, [bookingVisible, loadChildren]);
+
+  // Geocoding effect - convert address to coordinates (with timeout)
+  useEffect(() => {
+    const debounceGeocode = setTimeout(async () => {
+      if (location.trim().length > 3) {
+        setGeocodingLoading(true);
+        try {
+          // Add timeout wrapper for geocoding (10 seconds max)
+          const geocodePromise = Location.geocodeAsync(location.trim());
+          const timeoutPromise = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('Geocoding timeout')), 10000)
+          );
+
+          const geocodedLocation = await Promise.race([geocodePromise, timeoutPromise]) as any[];
+          
+          if (geocodedLocation && geocodedLocation.length > 0) {
+            const { latitude, longitude } = geocodedLocation[0];
+            
+            // Try reverse geocoding with timeout
+            try {
+              const reverseGeocodePromise = Location.reverseGeocodeAsync({ latitude, longitude });
+              const reverseTimeoutPromise = new Promise((_, reject) =>
+                setTimeout(() => reject(new Error('Reverse geocoding timeout')), 5000)
+              );
+              const reverseGeocoded = await Promise.race([reverseGeocodePromise, reverseTimeoutPromise]) as any[];
+              const city = reverseGeocoded && reverseGeocoded.length > 0 ? (reverseGeocoded[0].city || undefined) : undefined;
+              
+              setSessionLocation({ address: location.trim(), latitude, longitude, city });
+            } catch (reverseError) {
+              // If reverse geocoding fails, still use coordinates
+              setSessionLocation({ address: location.trim(), latitude, longitude });
+            }
+            
+            setMapRegion({
+              latitude,
+              longitude,
+              latitudeDelta: 0.01,
+              longitudeDelta: 0.01,
+            });
+            // Animate map to location
+            if (mapRef.current && typeof mapRef.current.animateToRegion === 'function') {
+              mapRef.current.animateToRegion({
+                latitude,
+                longitude,
+                latitudeDelta: 0.01,
+                longitudeDelta: 0.01,
+              }, 500);
+            }
+          } else {
+            // No results, but keep the address
+            setSessionLocation({ address: location.trim() });
+          }
+        } catch (error: any) {
+          // Silently fail - geocoding is optional, user can still proceed with address
+          // Only log in development
+          if (__DEV__) {
+            console.log('Geocoding failed (non-blocking):', error?.message || 'Unknown error');
+          }
+          // Keep address even if geocoding fails
+          setSessionLocation({ address: location.trim() });
+        } finally {
+          setGeocodingLoading(false);
+        }
+      } else {
+        setSessionLocation(null);
+      }
+    }, 1500); // Increased debounce to 1.5 seconds to reduce API calls
+    return () => clearTimeout(debounceGeocode);
+  }, [location]);
+
+  // Get current location
+  const handleGetCurrentLocation = async () => {
+    try {
+      setLocationLoading(true);
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Error', 'Location permission denied. Please enable location access in settings.');
+        setLocationLoading(false);
+        return;
+      }
+
+      // Add timeout for getting current position (15 seconds)
+      const positionPromise = Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Balanced,
+        timeInterval: 5000,
+      });
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Location timeout')), 15000)
+      );
+
+      const currentLocation = await Promise.race([positionPromise, timeoutPromise]) as Location.LocationObject;
+      const { latitude, longitude } = currentLocation.coords;
+
+      // Try reverse geocoding with timeout
+      let address = `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
+      let city: string | undefined = undefined;
+      
+      try {
+        const reverseGeocodePromise = Location.reverseGeocodeAsync({ latitude, longitude });
+        const reverseTimeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Reverse geocoding timeout')), 5000)
+        );
+        const reverseGeocoded = await Promise.race([reverseGeocodePromise, reverseTimeoutPromise]) as any[];
+        
+        if (reverseGeocoded && reverseGeocoded.length > 0) {
+          address = `${reverseGeocoded[0].street || ''} ${reverseGeocoded[0].streetNumber || ''}, ${reverseGeocoded[0].city || ''}, ${reverseGeocoded[0].region || ''}`.trim() || address;
+          city = reverseGeocoded[0].city || undefined;
+        }
+      } catch (reverseError) {
+        // If reverse geocoding fails, use coordinates as address
+        if (__DEV__) {
+          console.log('Reverse geocoding failed, using coordinates:', reverseError);
+        }
+      }
+
+      setLocation(address);
+      setSessionLocation({ address, latitude, longitude, city });
+      setMapRegion({
+        latitude,
+        longitude,
+        latitudeDelta: 0.01,
+        longitudeDelta: 0.01,
+      });
+      // Animate map to location
+      if (mapRef.current && typeof mapRef.current.animateToRegion === 'function') {
+        mapRef.current.animateToRegion({
+          latitude,
+          longitude,
+          latitudeDelta: 0.01,
+          longitudeDelta: 0.01,
+        }, 500);
+      }
+    } catch (error: any) {
+      // Show user-friendly error message
+      const errorMessage = error?.message?.includes('timeout')
+        ? 'Location request timed out. Please try again or enter address manually.'
+        : 'Failed to get current location. Please enter address manually.';
+      Alert.alert('Location Error', errorMessage);
+      if (__DEV__) {
+        console.log('Failed to get current location:', error);
+      }
+    } finally {
+      setLocationLoading(false);
+    }
+  };
+
+  // Handle map region change (when user drags map)
+  const handleMapRegionChange = (region: any) => {
+    setMapRegion(region);
+  };
+
+  // Geocoding effect for filter location
+  useEffect(() => {
+    const debounceGeocode = setTimeout(async () => {
+      if (location.trim().length > 3 && filterModalVisible) {
+        setFilterGeocodingLoading(true);
+        try {
+          const geocodePromise = Location.geocodeAsync(location.trim());
+          const timeoutPromise = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('Geocoding timeout')), 10000)
+          );
+          const geocodedLocation = await Promise.race([geocodePromise, timeoutPromise]) as any[];
+          if (geocodedLocation && geocodedLocation.length > 0) {
+            const { latitude, longitude } = geocodedLocation[0];
+            const reverseGeocoded = await Location.reverseGeocodeAsync({ latitude, longitude });
+            const city = reverseGeocoded && reverseGeocoded.length > 0 ? (reverseGeocoded[0].city || undefined) : undefined;
+            setFilterLocation({ address: location.trim(), latitude, longitude, city });
+            setFilterMapRegion({
+              latitude,
+              longitude,
+              latitudeDelta: 0.01,
+              longitudeDelta: 0.01,
+            });
+            if (filterMapRef.current && typeof filterMapRef.current.animateToRegion === 'function') {
+              filterMapRef.current.animateToRegion({
+                latitude,
+                longitude,
+                latitudeDelta: 0.01,
+                longitudeDelta: 0.01,
+              }, 500);
+            }
+          } else {
+            setFilterLocation({ address: location.trim() });
+          }
+        } catch (error) {
+          setFilterLocation({ address: location.trim() });
+        } finally {
+          setFilterGeocodingLoading(false);
+        }
+      } else if (location.trim().length === 0) {
+        setFilterLocation(null);
+      }
+    }, 1500);
+    return () => clearTimeout(debounceGeocode);
+  }, [location, filterModalVisible]);
+
+  // Handle map press (drop pin)
+  const handleMapPress = async (event: any) => {
+    // Handle both native map events and WebView map coordinates
+    let latitude: number;
+    let longitude: number;
+    
+    if (event.nativeEvent?.coordinate) {
+      // Native map event
+      ({ latitude, longitude } = event.nativeEvent.coordinate);
+    } else if (event.latitude && event.longitude) {
+      // WebView map event (direct coordinate object)
+      ({ latitude, longitude } = event);
+    } else {
+      console.warn('Invalid map press event:', event);
+      return;
+    }
+    
+    try {
+      // Add timeout for reverse geocoding (5 seconds)
+      const reverseGeocodePromise = Location.reverseGeocodeAsync({ latitude, longitude });
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Reverse geocoding timeout')), 5000)
+      );
+      
+      const reverseGeocoded = await Promise.race([reverseGeocodePromise, timeoutPromise]) as any[];
+      const address = reverseGeocoded && reverseGeocoded.length > 0
+        ? `${reverseGeocoded[0].street || ''} ${reverseGeocoded[0].streetNumber || ''}, ${reverseGeocoded[0].city || ''}, ${reverseGeocoded[0].region || ''}`.trim()
+        : `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
+      const city = reverseGeocoded && reverseGeocoded.length > 0 ? (reverseGeocoded[0].city || undefined) : undefined;
+
+      setLocation(address);
+      setSessionLocation({ address, latitude, longitude, city });
+    } catch (error) {
+      // If reverse geocoding fails, use coordinates as address
+      const address = `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
+      setLocation(address);
+      setSessionLocation({ address, latitude, longitude });
+      if (__DEV__) {
+        console.log('Reverse geocoding failed for map pin, using coordinates:', error);
+      }
+    }
+  };
 
   const handleBookSitter = (sitter: Sitter) => {
     if (children.length === 0) {
@@ -194,60 +762,118 @@ export default function SearchScreen() {
   };
 
   const handleConfirmBooking = async () => {
-    if (!user || !selectedChild) {
-      Alert.alert('Error', 'Please select a child');
-      return;
+    // Collect all validation errors with clear field names
+    const errors: string[] = [];
+
+    // Validate user session
+    if (!user) {
+      errors.push('• User session expired. Please log in again.');
+    }
+
+    // Validate children selection
+    if (selectedChildren.length === 0) {
+      errors.push('• Select at least one child');
     }
 
     // Validate request mode requirements
     if (requestMode === 'invite' && !selected) {
-      Alert.alert('Error', 'Please select a sitter for invite mode');
-      return;
-    }
-
-    if (requestMode === 'invite' && !selected) {
-      Alert.alert('Error', 'Please select a sitter for invite mode');
-      return;
+      errors.push('• Select a sitter (required for Invite mode)');
     }
 
     if (requestMode === 'nearby' && !maxDistanceKm) {
-      Alert.alert('Error', 'Please select a distance for nearby search');
-      return;
+      errors.push('• Select a search distance (required for Nearby mode)');
     }
 
-    if (!duration || parseFloat(duration) <= 0) {
-      Alert.alert('Error', 'Please enter a valid duration');
-      return;
+    // Validate date/time range
+    const start = new Date(startDate);
+    start.setHours(startTime.getHours());
+    start.setMinutes(startTime.getMinutes());
+    start.setSeconds(0);
+    start.setMilliseconds(0);
+    
+    const end = new Date(endDate);
+    end.setHours(endTime.getHours());
+    end.setMinutes(endTime.getMinutes());
+    end.setSeconds(0);
+    end.setMilliseconds(0);
+    
+    if (end <= start) {
+      errors.push('• End date/time must be after start date/time');
+    }
+    
+    if (calculatedHours <= 0) {
+      errors.push('• Select a valid time period (end time must be after start time)');
     }
 
-    // Location is required for all modes
+    // Validate location
     if (!location || location.trim() === '') {
-      Alert.alert('Error', 'Please enter a location');
-      return;
+      errors.push('• Enter a location address');
     }
 
     // For Nearby mode, location with coordinates is required
     if (requestMode === 'nearby' && (!sessionLocation?.latitude || !sessionLocation?.longitude)) {
+      errors.push('• Set GPS coordinates (tap "Open Fullscreen Map" to drop a pin or "Use Current Location")');
+    }
+
+    // Validate time slot mode
+    if (useTimeSlotMode) {
+      const slotEntries = Object.entries(dailyTimeSlots);
+      if (slotEntries.length === 0) {
+        errors.push('• Configure time slots for at least one day');
+      } else {
+        // Check if any slot has valid hours
+        const validSlots = slotEntries.filter(([_, slot]) => {
+          if (typeof slot === 'object' && slot !== null && 'hours' in slot) {
+            return (slot.hours || 0) > 0;
+          }
+          return false;
+        });
+        
+        if (validSlots.length === 0) {
+          errors.push('• Set hours greater than 0 for at least one day in Time Slots mode');
+        } else {
+          // Validate that all slots have valid start and end times
+          const invalidSlots = slotEntries.filter(([_, slot]) => {
+            if (typeof slot === 'object' && slot !== null) {
+              const hasStartTime = slot.startTime && isValid(slot.startTime);
+              const hasEndTime = slot.endTime && isValid(slot.endTime);
+              return !hasStartTime || !hasEndTime;
+            }
+            return true;
+          });
+          
+          if (invalidSlots.length > 0) {
+            errors.push('• Configure valid start and end times for all days in Time Slots mode');
+          }
+        }
+      }
+    }
+
+    // Show all errors at once with better formatting
+    if (errors.length > 0) {
       Alert.alert(
-        'Location Required',
-        'For nearby requests, please ensure your location has GPS coordinates. Please enter a full address or enable location services.',
-        [{ text: 'OK' }]
+        'Missing Required Information',
+        'Please complete the following fields:\n\n' + errors.join('\n'),
+        [{ text: 'OK', style: 'default' }],
+        { cancelable: true }
       );
       return;
     }
 
     setCreating(true);
     try {
-      // Combine date and time
-      const startDateTime = new Date(selectedDate);
-      startDateTime.setHours(selectedTime.getHours());
-      startDateTime.setMinutes(selectedTime.getMinutes());
+      // Use the calculated start and end date/time
+      const startDateTime = new Date(startDate);
+      startDateTime.setHours(startTime.getHours());
+      startDateTime.setMinutes(startTime.getMinutes());
       startDateTime.setSeconds(0);
       startDateTime.setMilliseconds(0);
 
-      // Calculate end time
-      const endDateTime = new Date(startDateTime);
-      endDateTime.setHours(endDateTime.getHours() + parseFloat(duration));
+      const endDateTime = new Date(endDate);
+      endDateTime.setHours(endTime.getHours());
+      endDateTime.setMinutes(endTime.getMinutes());
+      endDateTime.setSeconds(0);
+      endDateTime.setMilliseconds(0);
 
       // Extract city from address for City mode
       // Simple extraction: take the last part after comma, or use a regex
@@ -282,40 +908,133 @@ export default function SearchScreen() {
           : undefined,
       };
 
-      // Add city for City mode
+      // Add city for City mode (extract from address)
       if (requestMode === 'city') {
         const city = extractCity(location.trim());
         if (city) {
           locationObj.city = city;
+        } else {
+          // If we can't extract city, still proceed but log a warning
+          console.warn('⚠️ Could not extract city from address for City mode');
         }
       }
 
-      const sessionResult = await createSessionRequest({
-        parentId: user.id,
-        sitterId: requestMode === 'invite' ? selected!.id : '', // Only set for invite mode
-        childId: selectedChild.id,
-        status: 'requested',
-        startTime: startDateTime,
-        endTime: endDateTime,
-        location: locationObj,
-        hourlyRate: requestMode === 'invite' && rate > 0 ? rate : 0, // Set to 0 for non-invite modes (can be negotiated)
-        notes: notes || undefined,
-        searchScope: requestMode,
-        maxDistanceKm: requestMode === 'nearby' ? maxDistanceKm : undefined,
-      });
+      // Create sessions for each selected child
+      // If time slot mode is enabled, create separate sessions for each day with configured hours
+      const sessionPromises: Promise<any>[] = [];
+      
+      if (useTimeSlotMode && Object.keys(dailyTimeSlots).length > 0) {
+        // Time slot mode: create sessions for each day with configured hours
+        selectedChildren.forEach(child => {
+          Object.entries(dailyTimeSlots).forEach(([dateStr, slot]) => {
+            // Handle both object format { startTime, endTime, hours } and number format
+            const slotHours = typeof slot === 'object' && slot !== null && 'hours' in slot 
+              ? (slot.hours || 0) 
+              : (typeof slot === 'number' ? slot : 0);
+            
+            if (slotHours > 0) {
+              // Use the configured start and end times from the slot if available
+              let slotStart: Date;
+              let slotEnd: Date;
+              
+              if (typeof slot === 'object' && slot !== null && 'startTime' in slot && 'endTime' in slot) {
+                // Use the configured times from the slot
+                slotStart = isValid(slot.startTime) ? new Date(slot.startTime) : new Date(dateStr);
+                slotEnd = isValid(slot.endTime) ? new Date(slot.endTime) : new Date(dateStr);
+              } else {
+                // Fallback: use the date with default start/end times
+                const slotDate = parse(dateStr, 'MMM dd, yyyy', new Date());
+                slotStart = isValid(slotDate) ? new Date(slotDate) : new Date(dateStr);
+                slotStart.setHours(startTime.getHours());
+                slotStart.setMinutes(startTime.getMinutes());
+                slotStart.setSeconds(0);
+                
+                slotEnd = new Date(slotStart);
+                slotEnd.setHours(slotStart.getHours() + slotHours);
+              }
+              
+              sessionPromises.push(
+                createSessionRequest({
+                  parentId: user.id,
+                  sitterId: requestMode === 'invite' ? selected!.id : '',
+                  childId: child.id,
+                  status: 'requested',
+                  startTime: slotStart,
+                  endTime: slotEnd,
+                  location: locationObj,
+                  hourlyRate: requestMode === 'invite' && rate > 0 ? rate : 0,
+                  notes: notes || undefined,
+                  searchScope: requestMode,
+                  maxDistanceKm: requestMode === 'nearby' ? maxDistanceKm : undefined,
+                })
+              );
+            }
+          });
+        });
+      } else {
+        // Continuous mode: create one session per child for the entire time range
+        selectedChildren.forEach(child => {
+          sessionPromises.push(
+            createSessionRequest({
+              parentId: user.id,
+              sitterId: requestMode === 'invite' ? selected!.id : '',
+              childId: child.id,
+              status: 'requested',
+              startTime: startDateTime,
+              endTime: endDateTime,
+              location: locationObj,
+              hourlyRate: requestMode === 'invite' && rate > 0 ? rate : 0,
+              notes: notes || undefined,
+              searchScope: requestMode,
+              maxDistanceKm: requestMode === 'nearby' ? maxDistanceKm : undefined,
+            })
+          );
+        });
+      }
 
-      if (sessionResult.success) {
+      const sessionResults = await Promise.allSettled(sessionPromises);
+      const successfulSessions = sessionResults.filter(r => r.status === 'fulfilled' && r.value.success).length;
+      const failedSessions = sessionResults.filter(r => r.status === 'rejected' || (r.status === 'fulfilled' && !r.value.success)).length;
+      
+      // Log detailed error information
+      if (failedSessions > 0) {
+        sessionResults.forEach((result, index) => {
+          if (result.status === 'rejected') {
+            console.error(`Session ${index + 1} failed with error:`, result.reason);
+          } else if (!result.value.success) {
+            console.error(`Session ${index + 1} failed:`, result.value.error);
+          }
+        });
+      }
+
+      if (successfulSessions > 0) {
         const successMessage = requestMode === 'invite'
-          ? `Your booking request has been sent to ${selected!.displayName}. They will be notified.`
+          ? `Your booking request${selectedChildren.length > 1 ? 's have' : ' has'} been sent to ${selected!.displayName}. They will be notified.`
           : requestMode === 'nearby'
-          ? `Your session request has been posted. Sitters within ${maxDistanceKm}km will be notified.`
+          ? `Your session request${selectedChildren.length > 1 ? 's have' : ' has'} been posted. Sitters within ${maxDistanceKm}km will be notified.`
           : requestMode === 'city'
-          ? 'Your session request has been posted. Sitters in your city will be notified.'
-          : 'Your session request has been posted. Sitters nationwide will be notified.';
+          ? `Your session request${selectedChildren.length > 1 ? 's have' : ' has'} been posted. Sitters in your city will be notified.`
+          : `Your session request${selectedChildren.length > 1 ? 's have' : ' has'} been posted. Sitters nationwide will be notified.`;
+
+        const failedDetails = sessionResults
+          .map((result, index) => {
+            if (result.status === 'rejected') {
+              return `Session ${index + 1}: ${result.reason?.message || 'Unknown error'}`;
+            } else if (!result.value.success) {
+              return `Session ${index + 1}: ${result.value.error?.message || result.value.error?.code || 'Unknown error'}`;
+            }
+            return null;
+          })
+          .filter(Boolean)
+          .join('\n');
+        
+        const message = failedSessions > 0
+          ? `${successMessage}\n\n⚠️ ${failedSessions} session${failedSessions > 1 ? 's' : ''} failed to create:\n${failedDetails}`
+          : successMessage;
 
         Alert.alert(
           'Request Sent',
-          successMessage,
+          message,
           [
             {
               text: 'OK',
@@ -328,7 +1047,7 @@ export default function SearchScreen() {
                 // Reset form state
                 setBookingVisible(false);
                 setSelected(null);
-                setSelectedChild(null);
+                setSelectedChildren([]);
                 setRequestMode('invite');
                 setMaxDistanceKm(undefined);
                 setSessionLocation(null);
@@ -341,11 +1060,37 @@ export default function SearchScreen() {
           ]
         );
       } else {
-        Alert.alert('Error', sessionResult.error?.message || 'Failed to create booking request');
+        // All sessions failed - show detailed error
+        const errorMessages = sessionResults
+          .map((result, index) => {
+            if (result.status === 'rejected') {
+              return `Session ${index + 1}: ${result.reason?.message || result.reason || 'Unknown error'}`;
+            } else if (!result.value.success) {
+              const error = result.value.error;
+              if (error?.code === 'UNKNOWN_ERROR' && error?.message?.includes('Network request failed')) {
+                return `Session ${index + 1}: Cannot connect to server. Please check:\n  • Backend API is running\n  • Network connection is active\n  • API URL is correct`;
+              }
+              return `Session ${index + 1}: ${error?.message || error?.code || 'Unknown error'}`;
+            }
+            return null;
+          })
+          .filter(Boolean)
+          .join('\n\n');
+        
+        Alert.alert(
+          'Error',
+          failedSessions > 0 
+            ? `Failed to create ${failedSessions} session${failedSessions > 1 ? 's' : ''}:\n\n${errorMessages}`
+            : 'Failed to create booking request. Please try again.',
+          [{ text: 'OK' }]
+        );
       }
     } catch (error: any) {
       console.error('Failed to create session:', error);
-      Alert.alert('Error', 'Failed to create booking request. Please try again.');
+      const errorMessage = error?.message?.includes('Network') 
+        ? 'Cannot connect to server. Please check if the backend API is running and your network connection.'
+        : `Failed to create booking request: ${error?.message || 'Unknown error'}`;
+      Alert.alert('Error', errorMessage);
     } finally {
       setCreating(false);
     }
@@ -385,26 +1130,24 @@ export default function SearchScreen() {
           <RefreshControl refreshing={refreshing} onRefresh={() => loadSitters(true)} />
         }
       >
-        {/* Search bar - only show in Invite mode */}
-        {requestMode === 'invite' && (
-          <View style={styles.searchContainer}>
-            <View style={[styles.searchBar, { backgroundColor: colors.white }]}>
-              <Ionicons name="search" size={20} color={colors.textSecondary} style={styles.searchIcon} />
-              <TextInput
-                placeholder="Search sitters by name or bio..."
-                placeholderTextColor={colors.textSecondary}
-                value={search}
-                onChangeText={setSearch}
-                style={[styles.searchInput, { color: colors.text }]}
-              />
-              {search.length > 0 && (
-                <TouchableOpacity onPress={() => setSearch('')}>
-                  <Ionicons name="close-circle" size={20} color={colors.textSecondary} />
-                </TouchableOpacity>
-              )}
-            </View>
+        {/* Search bar - show for all request modes */}
+        <View style={styles.searchContainer}>
+          <View style={[styles.searchBar, { backgroundColor: colors.white }]}>
+            <Ionicons name="search" size={20} color={colors.textSecondary} style={styles.searchIcon} />
+            <TextInput
+              placeholder="Search sitters by name or bio..."
+              placeholderTextColor={colors.textSecondary}
+              value={search}
+              onChangeText={setSearch}
+              style={[styles.searchInput, { color: colors.text }]}
+            />
+            {search.length > 0 && (
+              <Pressable onPress={() => setSearch('')} hitSlop={8}>
+                <Ionicons name="close-circle" size={20} color={colors.textSecondary} />
+              </Pressable>
+            )}
           </View>
-        )}
+        </View>
 
         {/* Request Mode Selector - Professional Card Design */}
         <Card>
@@ -929,17 +1672,124 @@ export default function SearchScreen() {
                   backgroundColor: colors.white, 
                   borderColor: location ? colors.primary : colors.border,
                   borderWidth: location ? 2 : 1.5,
+                  marginBottom: 12,
                 }]}>
+                  <Ionicons name="search" size={18} color={colors.textSecondary} style={{ marginRight: 8 }} />
                   <TextInput
                     style={[styles.filterInput, { color: colors.text }]}
-                    placeholder="Enter location"
+                    placeholder="Search address or drop pin on map"
                     placeholderTextColor={colors.textSecondary}
                     value={location}
                     onChangeText={setLocation}
                   />
+                  {filterGeocodingLoading && (
+                    <ActivityIndicator size="small" color={colors.primary} />
+                  )}
                 </View>
+
+                {/* Map View in Filter */}
+                <View style={[styles.filterMapContainer, { backgroundColor: colors.background, borderColor: colors.border }]}>
+                    {mapViewAvailable && MapViewComponent ? (
+                      // Native MapView (works in development builds)
+                      React.createElement(
+                        MapViewComponent,
+                        {
+                          ref: filterMapRef,
+                          style: styles.filterMap,
+                          initialRegion: filterMapRegion || {
+                            latitude: 6.9271, // Default to Sri Lanka (Colombo)
+                            longitude: 79.8612,
+                            latitudeDelta: 0.1,
+                            longitudeDelta: 0.1,
+                          },
+                          region: filterMapRegion || undefined,
+                          onRegionChangeComplete: setFilterMapRegion,
+                          onPress: async (event: any) => {
+                            const { latitude, longitude } = event.nativeEvent.coordinate;
+                            try {
+                              const reverseGeocodePromise = Location.reverseGeocodeAsync({ latitude, longitude });
+                              const timeoutPromise = new Promise((_, reject) =>
+                                setTimeout(() => reject(new Error('Reverse geocoding timeout')), 5000)
+                              );
+                              const reverseGeocoded = await Promise.race([reverseGeocodePromise, timeoutPromise]) as any[];
+                              const address = reverseGeocoded && reverseGeocoded.length > 0
+                                ? `${reverseGeocoded[0].street || ''} ${reverseGeocoded[0].streetNumber || ''}, ${reverseGeocoded[0].city || ''}, ${reverseGeocoded[0].region || ''}`.trim()
+                                : `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
+                              const city = reverseGeocoded && reverseGeocoded.length > 0 ? (reverseGeocoded[0].city || undefined) : undefined;
+                              setLocation(address);
+                              setFilterLocation({ address, latitude, longitude, city });
+                            } catch (error) {
+                              const address = `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
+                              setLocation(address);
+                              setFilterLocation({ address, latitude, longitude });
+                            }
+                          },
+                          showsUserLocation: false,
+                          showsMyLocationButton: false,
+                          showsCompass: true,
+                          showsScale: true,
+                        },
+                        filterLocation?.latitude && filterLocation?.longitude && MarkerComponent
+                          ? React.createElement(MarkerComponent, {
+                              coordinate: {
+                                latitude: filterLocation.latitude,
+                                longitude: filterLocation.longitude,
+                              },
+                              title: "Filter Location",
+                              description: filterLocation.address,
+                              pinColor: colors.primary,
+                            })
+                          : null
+                      )
+                    ) : (
+                      // WebView-based map (works in Expo Go)
+                      <WebMapView
+                        initialRegion={filterMapRegion || {
+                          latitude: 6.9271,
+                          longitude: 79.8612,
+                          latitudeDelta: 0.1,
+                          longitudeDelta: 0.1,
+                        }}
+                        region={filterMapRegion || undefined}
+                        onRegionChangeComplete={setFilterMapRegion}
+                        onPress={async (coordinate: { latitude: number; longitude: number }) => {
+                          const { latitude, longitude } = coordinate;
+                          try {
+                            const reverseGeocodePromise = Location.reverseGeocodeAsync({ latitude, longitude });
+                            const timeoutPromise = new Promise((_, reject) =>
+                              setTimeout(() => reject(new Error('Reverse geocoding timeout')), 5000)
+                            );
+                            const reverseGeocoded = await Promise.race([reverseGeocodePromise, timeoutPromise]) as any[];
+                            const address = reverseGeocoded && reverseGeocoded.length > 0
+                              ? `${reverseGeocoded[0].street || ''} ${reverseGeocoded[0].streetNumber || ''}, ${reverseGeocoded[0].city || ''}, ${reverseGeocoded[0].region || ''}`.trim()
+                              : `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
+                            const city = reverseGeocoded && reverseGeocoded.length > 0 ? (reverseGeocoded[0].city || undefined) : undefined;
+                            setLocation(address);
+                            setFilterLocation({ address, latitude, longitude, city });
+                          } catch (error) {
+                            const address = `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
+                            setLocation(address);
+                            setFilterLocation({ address, latitude, longitude });
+                          }
+                        }}
+                        marker={filterLocation?.latitude && filterLocation?.longitude ? {
+                          latitude: filterLocation.latitude,
+                          longitude: filterLocation.longitude,
+                          title: "Filter Location",
+                          description: filterLocation.address,
+                        } : null}
+                        showsUserLocation={false}
+                        showsMyLocationButton={false}
+                        showsCompass={true}
+                        showsScale={true}
+                        style={styles.filterMap}
+                      />
+                    )}
+                  </View>
+                )}
+
                 {location && (
-                  <View style={[styles.filterSelectedValue, { backgroundColor: colors.primary + '15' }]}>
+                  <View style={[styles.filterSelectedValue, { backgroundColor: colors.primary + '15', marginTop: 12 }]}>
                     <Ionicons name="checkmark-circle" size={16} color={colors.primary} />
                     <Text style={[styles.filterSelectedText, { color: colors.primary }]}>
                       Selected: {location}
@@ -1116,127 +1966,568 @@ export default function SearchScreen() {
               </>
             )}
 
-            {/* Child Selection */}
-            <Text style={[styles.label, { color: colors.text }]}>Select Child *</Text>
+            {/* Child Selection - Multiple Selection */}
+            <Text style={[styles.label, { color: colors.text }]}>Select Child(ren) *</Text>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.childPicker}>
-              {children.map((child) => (
-                <TouchableOpacity
-                  key={child.id}
-                  style={[
-                    styles.childOption,
-                    {
-                      backgroundColor: selectedChild?.id === child.id ? colors.primary : colors.white,
-                      borderColor: selectedChild?.id === child.id ? colors.primary : colors.border,
-                    },
-                  ]}
-                  onPress={() => setSelectedChild(child)}
-                >
-                  {child.photoUrl ? (
-                    <Image source={{ uri: child.photoUrl }} style={styles.childAvatar} />
-                  ) : (
-                    <View style={[styles.childAvatar, { backgroundColor: colors.border }]}>
-                      <Ionicons name="person" size={20} color={colors.textSecondary} />
-                    </View>
-                  )}
-                  <Text
+              {children
+                .filter((child, index, self) => 
+                  index === self.findIndex((c) => c.id === child.id)
+                )
+                .map((child) => {
+                const isSelected = selectedChildren.some(c => c.id === child.id);
+                return (
+                  <TouchableOpacity
+                    key={child.id}
                     style={[
-                      styles.childName,
+                      styles.childOption,
                       {
-                        color: selectedChild?.id === child.id ? colors.white : colors.text,
+                        backgroundColor: isSelected ? colors.primary : colors.white,
+                        borderColor: isSelected ? colors.primary : colors.border,
                       },
                     ]}
+                    onPress={() => {
+                      if (isSelected) {
+                        setSelectedChildren(selectedChildren.filter(c => c.id !== child.id));
+                      } else {
+                        setSelectedChildren([...selectedChildren, child]);
+                      }
+                    }}
                   >
-                    {child.name}
-                  </Text>
-                </TouchableOpacity>
-              ))}
+                    {child.photoUrl ? (
+                      <Image source={{ uri: child.photoUrl }} style={styles.childAvatar} />
+                    ) : (
+                      <View style={[styles.childAvatar, { backgroundColor: colors.border }]}>
+                        <Ionicons name="person" size={20} color={colors.textSecondary} />
+                      </View>
+                    )}
+                    <View style={styles.childSelectionIndicator}>
+                      {isSelected && (
+                        <Ionicons name="checkmark-circle" size={20} color={colors.white} />
+                      )}
+                    </View>
+                    <Text
+                      style={[
+                        styles.childName,
+                        {
+                          color: isSelected ? colors.white : colors.text,
+                        },
+                      ]}
+                    >
+                      {child.name}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
             </ScrollView>
 
-            {/* Date Picker */}
-            <Text style={[styles.label, { color: colors.text }]}>Date *</Text>
-            <TouchableOpacity
-              style={[styles.inputRow, { backgroundColor: colors.white }]}
-              onPress={() => setShowDatePicker(true)}
-            >
-              <Ionicons name="calendar" size={20} color={colors.text} style={styles.icon} />
-              <Text style={[styles.inputFlex, { color: colors.text }]}>
-                {format(selectedDate, 'MMM dd, yyyy')}
-              </Text>
-            </TouchableOpacity>
-            {showDatePicker && Platform.OS !== 'web' && (
-              <DateTimePicker
-                value={selectedDate}
-                mode="date"
-                display="default"
-                minimumDate={new Date()}
-                onChange={(event, date) => {
-                  setShowDatePicker(false);
-                  if (date && event.type !== 'dismissed') {
-                    setSelectedDate(date);
-                  }
-                }}
-              />
-            )}
-
-            {/* Time Picker */}
-            <Text style={[styles.label, { color: colors.text }]}>Time *</Text>
-            <TouchableOpacity
-              style={[styles.inputRow, { backgroundColor: colors.white }]}
-              onPress={() => setShowTimePicker(true)}
-            >
-              <Ionicons name="time" size={20} color={colors.text} style={styles.icon} />
-              <Text style={[styles.inputFlex, { color: colors.text }]}>
-                {format(selectedTime, 'h:mm a')}
-              </Text>
-            </TouchableOpacity>
-            {showTimePicker && Platform.OS !== 'web' && (
-              <DateTimePicker
-                value={selectedTime}
-                mode="time"
-                display="default"
-                onChange={(event, time) => {
-                  setShowTimePicker(false);
-                  if (time && event.type !== 'dismissed') {
-                    setSelectedTime(time);
-                  }
-                }}
-              />
-            )}
-
-            {/* Duration */}
-            <Text style={[styles.label, { color: colors.text }]}>Duration (hours) *</Text>
-            <View style={[styles.inputRow, { backgroundColor: colors.white }]}>
-              <Ionicons name="hourglass" size={20} color={colors.text} style={styles.icon} />
-              <TextInput
-                style={[styles.inputFlex, { color: colors.text }]}
-                placeholder="2"
-                placeholderTextColor={colors.textSecondary}
-                keyboardType="number-pad"
-                value={duration}
-                onChangeText={setDuration}
-              />
+            {/* Booking Mode Toggle */}
+            <View style={[styles.bookingModeContainer, { backgroundColor: colors.backgroundSecondary, borderColor: colors.border }]}>
+              <Text style={[styles.bookingModeLabel, { color: colors.text }]}>Booking Mode</Text>
+              <View style={styles.bookingModeToggle}>
+                <TouchableOpacity
+                  style={[
+                    styles.bookingModeOption,
+                    { 
+                      backgroundColor: !useTimeSlotMode ? colors.primary : colors.white,
+                      borderColor: !useTimeSlotMode ? colors.primary : colors.border
+                    }
+                  ]}
+                  onPress={() => setUseTimeSlotMode(false)}
+                >
+                  <Text style={[
+                    styles.bookingModeOptionText,
+                    { color: !useTimeSlotMode ? colors.white : colors.text }
+                  ]}>
+                    Continuous
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    styles.bookingModeOption,
+                    { 
+                      backgroundColor: useTimeSlotMode ? colors.primary : colors.white,
+                      borderColor: useTimeSlotMode ? colors.primary : colors.border
+                    }
+                  ]}
+                  onPress={() => setUseTimeSlotMode(true)}
+                >
+                  <Text style={[
+                    styles.bookingModeOptionText,
+                    { color: useTimeSlotMode ? colors.white : colors.text }
+                  ]}>
+                    Time Slots
+                  </Text>
+                </TouchableOpacity>
+              </View>
             </View>
 
-            {/* Location */}
-            <Text style={[styles.label, { color: colors.text }]}>Location *</Text>
-            <View style={[styles.inputRow, { backgroundColor: colors.white }]}>
-              <Ionicons name="location" size={20} color={colors.text} style={styles.icon} />
-              <TextInput
-                style={[styles.inputFlex, { color: colors.text }]}
-                placeholder="Enter full address"
-                placeholderTextColor={colors.textSecondary}
-                value={location}
-                onChangeText={(text) => {
-                  setLocation(text);
-                  // Update session location object
-                  setSessionLocation({
-                    address: text,
-                    // latitude and longitude can be added via geocoding later
-                    // city will be extracted when creating the session
-                  });
-                }}
-              />
+            {/* Start Date/Time */}
+            <Text style={[styles.label, { color: colors.text }]}>Start Date & Time *</Text>
+            <View style={styles.dateTimeRow}>
+              <TouchableOpacity
+                style={[styles.inputRow, { backgroundColor: colors.white, flex: 1, marginRight: 8 }]}
+                onPress={() => setShowStartDatePicker(true)}
+              >
+                <Ionicons name="calendar" size={20} color={colors.text} style={styles.icon} />
+                <Text style={[styles.inputFlex, { color: colors.text }]}>
+                  {format(startDate, 'MMM dd, yyyy')}
+                </Text>
+              </TouchableOpacity>
+              {showStartDatePicker && Platform.OS !== 'web' && (
+                <DateTimePicker
+                  value={startDate}
+                  mode="date"
+                  display="default"
+                  minimumDate={new Date()}
+                  onChange={(event, date) => {
+                    setShowStartDatePicker(false);
+                    if (date && event.type !== 'dismissed') {
+                      setStartDate(date);
+                    }
+                  }}
+                />
+              )}
+              <TouchableOpacity
+                style={[styles.inputRow, { backgroundColor: colors.white, flex: 1, marginLeft: 8 }]}
+                onPress={() => setShowStartTimePicker(true)}
+              >
+                <Ionicons name="time" size={20} color={colors.text} style={styles.icon} />
+                <Text style={[styles.inputFlex, { color: colors.text }]}>
+                  {format(startTime, 'h:mm a')}
+                </Text>
+              </TouchableOpacity>
+              {showStartTimePicker && Platform.OS !== 'web' && (
+                <DateTimePicker
+                  value={startTime}
+                  mode="time"
+                  display="default"
+                  onChange={(event, time) => {
+                    setShowStartTimePicker(false);
+                    if (time && event.type !== 'dismissed') {
+                      setStartTime(time);
+                    }
+                  }}
+                />
+              )}
             </View>
+
+            {/* End Date/Time */}
+            <Text style={[styles.label, { color: colors.text }]}>End Date & Time *</Text>
+            <View style={styles.dateTimeRow}>
+              <TouchableOpacity
+                style={[styles.inputRow, { backgroundColor: colors.white, flex: 1, marginRight: 8 }]}
+                onPress={() => setShowEndDatePicker(true)}
+              >
+                <Ionicons name="calendar" size={20} color={colors.text} style={styles.icon} />
+                <Text style={[styles.inputFlex, { color: colors.text }]}>
+                  {format(endDate, 'MMM dd, yyyy')}
+                </Text>
+              </TouchableOpacity>
+              {showEndDatePicker && Platform.OS !== 'web' && (
+                <DateTimePicker
+                  value={endDate}
+                  mode="date"
+                  display="default"
+                  minimumDate={(() => {
+                    // If end date is same as start date, allow same day but ensure end time is after start time
+                    const minDate = new Date(startDate);
+                    return minDate;
+                  })()}
+                  onChange={(event, date) => {
+                    setShowEndDatePicker(false);
+                    if (date && event.type !== 'dismissed') {
+                      setEndDate(date);
+                      // If end date is same as start date, ensure end time is after start time
+                      if (date.getTime() === startDate.getTime() && endTime <= startTime) {
+                        const newEndTime = new Date(startTime);
+                        newEndTime.setHours(newEndTime.getHours() + 1);
+                        setEndTime(newEndTime);
+                      }
+                    }
+                  }}
+                />
+              )}
+              <TouchableOpacity
+                style={[styles.inputRow, { backgroundColor: colors.white, flex: 1, marginLeft: 8 }]}
+                onPress={() => setShowEndTimePicker(true)}
+              >
+                <Ionicons name="time" size={20} color={colors.text} style={styles.icon} />
+                <Text style={[styles.inputFlex, { color: colors.text }]}>
+                  {format(endTime, 'h:mm a')}
+                </Text>
+              </TouchableOpacity>
+              {showEndTimePicker && Platform.OS !== 'web' && (
+                <DateTimePicker
+                  value={endTime}
+                  mode="time"
+                  display="default"
+                  onChange={(event, time) => {
+                    setShowEndTimePicker(false);
+                    if (time && event.type !== 'dismissed') {
+                      setEndTime(time);
+                    }
+                  }}
+                />
+              )}
+            </View>
+
+            {/* Calculated Duration Display */}
+            {!useTimeSlotMode ? (
+              // Continuous Mode: Show simple date range
+              <View style={[styles.durationDisplay, { 
+                backgroundColor: calculatedHours > 0 ? colors.backgroundSecondary : colors.warning + '20', 
+                borderColor: calculatedHours > 0 ? colors.border : colors.warning 
+              }]}>
+                <Ionicons 
+                  name="calendar" 
+                  size={20} 
+                  color={calculatedHours > 0 ? colors.primary : colors.warning} 
+                />
+                <View style={styles.durationTextContainer}>
+                  {calculatedHours > 0 ? (
+                    <>
+                      <Text style={[styles.durationText, { color: colors.text }]}>
+                        {Math.ceil(calculatedHours / 24)} day{Math.ceil(calculatedHours / 24) > 1 ? 's' : ''}
+                      </Text>
+                      <Text style={[styles.durationSubtext, { color: colors.textSecondary }]}>
+                        From {format(startDate, 'MMM dd, yyyy')} to {format(endDate, 'MMM dd, yyyy')}
+                      </Text>
+                      <Text style={[styles.durationSubtext, { color: colors.textSecondary, marginTop: 4 }]}>
+                        {format(startTime, 'h:mm a')} - {format(endTime, 'h:mm a')} ({calculatedHours.toFixed(1)} hours total)
+                      </Text>
+                    </>
+                  ) : (
+                    <Text style={[styles.durationText, { color: colors.warning }]}>
+                      Please select valid start and end times
+                    </Text>
+                  )}
+                </View>
+              </View>
+            ) : (
+              // Time Slots Mode: Show date range and per-day time configuration
+              <>
+                <View style={[styles.durationDisplay, { 
+                  backgroundColor: calculatedHours > 0 ? colors.backgroundSecondary : colors.warning + '20', 
+                  borderColor: calculatedHours > 0 ? colors.border : colors.warning 
+                }]}>
+                  <Ionicons 
+                    name="calendar" 
+                    size={20} 
+                    color={calculatedHours > 0 ? colors.primary : colors.warning} 
+                  />
+                  <View style={styles.durationTextContainer}>
+                    {calculatedHours > 0 && daysBreakdown.length > 0 ? (
+                      <>
+                        <Text style={[styles.durationText, { color: colors.text }]}>
+                          From {format(startDate, 'MMM dd, yyyy')} to {format(endDate, 'MMM dd, yyyy')}
+                        </Text>
+                        <Text style={[styles.durationSubtext, { color: colors.textSecondary, marginTop: 4 }]}>
+                          {calculatedHours.toFixed(1)} hours total across {daysBreakdown.length} day{daysBreakdown.length > 1 ? 's' : ''}
+                        </Text>
+                        {(() => {
+                          // Calculate hours per day from configured slots
+                          const slotHours = Object.values(dailyTimeSlots)
+                            .map(s => s?.hours || 0)
+                            .filter(h => h > 0);
+                          
+                          if (slotHours.length === 0) {
+                            // No slots configured yet, show average
+                            const avgHoursPerDay = calculatedHours / daysBreakdown.length;
+                            if (avgHoursPerDay > 0) {
+                              return (
+                                <Text style={[styles.durationSubtext, { color: colors.textSecondary, marginTop: 2 }]}>
+                                  ~{avgHoursPerDay.toFixed(1)} hours per day
+                                </Text>
+                              );
+                            }
+                            return null;
+                          }
+                          
+                          const minHours = Math.min(...slotHours);
+                          const maxHours = Math.max(...slotHours);
+                          
+                          let hoursPerDayText = '';
+                          if (minHours === maxHours) {
+                            hoursPerDayText = `${minHours.toFixed(1)} hours per day`;
+                          } else {
+                            hoursPerDayText = `${minHours.toFixed(1)} to ${maxHours.toFixed(1)} hours per day`;
+                          }
+                          
+                          return (
+                            <Text style={[styles.durationSubtext, { color: colors.textSecondary, marginTop: 2 }]}>
+                              {hoursPerDayText}
+                            </Text>
+                          );
+                        })()}
+                      </>
+                    ) : (
+                      <Text style={[styles.durationText, { color: colors.warning }]}>
+                        Please select start and end dates
+                      </Text>
+                    )}
+                  </View>
+                </View>
+
+                {/* Time Slots Configuration - Per Day Time Selection */}
+                {daysBreakdown.length > 0 && (
+                  <View style={[styles.timeSlotsContainer, { backgroundColor: colors.backgroundSecondary, borderColor: colors.border }]}>
+                    <Text style={[styles.timeSlotsTitle, { color: colors.text }]}>
+                      Configure Time Per Day
+                    </Text>
+                    <Text style={[styles.timeSlotsSubtitle, { color: colors.textSecondary }]}>
+                      Set start and end time for each day {daysBreakdown.length > 5 && `(${daysBreakdown.length} days total)`}
+                    </Text>
+                    <ScrollView 
+                      style={styles.timeSlotsScrollView}
+                      nestedScrollEnabled={true}
+                      showsVerticalScrollIndicator={true}
+                    >
+                      {daysBreakdown.map((day, index) => {
+                      const slot = dailyTimeSlots[day.date];
+                      if (!slot) return null;
+                      
+                      // Validate dates before using them
+                      const slotStartTime = slot.startTime && isValid(slot.startTime) ? slot.startTime : new Date();
+                      const slotEndTime = slot.endTime && isValid(slot.endTime) ? slot.endTime : new Date();
+                      const slotHours = slot.hours || 0;
+                      const showStart = slotTimePickers[day.date]?.showStart || false;
+                      const showEnd = slotTimePickers[day.date]?.showEnd || false;
+                      
+                      // Ensure dates are valid Date objects
+                      const startTimeForDisplay = isValid(slotStartTime) ? slotStartTime : new Date();
+                      const endTimeForDisplay = isValid(slotEndTime) ? slotEndTime : new Date();
+                      
+                      return (
+                        <View key={index} style={[styles.timeSlotDayContainer, { borderBottomColor: colors.border }]}>
+                          <Text style={[styles.timeSlotDayLabel, { color: colors.text }]}>{day.date}</Text>
+                          <View style={styles.timeSlotTimeRow}>
+                            <TouchableOpacity
+                              style={[styles.timeSlotTimeButton, { backgroundColor: colors.white, borderColor: colors.border }]}
+                              onPress={() => setSlotTimePickers(prev => ({
+                                ...prev,
+                                [day.date]: { showStart: true, showEnd: false },
+                              }))}
+                            >
+                              <Ionicons name="time" size={16} color={colors.text} />
+                              <Text style={[styles.timeSlotTimeText, { color: colors.text }]}>
+                                {isValid(startTimeForDisplay) ? format(startTimeForDisplay, 'h:mm a') : '--:--'}
+                              </Text>
+                            </TouchableOpacity>
+                            {showStart && Platform.OS !== 'web' && (
+                              <DateTimePicker
+                                value={isValid(startTimeForDisplay) ? startTimeForDisplay : new Date()}
+                                mode="time"
+                                display="default"
+                                onChange={(event, time) => {
+                                  setSlotTimePickers(prev => ({
+                                    ...prev,
+                                    [day.date]: { showStart: false, showEnd: false },
+                                  }));
+                                  if (time && event.type !== 'dismissed' && isValid(time)) {
+                                    const validEndTime = isValid(endTimeForDisplay) ? endTimeForDisplay : new Date();
+                                    const newSlot = {
+                                      startTime: time,
+                                      endTime: validEndTime,
+                                      hours: 0,
+                                    };
+                                    // Calculate hours
+                                    const start = new Date(time);
+                                    const end = new Date(validEndTime);
+                                    if (isValid(start) && isValid(end) && end > start) {
+                                      newSlot.hours = (end.getTime() - start.getTime()) / (1000 * 60 * 60);
+                                    }
+                                    setDailyTimeSlots(prev => {
+                                      const updated = { ...prev, [day.date]: newSlot };
+                                      // Recalculate total
+                                      const newTotal = Object.values(updated)
+                                        .reduce((sum, s) => sum + (s.hours || 0), 0);
+                                      setCalculatedHours(newTotal);
+                                      return updated;
+                                    });
+                                  }
+                                }}
+                              />
+                            )}
+                            <Text style={[styles.timeSlotTo, { color: colors.textSecondary }]}>to</Text>
+                            <TouchableOpacity
+                              style={[styles.timeSlotTimeButton, { backgroundColor: colors.white, borderColor: colors.border }]}
+                              onPress={() => setSlotTimePickers(prev => ({
+                                ...prev,
+                                [day.date]: { showStart: false, showEnd: true },
+                              }))}
+                            >
+                              <Ionicons name="time" size={16} color={colors.text} />
+                              <Text style={[styles.timeSlotTimeText, { color: colors.text }]}>
+                                {isValid(endTimeForDisplay) ? format(endTimeForDisplay, 'h:mm a') : '--:--'}
+                              </Text>
+                            </TouchableOpacity>
+                            {showEnd && Platform.OS !== 'web' && (
+                              <DateTimePicker
+                                value={isValid(endTimeForDisplay) ? endTimeForDisplay : new Date()}
+                                mode="time"
+                                display="default"
+                                onChange={(event, time) => {
+                                  setSlotTimePickers(prev => ({
+                                    ...prev,
+                                    [day.date]: { showStart: false, showEnd: false },
+                                  }));
+                                  if (time && event.type !== 'dismissed' && isValid(time)) {
+                                    const validStartTime = isValid(startTimeForDisplay) ? startTimeForDisplay : new Date();
+                                    const newSlot = {
+                                      startTime: validStartTime,
+                                      endTime: time,
+                                      hours: 0,
+                                    };
+                                    // Calculate hours
+                                    const start = new Date(validStartTime);
+                                    const end = new Date(time);
+                                    if (isValid(start) && isValid(end) && end > start) {
+                                      newSlot.hours = (end.getTime() - start.getTime()) / (1000 * 60 * 60);
+                                    }
+                                    setDailyTimeSlots(prev => {
+                                      const updated = { ...prev, [day.date]: newSlot };
+                                      // Recalculate total
+                                      const newTotal = Object.values(updated)
+                                        .reduce((sum, s) => sum + (s.hours || 0), 0);
+                                      setCalculatedHours(newTotal);
+                                      return updated;
+                                    });
+                                  }
+                                }}
+                              />
+                            )}
+                            <Text style={[styles.timeSlotHours, { color: colors.primary }]}>
+                              ({slotHours.toFixed(1)} hrs)
+                            </Text>
+                          </View>
+                        </View>
+                      );
+                    })}
+                    </ScrollView>
+                  </View>
+                )}
+              </>
+            )}
+
+            {/* Location Card with Map */}
+            <View style={styles.locationHeader}>
+              <Text style={[styles.label, { color: colors.text }]}>Location *</Text>
+              {requestMode === 'nearby' && (
+                <Text style={[styles.locationHint, { color: colors.textSecondary }]}>
+                  GPS coordinates required for distance calculation
+                </Text>
+              )}
+            </View>
+            <Card style={styles.locationCard}>
+              {/* Address Search Input */}
+              <View style={[styles.inputRow, { backgroundColor: colors.white, marginBottom: 12 }]}>
+                <Ionicons name="location" size={20} color={colors.text} style={styles.icon} />
+                <TextInput
+                  style={[styles.inputFlex, { color: colors.text }]}
+                  placeholder="Search address or drop pin on map"
+                  placeholderTextColor={colors.textSecondary}
+                  value={location}
+                  onChangeText={setLocation}
+                />
+                {geocodingLoading && (
+                  <ActivityIndicator size="small" color={colors.primary} style={styles.icon} />
+                )}
+              </View>
+
+              {/* Use Current Location Button */}
+              <Pressable
+                style={[styles.currentLocationButton, { backgroundColor: colors.primary + '15', borderColor: colors.primary }]}
+                onPress={handleGetCurrentLocation}
+                hitSlop={8}
+                disabled={locationLoading}
+              >
+                {locationLoading ? (
+                  <ActivityIndicator size="small" color={colors.primary} />
+                ) : (
+                  <>
+                    <Ionicons name="locate" size={18} color={colors.primary} />
+                    <Text style={[styles.currentLocationText, { color: colors.primary }]}>
+                      Use Current Location
+                    </Text>
+                  </>
+                )}
+              </Pressable>
+
+              {/* Map View - Always show for location selection */}
+              <View style={[styles.mapContainer, { backgroundColor: colors.background, borderColor: colors.border }]}>
+                {/* Show map thumbnail or placeholder */}
+                {sessionLocation?.latitude && sessionLocation?.longitude ? (
+                  <TouchableOpacity
+                    style={styles.mapThumbnail}
+                    onPress={() => setFullscreenMapVisible(true)}
+                    activeOpacity={0.8}
+                  >
+                    <Image
+                      source={{
+                        uri: `https://api.mapbox.com/styles/v1/mapbox/streets-v11/static/pin-s+FF0000(${sessionLocation.longitude},${sessionLocation.latitude})/${sessionLocation.longitude},${sessionLocation.latitude},15/300x200@2x?access_token=pk.eyJ1IjoibWFwYm94IiwiYSI6ImNpejY4NXVycTA2emYycXBndHRqcmZ3N3gifQ.rJcFIG214AriISLbB6B5aw`
+                      }}
+                      style={styles.mapThumbnailImage}
+                      onError={(error) => {
+                        console.warn('Mapbox thumbnail failed, using OpenStreetMap fallback');
+                      }}
+                    />
+                    <View style={[styles.mapThumbnailOverlay, { backgroundColor: colors.primary + '20' }]}>
+                      <View style={[styles.mapThumbnailBadge, { backgroundColor: colors.primary }]}>
+                        <Ionicons name="location" size={16} color={colors.white} />
+                      </View>
+                    </View>
+                  </TouchableOpacity>
+                ) : (
+                  <View style={styles.mapPreview}>
+                    <View style={styles.mapPreviewContent}>
+                      <Ionicons name="location-outline" size={48} color={colors.textSecondary} />
+                      <Text style={[styles.mapPreviewText, { color: colors.textSecondary }]}>
+                        No location selected
+                      </Text>
+                      <Text style={[styles.mapPreviewHint, { color: colors.textSecondary }]}>
+                        Tap "Open Fullscreen Map" to select location
+                      </Text>
+                    </View>
+                  </View>
+                )}
+                
+                {/* Fullscreen Map Button */}
+                <TouchableOpacity
+                  style={[styles.fullscreenMapButton, { backgroundColor: colors.primary }]}
+                  onPress={() => setFullscreenMapVisible(true)}
+                  hitSlop={8}
+                >
+                  <Ionicons name="expand" size={20} color={colors.white} />
+                  <Text style={[styles.fullscreenMapButtonText, { color: colors.white }]}>
+                    Open Fullscreen Map
+                  </Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* Location Info Card */}
+              {sessionLocation && (
+                <View style={[styles.locationInfoCard, { backgroundColor: colors.background, borderColor: colors.border }]}>
+                  <View style={styles.locationInfoRow}>
+                    <Ionicons name="checkmark-circle" size={18} color={colors.success} />
+                    <View style={styles.locationInfoTextContainer}>
+                      <Text style={[styles.locationInfoAddress, { color: colors.text }]} numberOfLines={2}>
+                        {sessionLocation.address}
+                      </Text>
+                      {sessionLocation.city && (
+                        <Text style={[styles.locationInfoCity, { color: colors.textSecondary }]}>
+                          {sessionLocation.city}
+                        </Text>
+                      )}
+                      {sessionLocation.latitude && sessionLocation.longitude && (
+                        <Text style={[styles.locationInfoCoords, { color: colors.textSecondary }]}>
+                          {sessionLocation.latitude.toFixed(6)}, {sessionLocation.longitude.toFixed(6)}
+                        </Text>
+                      )}
+                    </View>
+                  </View>
+                </View>
+              )}
+            </Card>
 
             {/* Notes */}
             <Text style={[styles.label, { color: colors.text }]}>Notes</Text>
@@ -1254,7 +2545,7 @@ export default function SearchScreen() {
 
             {requestMode === 'invite' && rate > 0 && (
               <Text style={[styles.total, { color: colors.text }]}>
-                Total: ${total.toFixed(2)}
+                Total: {total.toFixed(2)} LKR
               </Text>
             )}
             {requestMode !== 'invite' && (
@@ -1265,19 +2556,14 @@ export default function SearchScreen() {
             <TouchableOpacity
               style={[
                 styles.confirmButton,
-                { backgroundColor: creating ? colors.border : colors.primary },
+                { 
+                  backgroundColor: creating ? colors.border : colors.primary,
+                  opacity: creating ? 0.6 : 1,
+                },
               ]}
               onPress={handleConfirmBooking}
-              disabled={
-                creating ||
-                !selectedChild ||
-                !duration ||
-                (requestMode === 'invite' && !selected) ||
-                (requestMode === 'nearby' && !maxDistanceKm) ||
-                !location ||
-                location.trim() === '' ||
-                (requestMode === 'nearby' && (!sessionLocation?.latitude || !sessionLocation?.longitude))
-              }
+              disabled={creating}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
             >
               {creating ? (
                 <ActivityIndicator color={colors.white} />
@@ -1288,6 +2574,32 @@ export default function SearchScreen() {
           </ScrollView>
         </View>
       </Modal>
+
+      {/* Fullscreen Map Modal */}
+      <FullscreenMapModal
+        visible={fullscreenMapVisible}
+        onClose={() => setFullscreenMapVisible(false)}
+        initialLocation={sessionLocation ? {
+          latitude: sessionLocation.latitude!,
+          longitude: sessionLocation.longitude!,
+          address: sessionLocation.address,
+        } : undefined}
+        onLocationSelect={(location) => {
+          setLocation(location.address);
+          setSessionLocation({
+            address: location.address,
+            latitude: location.latitude,
+            longitude: location.longitude,
+            city: location.city,
+          });
+          setMapRegion({
+            latitude: location.latitude,
+            longitude: location.longitude,
+            latitudeDelta: 0.01,
+            longitudeDelta: 0.01,
+          });
+        }}
+      />
     </View>
   );
 }
@@ -1534,7 +2846,7 @@ const styles = StyleSheet.create({
   },
   modalCloseButton: {
     position: 'absolute',
-    top: 60,
+    top: 80,
     right: 16,
     zIndex: 1000,
     padding: 8,
@@ -1840,7 +3152,7 @@ const styles = StyleSheet.create({
   filterModalContent: {
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
-    maxHeight: '80%',
+    maxHeight: '90%',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: -2 },
     shadowOpacity: 0.25,
@@ -1936,5 +3248,378 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
     fontWeight: '700',
+  },
+  // Location Card Styles
+  locationCard: {
+    marginBottom: 16,
+    padding: 12,
+  },
+  mapContainer: {
+    height: 250,
+    borderRadius: 12,
+    overflow: 'hidden',
+    marginTop: 12,
+    borderWidth: 1,
+    minHeight: 250,
+  },
+  map: {
+    flex: 1,
+  },
+  mapPlaceholder: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+    minHeight: 250,
+  },
+  mapPlaceholderText: {
+    fontSize: 16,
+    fontWeight: '600',
+    marginTop: 12,
+    textAlign: 'center',
+  },
+  mapPlaceholderSubtext: {
+    fontSize: 12,
+    marginTop: 4,
+    textAlign: 'center',
+  },
+  currentLocationButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    borderWidth: 1.5,
+    gap: 8,
+  },
+  currentLocationText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  locationInfoCard: {
+    marginTop: 12,
+    padding: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+  locationInfoRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+  },
+  locationInfoTextContainer: {
+    flex: 1,
+  },
+  locationInfoAddress: {
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  locationInfoCity: {
+    fontSize: 12,
+    marginBottom: 2,
+  },
+  locationInfoCoords: {
+    fontSize: 11,
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+  },
+  locationHeader: {
+    marginBottom: 8,
+  },
+  locationHint: {
+    fontSize: 12,
+    marginTop: 4,
+    fontStyle: 'italic',
+  },
+  fullscreenMapButton: {
+    position: 'absolute',
+    bottom: 12,
+    left: 12,
+    right: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    gap: 8,
+    ...(Platform.OS === 'web'
+      ? {
+          boxShadow: '0 2px 8px rgba(0, 0, 0, 0.15)',
+        }
+      : {
+          shadowColor: '#000',
+          shadowOffset: { width: 0, height: 2 },
+          shadowOpacity: 0.15,
+          shadowRadius: 4,
+          elevation: 4,
+        }),
+  },
+  fullscreenMapButtonText: {
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  filterMapContainer: {
+    height: 200,
+    borderRadius: 12,
+    overflow: 'hidden',
+    marginBottom: 12,
+    borderWidth: 1,
+  },
+  filterMap: {
+    flex: 1,
+  },
+  dateTimeRow: {
+    flexDirection: 'row',
+    gap: 0,
+    marginBottom: 16,
+  },
+  durationDisplay: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    gap: 8,
+    marginBottom: 16,
+  },
+  durationTextContainer: {
+    flex: 1,
+  },
+  durationText: {
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  durationDaysText: {
+    fontSize: 13,
+    marginTop: 2,
+  },
+  bookingModeContainer: {
+    padding: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    marginBottom: 16,
+  },
+  bookingModeLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 8,
+  },
+  bookingModeToggle: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  bookingModeOption: {
+    flex: 1,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    borderWidth: 1.5,
+    alignItems: 'center',
+  },
+  bookingModeOptionText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  timeSlotsContainer: {
+    padding: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    marginBottom: 16,
+  },
+  timeSlotsScrollView: {
+    maxHeight: 300, // Limit height to show ~5 days, then scrollable
+  },
+  timeSlotsTitle: {
+    fontSize: 15,
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  timeSlotsSubtitle: {
+    fontSize: 12,
+    marginBottom: 12,
+  },
+  timeSlotRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+  },
+  timeSlotDate: {
+    fontSize: 14,
+    fontWeight: '500',
+    flex: 1,
+  },
+  timeSlotInputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    gap: 8,
+    minWidth: 120,
+  },
+  timeSlotInput: {
+    fontSize: 14,
+    flex: 1,
+    textAlign: 'right',
+  },
+  timeSlotUnit: {
+    fontSize: 12,
+  },
+  timeSlotDayContainer: {
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    gap: 8,
+  },
+  timeSlotDayLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 8,
+  },
+  timeSlotTimeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flexWrap: 'wrap',
+  },
+  timeSlotTimeButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    gap: 6,
+  },
+  timeSlotTimeText: {
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  timeSlotTo: {
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  timeSlotHours: {
+    fontSize: 13,
+    fontWeight: '600',
+    marginLeft: 'auto',
+  },
+  durationSubtext: {
+    fontSize: 13,
+    marginTop: 2,
+  },
+  mapPreview: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    minHeight: 200,
+  },
+  mapPreviewContent: {
+    alignItems: 'center',
+    padding: 20,
+  },
+  mapPreviewText: {
+    fontSize: 16,
+    fontWeight: '600',
+    marginTop: 12,
+    textAlign: 'center',
+  },
+  mapPreviewAddress: {
+    fontSize: 14,
+    marginTop: 8,
+    textAlign: 'center',
+    maxWidth: '90%',
+  },
+  mapPreviewCoords: {
+    fontSize: 12,
+    marginTop: 4,
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+  },
+  mapPreviewHint: {
+    fontSize: 13,
+    marginTop: 8,
+    textAlign: 'center',
+    fontStyle: 'italic',
+  },
+  mapThumbnail: {
+    width: '100%',
+    height: 200,
+    borderRadius: 12,
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  mapThumbnailImage: {
+    width: '100%',
+    height: '100%',
+    position: 'relative',
+    overflow: 'hidden',
+  },
+  mapThumbnailOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  mapThumbnailBadge: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    ...(Platform.OS === 'web'
+      ? {
+          boxShadow: '0 2px 8px rgba(0, 0, 0, 0.3)',
+        }
+      : {
+          shadowColor: '#000',
+          shadowOffset: { width: 0, height: 2 },
+          shadowOpacity: 0.3,
+          shadowRadius: 4,
+          elevation: 5,
+        }),
+  },
+  mapThumbnailFallback: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.9)',
+    gap: 8,
+  },
+  mapThumbnailText: {
+    fontSize: 12,
+    fontWeight: '500',
+    textAlign: 'center',
+    paddingHorizontal: 12,
+  },
+  daysBreakdown: {
+    marginTop: 8,
+    gap: 4,
+  },
+  daysBreakdownTitle: {
+    fontSize: 13,
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  daysBreakdownItem: {
+    fontSize: 12,
+    marginLeft: 8,
+  },
+  childSelectionIndicator: {
+    position: 'absolute',
+    top: 4,
+    right: 4,
+    backgroundColor: 'rgba(0,0,0,0.3)',
+    borderRadius: 10,
   },
 });

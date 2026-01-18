@@ -48,18 +48,38 @@ export async function apiRequest<T>(
     }
 
     const url = `${API_BASE_URL}${endpoint}`;
-    const response = await retryWithBackoff(async () => {
-      return fetch(url, {
-        ...options,
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
-          ...options.headers,
-        },
+    
+    console.log(`🌐 API Request: ${options.method || 'GET'} ${url}`);
+    
+    let response: Response;
+    try {
+      response = await retryWithBackoff(async () => {
+        return fetch(url, {
+          ...options,
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`,
+            ...options.headers,
+          },
+        });
       });
-    });
+    } catch (fetchError: any) {
+      console.error('❌ Fetch error:', fetchError);
+      throw new Error(`Network request failed: ${fetchError?.message || 'Unable to connect to server'}`);
+    }
 
-    const data = await response.json();
+    let data: any;
+    try {
+      const text = await response.text();
+      if (!text) {
+        data = {};
+      } else {
+        data = JSON.parse(text);
+      }
+    } catch (parseError) {
+      console.error('❌ Failed to parse response:', parseError);
+      throw new Error('Invalid response from server');
+    }
 
     if (!response.ok) {
       return {
