@@ -220,9 +220,14 @@ CREATE TABLE IF NOT EXISTS sessions (
   hourly_rate DECIMAL(10, 2),
   total_amount DECIMAL(10, 2),
   notes TEXT,
+  search_scope TEXT DEFAULT 'invite' CHECK (search_scope IN ('invite', 'nearby', 'city', 'nationwide')), -- Session request scope
+  max_distance_km NUMERIC(5, 2), -- Maximum distance in km for nearby search scope (only used when search_scope = 'nearby')
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Index for sessions search_scope
+CREATE INDEX IF NOT EXISTS idx_sessions_search_scope ON sessions(search_scope) WHERE search_scope != 'invite';
 
 -- Alerts table (for real-time subscriptions)
 CREATE TABLE IF NOT EXISTS alerts (
@@ -273,14 +278,21 @@ CREATE TABLE IF NOT EXISTS gps_tracking (
 CREATE TABLE IF NOT EXISTS verification_requests (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   sitter_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
-  documents JSONB, -- Array of document URLs
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'under_review', 'approved', 'rejected')),
+  documents JSONB, -- JSONB structure: {idDocument: {...}, backgroundCheck: {...}, qualificationDocument: {...}, certifications: [...], bio: "...", hourlyRate: number}
+  qualifications_text TEXT, -- Text field for qualifications
   admin_notes TEXT,
   reviewed_by UUID REFERENCES users(id) ON DELETE SET NULL,
   reviewed_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Indexes for verification_requests
+CREATE INDEX IF NOT EXISTS idx_verification_requests_qualifications ON verification_requests USING gin(to_tsvector('english', qualifications_text));
+CREATE INDEX IF NOT EXISTS idx_verification_requests_status ON verification_requests(status);
+CREATE INDEX IF NOT EXISTS idx_verification_requests_sitter_id ON verification_requests(sitter_id);
+CREATE INDEX IF NOT EXISTS idx_verification_requests_created_at ON verification_requests(created_at DESC);
 
 -- Reviews table
 CREATE TABLE IF NOT EXISTS reviews (
@@ -476,6 +488,10 @@ CREATE POLICY "Sitters can read own verification requests" ON verification_reque
 CREATE POLICY "Sitters can create verification requests" ON verification_requests
   FOR INSERT WITH CHECK (sitter_id = auth.uid());
 
+-- Sitters can update their own verification requests (for resubmission)
+CREATE POLICY "Sitters can update own verification requests" ON verification_requests
+  FOR UPDATE USING (sitter_id = auth.uid());
+
 CREATE POLICY "Admins can update verification requests" ON verification_requests
   FOR UPDATE USING (
     EXISTS (SELECT 1 FROM users WHERE id = auth.uid() AND role = 'admin')
@@ -521,6 +537,20 @@ SELECT
   TO_CHAR(acknowledged_at, 'YYYY-MM-DD HH24:MI:SS') as acknowledged_at_readable,
   TO_CHAR(resolved_at, 'YYYY-MM-DD HH24:MI:SS') as resolved_at_readable
 FROM alerts;
+
+-- Add column comments for documentation
+COMMENT ON COLUMN verification_requests.documents IS 
+'JSONB structure: {
+  "idDocument": {"url": "...", "verified": boolean, "adminComment": "..."},
+  "backgroundCheck": {"url": "...", "verified": boolean, "adminComment": "..."},
+  "qualificationDocument": {"url": "...", "verified": boolean, "adminComment": "..."},
+  "certifications": [{"name": "...", "url": "...", "issuedDate": "...", "expiryDate": "...", "verified": boolean, "adminComment": "..."}],
+  "bio": "...",
+  "hourlyRate": number
+}';
+
+COMMENT ON COLUMN sessions.search_scope IS 'Session request scope: invite (specific sitter), nearby (radius search), city (city-wide), nationwide (country-wide)';
+COMMENT ON COLUMN sessions.max_distance_km IS 'Maximum distance in km for nearby search scope. Only used when search_scope = ''nearby''. Values: 5, 10, or 25 km.';
 
 CREATE OR REPLACE VIEW chat_messages_readable AS
 SELECT 
