@@ -175,14 +175,14 @@ async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(secur
         if not user_exists:
             try:
                 print(f"🔄 Auto-creating user profile for {user_id} ({email})")
+                # Only pass parameters that exist in the create_user_profile function
+                # Note: address, city, country are not in the function signature - they must be updated separately
                 rpc_data = {
                     "p_id": user_id,
                     "p_email": email,
                     "p_display_name": None,  # Will be set by frontend later
                     "p_phone_number": None,
-                    "p_address": None,
-                    "p_city": None,
-                    "p_country": None,
+                    # p_address, p_city, p_country are NOT in the function signature - removed
                 }
                 supabase.rpc("create_user_profile", rpc_data).execute()
                 print(f"✅ User profile created successfully for {user_id}")

@@ -12,6 +12,21 @@ let Circle: any = null;
 let mapsLoaded = false;
 let mapsLoadFailed = false; // Track if loading failed to prevent retries
 
+// Check if running in Expo Go (where native modules don't work)
+const isExpoGo = (): boolean => {
+  try {
+    // Use expo-constants to detect Expo Go
+    const Constants = require('expo-constants');
+    return (
+      Constants.executionEnvironment === 'storeClient' ||
+      (Constants.executionEnvironment === undefined && Constants.appOwnership === 'expo')
+    );
+  } catch {
+    // If expo-constants is not available, assume we're in Expo Go to be safe
+    return true;
+  }
+};
+
 const loadMapsModule = () => {
   // If loading previously failed, return null immediately without trying again
   if (mapsLoadFailed) {
@@ -21,6 +36,15 @@ const loadMapsModule = () => {
   // If already loaded successfully, return cached components
   if (mapsLoaded && MapViewDefault !== null) {
     return { MapView: MapViewDefault, Marker, Polyline, Circle };
+  }
+
+  // CRITICAL: Skip require entirely if in Expo Go to prevent codegenNativeCommands error
+  if (isExpoGo()) {
+    mapsLoadFailed = true;
+    mapsLoaded = true;
+    console.warn('⚠️ Skipping react-native-maps: Expo Go detected (native modules not supported)');
+    console.warn('💡 Use a development build (expo run:android/ios) to enable native maps');
+    return { MapView: null, Marker: null, Polyline: null, Circle: null };
   }
 
   // Try to load the module

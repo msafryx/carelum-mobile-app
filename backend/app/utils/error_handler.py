@@ -26,13 +26,19 @@ def handle_error(error: Exception, default_message: str = "An error occurred") -
             }
         )
     
+    # Log the actual error for debugging
+    import traceback
+    error_details = traceback.format_exc()
+    print(f"❌ Unhandled error: {type(error).__name__}: {str(error)}")
+    print(f"❌ Traceback:\n{error_details}")
+    
     return HTTPException(
         status_code=500,
         detail={
             "success": False,
             "error": {
                 "code": "INTERNAL_SERVER_ERROR",
-                "message": default_message
+                "message": f"{default_message}: {str(error)}"
             }
         }
     )

@@ -28,6 +28,7 @@ export default function ParentHomeScreen() {
   const [menuVisible, setMenuVisible] = useState(false);
   const [activeSessions, setActiveSessions] = useState<SessionWithDetails[]>([]);
   const [upcomingSessions, setUpcomingSessions] = useState<SessionWithDetails[]>([]);
+  const [requestedSessions, setRequestedSessions] = useState<SessionWithDetails[]>([]);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   
@@ -45,6 +46,8 @@ export default function ParentHomeScreen() {
       const activeResult = await getUserSessions(user.id, 'parent', SESSION_STATUS.ACTIVE);
       // Load upcoming sessions (accepted but not yet active)
       const upcomingResult = await getUserSessions(user.id, 'parent', SESSION_STATUS.ACCEPTED);
+      // Load requested sessions (newly created, waiting for sitter acceptance)
+      const requestedResult = await getUserSessions(user.id, 'parent', SESSION_STATUS.REQUESTED);
 
       const loadSessionDetails = async (sessions: Session[]) => {
         return Promise.all(
@@ -85,10 +88,18 @@ export default function ParentHomeScreen() {
       } else {
         setUpcomingSessions([]);
       }
+
+      if (requestedResult.success && requestedResult.data) {
+        const requestedWithDetails = await loadSessionDetails(requestedResult.data);
+        setRequestedSessions(requestedWithDetails);
+      } else {
+        setRequestedSessions([]);
+      }
     } catch (error: any) {
       console.error('Failed to load sessions:', error);
       setActiveSessions([]);
       setUpcomingSessions([]);
+      setRequestedSessions([]);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -222,6 +233,57 @@ export default function ParentHomeScreen() {
                 <View style={styles.sessionDetails}>
                   <Text style={[styles.sessionTime, { color: colors.textSecondary }]}>
                     Started {format(session.startTime, 'MMM dd, h:mm a')}
+                  </Text>
+                </View>
+              </Card>
+            </TouchableOpacity>
+          ))
+        )}
+
+        <Text style={[styles.sectionTitle, { color: colors.text }]}>Requested Sessions</Text>
+        {loading && !refreshing ? (
+          <Card>
+            <View style={styles.loadingContainer}>
+              <ActivityIndicator size="small" color={colors.primary} />
+            </View>
+          </Card>
+        ) : requestedSessions.length === 0 ? (
+          <Card>
+            <EmptyState
+              icon="hourglass-outline"
+              title="No requested sessions"
+              message="You don't have any pending session requests"
+            />
+          </Card>
+        ) : (
+          requestedSessions.map((session) => (
+            <TouchableOpacity
+              key={session.id}
+              onPress={() => router.push(`/(parent)/session/${session.id}` as any)}
+              activeOpacity={0.7}
+            >
+              <Card style={styles.sessionCard}>
+                <View style={styles.sessionHeader}>
+                  <View style={styles.sessionInfo}>
+                    <Text style={[styles.sessionTitle, { color: colors.text }]}>
+                      {session.childName || 'Child'}
+                    </Text>
+                    <Text style={[styles.sitterName, { color: colors.textSecondary }]}>
+                      {session.searchScope === 'invite' && session.sitterName 
+                        ? `Invited: ${session.sitterName}`
+                        : session.searchScope === 'nearby'
+                        ? `Searching within ${session.maxDistanceKm}km`
+                        : session.searchScope === 'city'
+                        ? 'Searching in city'
+                        : 'Searching nationwide'}
+                    </Text>
+                  </View>
+                  <Ionicons name="hourglass-outline" size={20} color={colors.textSecondary} />
+                </View>
+                <View style={styles.sessionDetails}>
+                  <Text style={[styles.sessionTime, { color: colors.textSecondary }]}>
+                    {format(session.startTime, 'MMM dd, yyyy • h:mm a')}
+                    {session.endTime && ` - ${format(session.endTime, 'h:mm a')}`}
                   </Text>
                 </View>
               </Card>

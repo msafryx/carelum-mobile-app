@@ -386,15 +386,31 @@ export default function SearchScreen() {
       const loadMaps = () => {
         try {
           // Use the lazy loading approach from maps.native.ts
-          const mapsModule = require('@/src/components/gps/maps.native');
+          // Wrap the require in try-catch in case the module itself throws during import
+          let mapsModule: any = null;
+          try {
+            mapsModule = require('@/src/components/gps/maps.native');
+          } catch (importError: any) {
+            // Module import failed - likely Expo Go issue
+            console.warn('⚠️ Failed to import maps.native module:', importError?.message || importError);
+            console.warn('💡 Note: react-native-maps requires a development build and does not work in Expo Go');
+            setMapViewAvailable(false);
+            return;
+          }
+          
+          if (!mapsModule) {
+            console.warn('⚠️ maps.native module is null');
+            setMapViewAvailable(false);
+            return;
+          }
           
           // Wrap getMapView() and getMarker() calls in try-catch to handle codegenNativeCommands errors
           let MapViewComponent: any = null;
           let MarkerComponent: any = null;
           
           try {
-            MapViewComponent = mapsModule.getMapView();
-            MarkerComponent = mapsModule.getMarker();
+            MapViewComponent = mapsModule.getMapView?.();
+            MarkerComponent = mapsModule.getMarker?.();
           } catch (nativeError: any) {
             // This error is expected in Expo Go - react-native-maps requires a development build
             console.warn('⚠️ Native maps not available (requires development build):', nativeError?.message || nativeError);
@@ -1053,7 +1069,16 @@ export default function SearchScreen() {
                 setSessionLocation(null);
                 setLocation('');
                 setNotes('');
-                setDuration('2');
+                // Reset date/time fields
+                const now = new Date();
+                setStartDate(now);
+                setStartTime(now);
+                setEndDate(now);
+                setEndTime(now);
+                setUseTimeSlotMode(false);
+                setDailyTimeSlots({});
+                setCalculatedHours(0);
+                setDaysBreakdown([]);
                 router.back();
               },
             },

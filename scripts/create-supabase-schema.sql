@@ -213,7 +213,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   parent_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   sitter_id UUID REFERENCES users(id) ON DELETE SET NULL,
   child_id UUID NOT NULL REFERENCES children(id) ON DELETE CASCADE,
-  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'active', 'completed', 'cancelled')),
+  status TEXT NOT NULL DEFAULT 'requested' CHECK (status IN ('requested', 'pending', 'accepted', 'active', 'completed', 'cancelled')),
   start_time TIMESTAMPTZ NOT NULL,
   end_time TIMESTAMPTZ,
   location TEXT,
@@ -310,7 +310,10 @@ CREATE INDEX IF NOT EXISTS idx_children_parent_id ON children(parent_id);
 CREATE INDEX IF NOT EXISTS idx_child_instructions_child_id ON child_instructions(child_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_parent_id ON sessions(parent_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_sitter_id ON sessions(sitter_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_child_id ON sessions(child_id); -- Added: Index for child_id lookups
 CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
+CREATE INDEX IF NOT EXISTS idx_sessions_start_time ON sessions(start_time); -- Added: Index for time-based queries
+CREATE INDEX IF NOT EXISTS idx_sessions_created_at ON sessions(created_at DESC); -- Added: Index for sorting by creation time
 CREATE INDEX IF NOT EXISTS idx_alerts_parent_id ON alerts(parent_id);
 CREATE INDEX IF NOT EXISTS idx_alerts_status ON alerts(status);
 CREATE INDEX IF NOT EXISTS idx_alerts_created_at ON alerts(created_at DESC);

@@ -7,9 +7,10 @@ from typing import Optional, List
 from decimal import Decimal
 from datetime import datetime
 
-from app.utils.auth import verify_token, CurrentUser
+from app.utils.auth import verify_token, CurrentUser, security
 from app.utils.error_handler import handle_error, AppError
-from app.utils.database import get_supabase
+from app.utils.database import get_supabase, get_supabase_with_auth
+from fastapi.security import HTTPAuthorizationCredentials
 
 router = APIRouter()
 
@@ -90,13 +91,16 @@ def verify_session_access(session_data: dict, user: CurrentUser) -> bool:
 @router.get("", response_model=List[SessionResponse])
 async def get_user_sessions(
     status: Optional[str] = Query(None, description="Filter by status"),
-    current_user: CurrentUser = Depends(verify_token)
+    current_user: CurrentUser = Depends(verify_token),
+    credentials: HTTPAuthorizationCredentials = Depends(security)
 ):
     """
     Get current user's sessions (parent or sitter)
     """
     try:
-        supabase = get_supabase()
+        # Use authenticated Supabase client for RLS to work properly
+        auth_token = credentials.credentials
+        supabase = get_supabase_with_auth(auth_token)
         
         if not supabase:
             raise AppError(
@@ -121,10 +125,19 @@ async def get_user_sessions(
         # Order by start_time descending
         query = query.order("start_time", desc=True).limit(100)
         
+        print(f"🔍 Querying sessions for user {current_user.id} (role: {current_user.role}, status filter: {status})")
         response = query.execute()
+        
+        print(f"📥 Raw response data: {response.data if hasattr(response, 'data') else 'NO DATA'}")
+        print(f"📥 Fetched {len(response.data or [])} sessions for user {current_user.id} (role: {current_user.role}, status filter: {status})")
+        
+        # Check for errors in response
+        if hasattr(response, 'error') and response.error:
+            print(f"❌ Supabase query error: {response.error}")
         
         sessions = []
         for session_data in (response.data or []):
+            print(f"📋 Session: {session_data.get('id')} - status: {session_data.get('status')}")
             sessions.append(db_to_session_response(session_data))
         
         return sessions
@@ -183,19 +196,22 @@ async def get_session_by_id(
 @router.post("", response_model=SessionResponse)
 async def create_session(
     session_data: CreateSessionRequest,
-    current_user: CurrentUser = Depends(verify_token)
+    current_user: CurrentUser = Depends(verify_token),
+    credentials: HTTPAuthorizationCredentials = Depends(security)
 ):
     """
     Create a new session request
     """
     try:
-        supabase = get_supabase()
+        # CRITICAL: Use Supabase client with user's auth token for RLS to work!
+        auth_token = credentials.credentials
+        supabase = get_supabase_with_auth(auth_token)
         
         if not supabase:
             raise AppError(
-                code="DB_NOT_AVAILABLE",
-                message="Database connection not available",
-                status_code=503
+                code="AUTH_ERROR",
+                message="Failed to authenticate with database",
+                status_code=500
             )
         
         # Only parents can create sessions
@@ -248,34 +264,150 @@ async def create_session(
             )
         
         # Insert session
+        # Convert Decimal to float for JSON serialization (Supabase will handle the conversion to DECIMAL in DB)
         insert_data = {
             "parent_id": session_data.parentId,
             "sitter_id": session_data.sitterId if search_scope == 'invite' else None,
             "child_id": session_data.childId,
             "status": "requested",
             "start_time": session_data.startTime,
+            "end_time": session_data.endTime if session_data.endTime else None,  # Include end_time
             "location": session_data.location,
-            "hourly_rate": Decimal(str(session_data.hourlyRate)) if session_data.hourlyRate else None,
+            "hourly_rate": float(session_data.hourlyRate) if session_data.hourlyRate else None,
             "notes": session_data.notes,
             "search_scope": search_scope,
-            "max_distance_km": Decimal(str(session_data.maxDistanceKm)) if session_data.maxDistanceKm else None,
+            "max_distance_km": float(session_data.maxDistanceKm) if session_data.maxDistanceKm else None,
         }
         
-        response = supabase.table("sessions").insert(insert_data).select().execute()
+        print(f"🔄 Attempting to insert session with data: {insert_data}")
+        print(f"📤 Insert data keys: {list(insert_data.keys())}")
+        print(f"📤 Insert data values: {insert_data}")
+        print(f"🔑 Using authenticated Supabase client: {hasattr(supabase, 'postgrest')}")
+        if hasattr(supabase, 'postgrest') and hasattr(supabase.postgrest, 'headers'):
+            auth_header = supabase.postgrest.headers.get('Authorization', 'NOT SET')
+            print(f"🔑 Auth header present: {auth_header[:30] if auth_header != 'NOT SET' else 'NOT SET'}...")
         
-        if not response.data:
-            raise AppError(
-                code="CREATE_FAILED",
-                message="Failed to create session",
-                status_code=500
-            )
-        
-        return db_to_session_response(response.data[0])
+        try:
+            print(f"📤 Executing insert query...")
+            # Supabase Python client: The insert() method returns a query builder
+            # In newer versions, we need to use execute() directly, which returns the inserted data
+            # The .select() method might not be available on SyncQueryRequestBuilder
+            response = supabase.table("sessions").insert(insert_data).execute()
+            print(f"📥 Insert response type: {type(response)}")
+            print(f"📥 Response has data attr: {hasattr(response, 'data')}")
+            print(f"📥 Response has error attr: {hasattr(response, 'error')}")
+            print(f"📥 Response data: {response.data if hasattr(response, 'data') else 'NO DATA ATTR'}")
+            print(f"📥 Response data type: {type(response.data) if hasattr(response, 'data') else 'N/A'}")
+            print(f"📥 Response data length: {len(response.data) if hasattr(response, 'data') and response.data else 0}")
+            
+            # Check for errors in response
+            error = None
+            if hasattr(response, 'error'):
+                error = response.error
+            elif hasattr(response, 'errors') and response.errors:
+                error = response.errors[0] if isinstance(response.errors, list) else response.errors
+            elif not hasattr(response, 'data') or not response.data:
+                # Check if response itself indicates an error
+                error = "No data returned from insert"
+            
+            if error:
+                error_str = str(error)
+                print(f"❌ Supabase insert error: {error_str}")
+                print(f"❌ Error type: {type(error)}")
+                print(f"❌ Error repr: {repr(error)}")
+                
+                if "status" in error_str.lower() or "check" in error_str.lower() or "constraint" in error_str.lower() or "sessions_status_check" in error_str:
+                    raise AppError(
+                        code="INVALID_STATUS",
+                        message=f"Invalid status value 'requested'. The database constraint may not allow this status yet. Please run UPDATE_SESSIONS_STATUS.sql in Supabase. Error: {error_str}",
+                        status_code=400
+                    )
+                elif "permission" in error_str.lower() or "policy" in error_str.lower() or "RLS" in error_str or "PGRST" in error_str or "406" in error_str:
+                    raise AppError(
+                        code="PERMISSION_DENIED",
+                        message=f"Database insert blocked by RLS policies. Make sure you're using an authenticated Supabase client. Error: {error_str}",
+                        status_code=403
+                    )
+                else:
+                    raise AppError(
+                        code="CREATE_FAILED",
+                        message=f"Database error: {error_str}",
+                        status_code=500
+                    )
+            
+            # Check if response has data attribute
+            if hasattr(response, 'data'):
+                response_data = response.data
+            elif isinstance(response, list) and len(response) > 0:
+                # Response might be a list directly
+                response_data = response
+            else:
+                response_data = None
+            
+            if not response_data or len(response_data) == 0:
+                print(f"❌ Empty response from insert - no data returned")
+                print(f"❌ This might indicate:")
+                print(f"   1. RLS policy blocking the insert")
+                print(f"   2. Constraint violation (e.g., status 'requested' not allowed)")
+                print(f"   3. Foreign key constraint violation")
+                print(f"   4. Database connection issue")
+                raise AppError(
+                    code="CREATE_FAILED",
+                    message="Failed to create session - no data returned from database. Check RLS policies and database constraints.",
+                    status_code=500
+                )
+            
+            # Extract the first item from response_data (could be list or dict)
+            session_record = response_data[0] if isinstance(response_data, list) else response_data
+            print(f"✅ Session created successfully: {session_record.get('id') if isinstance(session_record, dict) else 'NO ID'}")
+            return db_to_session_response(session_record)
+            
+        except AppError:
+            raise
+        except Exception as insert_error:
+            import traceback
+            error_str = str(insert_error)
+            error_type = type(insert_error).__name__
+            error_traceback = traceback.format_exc()
+            
+            print(f"❌ Exception during session insert: {error_type}: {error_str}")
+            print(f"❌ Exception details: {repr(insert_error)}")
+            print(f"❌ Full traceback:\n{error_traceback}")
+            
+            # Check if it's a Supabase API error
+            if hasattr(insert_error, 'message'):
+                error_str = insert_error.message
+            elif hasattr(insert_error, 'args') and insert_error.args:
+                error_str = str(insert_error.args[0])
+            
+            # Check for specific error types
+            if "status" in error_str.lower() or "check" in error_str.lower() or "constraint" in error_str.lower() or "sessions_status_check" in error_str:
+                raise AppError(
+                    code="INVALID_STATUS",
+                    message=f"Invalid status value 'requested'. The database constraint may not allow this status yet. Please run UPDATE_SESSIONS_STATUS.sql in Supabase. Error: {error_str}",
+                    status_code=400
+                )
+            elif "permission" in error_str.lower() or "policy" in error_str.lower() or "RLS" in error_str or "PGRST" in error_str or "406" in error_str:
+                raise AppError(
+                    code="PERMISSION_DENIED",
+                    message=f"Database insert blocked by RLS policies. Make sure you're using an authenticated Supabase client. Error: {error_str}",
+                    status_code=403
+                )
+            else:
+                raise AppError(
+                    code="CREATE_FAILED",
+                    message=f"Failed to create session: {error_str}",
+                    status_code=500
+                )
         
     except AppError:
         raise
     except Exception as e:
-        raise handle_error(e, "Failed to create session")
+        error_str = str(e)
+        error_type = type(e).__name__
+        print(f"❌ Unexpected error in create_session: {error_type}: {error_str}")
+        print(f"❌ Full exception: {repr(e)}")
+        raise handle_error(e, f"Failed to create session: {error_str}")
 
 
 @router.put("/{session_id}", response_model=SessionResponse)
