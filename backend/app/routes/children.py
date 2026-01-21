@@ -6,9 +6,10 @@ from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
 
-from app.utils.auth import verify_token, CurrentUser
+from app.utils.auth import verify_token, CurrentUser, security
 from app.utils.error_handler import handle_error, AppError
-from app.utils.database import get_supabase
+from app.utils.database import get_supabase, get_supabase_with_auth
+from fastapi.security import HTTPAuthorizationCredentials
 
 router = APIRouter()
 
@@ -121,19 +122,22 @@ def verify_child_access(child_data: dict, user: CurrentUser) -> bool:
 
 @router.get("", response_model=List[ChildResponse])
 async def get_parent_children(
-    current_user: CurrentUser = Depends(verify_token)
+    current_user: CurrentUser = Depends(verify_token),
+    credentials: HTTPAuthorizationCredentials = Depends(security)
 ):
     """
     Get current user's children (parent only)
     """
     try:
-        supabase = get_supabase()
+        # CRITICAL: Use Supabase client with user's auth token for RLS to work!
+        auth_token = credentials.credentials
+        supabase = get_supabase_with_auth(auth_token)
         
         if not supabase:
             raise AppError(
-                code="DB_NOT_AVAILABLE",
-                message="Database connection not available",
-                status_code=503
+                code="AUTH_ERROR",
+                message="Failed to authenticate with database",
+                status_code=500
             )
         
         # Only parents can get their children

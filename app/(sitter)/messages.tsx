@@ -54,12 +54,12 @@ export default function SitterMessagesScreen() {
         />
         {selectedSessionId === null && !hasConversations && (
           <Card style={styles.emptyCard}>
-            <EmptyState
-              icon="chatbubble-ellipses-outline"
-              title="No messages"
+          <EmptyState
+            icon="chatbubble-ellipses-outline"
+            title="No messages"
               message="Your conversations with parents will appear here. Start a session to begin messaging."
-            />
-          </Card>
+          />
+        </Card>
         )}
       </View>
 

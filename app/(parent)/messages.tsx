@@ -56,12 +56,12 @@ export default function MessagesScreen() {
         />
         {selectedSessionId === null && !hasConversations && (
           <Card style={styles.emptyCard}>
-            <EmptyState
-              icon="chatbubble-ellipses-outline"
-              title="No Messages"
+          <EmptyState
+            icon="chatbubble-ellipses-outline"
+            title="No Messages"
               message="Your conversations will appear here. Start a session to begin messaging."
-            />
-          </Card>
+          />
+        </Card>
         )}
       </View>
 

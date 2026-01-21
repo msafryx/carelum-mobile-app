@@ -827,11 +827,21 @@ export default function InstructionsScreen() {
             {/* Age (auto-calculated from date of birth, but can be manually edited) - Below Date of Birth */}
             <Input
               label="Age *"
-              value={childForm.age}
-              onChangeText={(text) => setChildForm({ ...childForm, age: text })}
+              value={childForm.dateOfBirth 
+                ? formatAgeWithMonthsAndDays(childForm.dateOfBirth)
+                : childForm.age 
+                  ? `${childForm.age} year${childForm.age !== '1' ? 's' : ''}`
+                  : ''
+              }
+              onChangeText={(text) => {
+                // Only allow manual editing if no dateOfBirth is set
+                if (!childForm.dateOfBirth) {
+                  setChildForm({ ...childForm, age: text });
+                }
+              }}
               placeholder="Age * (auto-calculated from date of birth)"
-              keyboardType="number-pad"
-              editable={true} // Allow manual override if needed
+              keyboardType={childForm.dateOfBirth ? 'default' : 'number-pad'}
+              editable={!childForm.dateOfBirth} // Only editable if no date of birth (manual age entry)
             />
             
             <View style={styles.genderContainer}>

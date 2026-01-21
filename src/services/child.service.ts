@@ -90,37 +90,45 @@ export async function getParentChildren(
             updatedAt: new Date(child.updated_at),
           }));
 
-          // Sync to AsyncStorage - IMPORTANT: Remove ALL children for this parent first, then save fresh ones
-          // This ensures deleted children are removed
+          // Sync to AsyncStorage - MERGE instead of replace to preserve existing fields
           try {
             const { save, getAll, remove, STORAGE_KEYS } = await import('./local-storage.service');
             
-            // Get all existing children
+            // Get existing children for this parent
             const existingResult = await getAll(STORAGE_KEYS.CHILDREN);
+            const existingMap = new Map<string, any>();
             if (existingResult.success && existingResult.data) {
-              // Remove ALL children for this parent (including deleted ones)
-              const childrenToRemove = (existingResult.data as any[])
-                .filter((c: any) => c.parentId === parentId)
-                .map((c: any) => c.id);
-              
-              for (const childId of childrenToRemove) {
-                await remove(STORAGE_KEYS.CHILDREN, childId);
-              }
-              if (childrenToRemove.length > 0) {
-                console.log(`🗑️ Removed ${childrenToRemove.length} child(ren) from AsyncStorage (clearing stale data)`);
-              }
-            }
-            
-            // Save fresh children from Supabase
-            for (const child of children) {
-              await save(STORAGE_KEYS.CHILDREN, {
-                ...child,
-                createdAt: child.createdAt.getTime(),
-                updatedAt: child.updatedAt.getTime(),
-                dateOfBirth: child.dateOfBirth ? child.dateOfBirth.getTime() : null,
+              existingResult.data.forEach((c: any) => {
+                if (c.parentId === parentId) {
+                  existingMap.set(c.id, c);
+                }
               });
             }
-            console.log(`✅ Synced ${children.length} children from Supabase to AsyncStorage (replaced all)`);
+
+            // Get IDs of synced children
+            const syncedIds = new Set(children.map(c => c.id));
+
+            // Merge and save children
+            for (const child of children) {
+              const existing = existingMap.get(child.id);
+              const merged = {
+                ...existing, // Preserve existing fields first
+                ...child, // Overwrite with synced fields
+                createdAt: child.createdAt.getTime(),
+                updatedAt: child.updatedAt.getTime(),
+                dateOfBirth: child.dateOfBirth ? child.dateOfBirth.getTime() : (existing?.dateOfBirth || null),
+              };
+              await save(STORAGE_KEYS.CHILDREN, merged);
+              existingMap.delete(child.id); // Mark as synced
+            }
+
+            // Remove children that are no longer in database
+            for (const [id, _] of existingMap.entries()) {
+              await remove(STORAGE_KEYS.CHILDREN, id);
+              console.log(`🗑️ Removed deleted child from AsyncStorage: ${id}`);
+            }
+
+            console.log(`✅ Synced ${children.length} children from Supabase to AsyncStorage (merged, preserved existing fields)`);
           } catch (syncError: any) {
             console.warn('⚠️ Failed to sync children to AsyncStorage:', syncError.message);
           }

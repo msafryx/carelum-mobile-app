@@ -94,7 +94,7 @@ export default function ParentHomeScreen() {
       setRefreshing(false);
     }
   }, [user]);
-
+  
   // Sync current user to AsyncStorage if not already there
   useEffect(() => {
     if (user && userProfile) {
@@ -237,13 +237,13 @@ export default function ParentHomeScreen() {
             </View>
           </Card>
         ) : upcomingSessions.length === 0 ? (
-          <Card>
-            <EmptyState
-              icon="calendar-outline"
-              title="No upcoming sessions"
-              message="You don't have any upcoming sessions scheduled"
-            />
-          </Card>
+        <Card>
+          <EmptyState
+            icon="calendar-outline"
+            title="No upcoming sessions"
+            message="You don't have any upcoming sessions scheduled"
+          />
+        </Card>
         ) : (
           upcomingSessions.map((session) => (
             <TouchableOpacity
@@ -270,7 +270,7 @@ export default function ParentHomeScreen() {
                     {format(session.startTime, 'MMM dd, yyyy • h:mm a')}
                   </Text>
                 </View>
-              </Card>
+        </Card>
             </TouchableOpacity>
           ))
         )}

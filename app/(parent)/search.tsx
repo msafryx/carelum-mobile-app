@@ -1689,58 +1689,71 @@ export default function SearchScreen() {
 
                 {/* Map View in Filter */}
                 <View style={[styles.filterMapContainer, { backgroundColor: colors.background, borderColor: colors.border }]}>
-                    {mapViewAvailable && MapViewComponent ? (
+                    {mapViewAvailable && MapViewComponent && (typeof MapViewComponent === 'function' || typeof MapViewComponent === 'object' && MapViewComponent !== null && 'render' in MapViewComponent) ? (
                       // Native MapView (works in development builds)
-                      React.createElement(
-                        MapViewComponent,
-                        {
-                          ref: filterMapRef,
-                          style: styles.filterMap,
-                          initialRegion: filterMapRegion || {
-                            latitude: 6.9271, // Default to Sri Lanka (Colombo)
-                            longitude: 79.8612,
-                            latitudeDelta: 0.1,
-                            longitudeDelta: 0.1,
-                          },
-                          region: filterMapRegion || undefined,
-                          onRegionChangeComplete: setFilterMapRegion,
-                          onPress: async (event: any) => {
-                            const { latitude, longitude } = event.nativeEvent.coordinate;
-                            try {
-                              const reverseGeocodePromise = Location.reverseGeocodeAsync({ latitude, longitude });
-                              const timeoutPromise = new Promise((_, reject) =>
-                                setTimeout(() => reject(new Error('Reverse geocoding timeout')), 5000)
-                              );
-                              const reverseGeocoded = await Promise.race([reverseGeocodePromise, timeoutPromise]) as any[];
-                              const address = reverseGeocoded && reverseGeocoded.length > 0
-                                ? `${reverseGeocoded[0].street || ''} ${reverseGeocoded[0].streetNumber || ''}, ${reverseGeocoded[0].city || ''}, ${reverseGeocoded[0].region || ''}`.trim()
-                                : `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
-                              const city = reverseGeocoded && reverseGeocoded.length > 0 ? (reverseGeocoded[0].city || undefined) : undefined;
-                              setLocation(address);
-                              setFilterLocation({ address, latitude, longitude, city });
-                            } catch (error) {
-                              const address = `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
-                              setLocation(address);
-                              setFilterLocation({ address, latitude, longitude });
-                            }
-                          },
-                          showsUserLocation: false,
-                          showsMyLocationButton: false,
-                          showsCompass: true,
-                          showsScale: true,
-                        },
-                        filterLocation?.latitude && filterLocation?.longitude && MarkerComponent
-                          ? React.createElement(MarkerComponent, {
-                              coordinate: {
-                                latitude: filterLocation.latitude,
-                                longitude: filterLocation.longitude,
-                              },
-                              title: "Filter Location",
-                              description: filterLocation.address,
-                              pinColor: colors.primary,
-                            })
-                          : null
-                      )
+                      // Use JSX syntax instead of React.createElement for better type checking
+                      (() => {
+                        // Validate MapViewComponent is actually a component
+                        if (!MapViewComponent || (typeof MapViewComponent !== 'function' && typeof MapViewComponent !== 'object')) {
+                          return null;
+                        }
+                        const MapView = MapViewComponent as any;
+                        return (
+                          <MapView
+                            ref={filterMapRef}
+                            style={styles.filterMap}
+                            initialRegion={filterMapRegion || {
+                              latitude: 6.9271, // Default to Sri Lanka (Colombo)
+                              longitude: 79.8612,
+                              latitudeDelta: 0.1,
+                              longitudeDelta: 0.1,
+                            }}
+                            region={filterMapRegion || undefined}
+                            onRegionChangeComplete={setFilterMapRegion}
+                            onPress={async (event: any) => {
+                              const { latitude, longitude } = event.nativeEvent.coordinate;
+                              try {
+                                const reverseGeocodePromise = Location.reverseGeocodeAsync({ latitude, longitude });
+                                const timeoutPromise = new Promise((_, reject) =>
+                                  setTimeout(() => reject(new Error('Reverse geocoding timeout')), 5000)
+                                );
+                                const reverseGeocoded = await Promise.race([reverseGeocodePromise, timeoutPromise]) as any[];
+                                const address = reverseGeocoded && reverseGeocoded.length > 0
+                                  ? `${reverseGeocoded[0].street || ''} ${reverseGeocoded[0].streetNumber || ''}, ${reverseGeocoded[0].city || ''}, ${reverseGeocoded[0].region || ''}`.trim()
+                                  : `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
+                                const city = reverseGeocoded && reverseGeocoded.length > 0 ? (reverseGeocoded[0].city || undefined) : undefined;
+                                setLocation(address);
+                                setFilterLocation({ address, latitude, longitude, city });
+                              } catch (error) {
+                                const address = `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
+                                setLocation(address);
+                                setFilterLocation({ address, latitude, longitude });
+                              }
+                            }}
+                            showsUserLocation={false}
+                            showsMyLocationButton={false}
+                            showsCompass={true}
+                            showsScale={true}
+                          >
+                            {filterLocation?.latitude && filterLocation?.longitude && MarkerComponent && typeof MarkerComponent !== 'object' ? (
+                              (() => {
+                                const Marker = MarkerComponent as any;
+                                return (
+                                  <Marker
+                                    coordinate={{
+                                      latitude: filterLocation.latitude,
+                                      longitude: filterLocation.longitude,
+                                    }}
+                                    title="Filter Location"
+                                    description={filterLocation.address}
+                                    pinColor={colors.primary}
+                                  />
+                                );
+                              })()
+                            ) : null}
+                          </MapView>
+                        );
+                      })()
                     ) : (
                       // WebView-based map (works in Expo Go)
                       <WebMapView

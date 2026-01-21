@@ -8,12 +8,20 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 -- USER REGISTRATION SYNC: auth.users <-> public.users
 -- ============================================
 
+-- Drop existing function(s) if they exist (to avoid "function name is not unique" error)
+DROP FUNCTION IF EXISTS create_user_profile(
+  UUID, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, BOOLEAN, TEXT, DECIMAL, TEXT
+);
+DROP FUNCTION IF EXISTS create_user_profile(
+  UUID, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, BOOLEAN, TEXT, NUMERIC, TEXT
+);
+
 -- Function to create/update user profile (called during sign-up)
 CREATE OR REPLACE FUNCTION create_user_profile(
   p_id UUID,
   p_email TEXT,
   p_display_name TEXT DEFAULT NULL,
-  p_role TEXT DEFAULT 'parent',
+  p_role TEXT DEFAULT NULL,  -- Changed: NULL instead of 'parent' to preserve existing role on updates
   p_preferred_language TEXT DEFAULT 'en',
   p_user_number TEXT DEFAULT NULL,
   p_phone_number TEXT DEFAULT NULL,
@@ -38,14 +46,17 @@ BEGIN
     hourly_rate, bio, created_at, updated_at
   )
   VALUES (
-    p_id, p_email, p_display_name, p_role, p_preferred_language, p_user_number,
+    p_id, p_email, p_display_name, 
+    COALESCE(p_role, 'parent'),  -- Use 'parent' as default only for NEW users (INSERT)
+    p_preferred_language, p_user_number,
     p_phone_number, p_photo_url, p_theme, p_is_verified, p_verification_status,
     p_hourly_rate, p_bio, NOW(), NOW()
   )
   ON CONFLICT (id) DO UPDATE SET
     email = EXCLUDED.email,
     display_name = COALESCE(EXCLUDED.display_name, users.display_name),
-    role = COALESCE(EXCLUDED.role, users.role),
+    -- CRITICAL: Always preserve existing role on updates - never change role via this function
+    role = users.role,  -- Preserve existing role, only set during INSERT for new users
     preferred_language = COALESCE(EXCLUDED.preferred_language, users.preferred_language),
     user_number = COALESCE(EXCLUDED.user_number, users.user_number),
     phone_number = COALESCE(EXCLUDED.phone_number, users.phone_number),
@@ -60,8 +71,9 @@ END;
 $$;
 
 -- Grant execute permission to authenticated and anon users
-GRANT EXECUTE ON FUNCTION create_user_profile TO authenticated;
-GRANT EXECUTE ON FUNCTION create_user_profile TO anon;
+-- Specify full signature to avoid ambiguity
+GRANT EXECUTE ON FUNCTION create_user_profile(UUID, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, BOOLEAN, TEXT, DECIMAL, TEXT) TO authenticated;
+GRANT EXECUTE ON FUNCTION create_user_profile(UUID, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, BOOLEAN, TEXT, DECIMAL, TEXT) TO anon;
 
 -- Trigger function to auto-sync auth.users to public.users on INSERT
 CREATE OR REPLACE FUNCTION handle_auth_user_created()
