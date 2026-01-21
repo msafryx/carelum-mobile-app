@@ -53,28 +53,38 @@ export async function syncAllDataFromSupabase(userId: string): Promise<ServiceRe
         .single();
 
       if (userData) {
-        await save(STORAGE_KEYS.USERS, {
+        // MERGE with existing data to preserve fields not in sync payload
+        const existing = await getAll(STORAGE_KEYS.USERS);
+        const existingUser = existing.success && existing.data 
+          ? existing.data.find((u: any) => u.id === userId)
+          : null;
+        
+        // Merge: preserve existing fields, update with synced fields
+        const mergedUser = {
+          ...existingUser, // Preserve existing fields first
           id: userData.id,
           email: userData.email,
-          displayName: userData.display_name,
-          role: userData.role === 'sitter' ? 'babysitter' : userData.role,
-          preferredLanguage: userData.preferred_language || 'en',
-          userNumber: userData.user_number,
-          phoneNumber: userData.phone_number,
-          profileImageUrl: userData.photo_url,
-          address: userData.address,
-          city: userData.city,
-          country: userData.country,
-          theme: userData.theme || 'auto',
-          isVerified: userData.is_verified || false,
-          verificationStatus: userData.verification_status,
-          hourlyRate: userData.hourly_rate,
-          bio: userData.bio,
-          createdAt: new Date(userData.created_at).getTime(),
-          updatedAt: new Date(userData.updated_at).getTime(),
-        });
+          displayName: userData.display_name || existingUser?.displayName,
+          role: userData.role === 'sitter' ? 'babysitter' : (userData.role || existingUser?.role || 'parent'),
+          preferredLanguage: userData.preferred_language || existingUser?.preferredLanguage || 'en',
+          userNumber: userData.user_number || existingUser?.userNumber,
+          phoneNumber: userData.phone_number ?? existingUser?.phoneNumber,
+          profileImageUrl: userData.photo_url ?? existingUser?.profileImageUrl,
+          address: userData.address ?? existingUser?.address,
+          city: userData.city ?? existingUser?.city,
+          country: userData.country ?? existingUser?.country,
+          theme: userData.theme || existingUser?.theme || 'auto',
+          isVerified: userData.is_verified ?? existingUser?.isVerified ?? false,
+          verificationStatus: userData.verification_status ?? existingUser?.verificationStatus,
+          hourlyRate: userData.hourly_rate ?? existingUser?.hourlyRate,
+          bio: userData.bio ?? existingUser?.bio,
+          createdAt: userData.created_at ? new Date(userData.created_at).getTime() : (existingUser?.createdAt || Date.now()),
+          updatedAt: userData.updated_at ? new Date(userData.updated_at).getTime() : Date.now(),
+        };
+        
+        await save(STORAGE_KEYS.USERS, mergedUser);
         result.users = 1;
-        console.log('✅ User profile synced');
+        console.log('✅ User profile synced (merged with existing data)');
       }
     } catch (error: any) {
       console.warn('⚠️ Failed to sync user:', error.message);
@@ -89,35 +99,51 @@ export async function syncAllDataFromSupabase(userId: string): Promise<ServiceRe
         .order('created_at', { ascending: false });
 
       if (childrenData) {
-        // Clear existing children for this parent
+        // MERGE with existing children to preserve fields not in sync payload
         const existing = await getAll(STORAGE_KEYS.CHILDREN);
+        const existingMap = new Map<string, any>();
         if (existing.success && existing.data) {
-          const otherChildren = existing.data.filter((c: any) => c.parentId !== userId);
-          // Save other children back
-          for (const child of otherChildren) {
-            await save(STORAGE_KEYS.CHILDREN, child);
-          }
-        }
-
-        // Save all children for this parent
-        for (const child of childrenData) {
-          await save(STORAGE_KEYS.CHILDREN, {
-            id: child.id,
-            parentId: child.parent_id,
-            childNumber: child.child_number,
-            parentNumber: child.parent_number,
-            sitterNumber: child.sitter_number,
-            name: child.name,
-            age: child.age,
-            dateOfBirth: child.date_of_birth ? new Date(child.date_of_birth).getTime() : null,
-            gender: child.gender,
-            photoUrl: child.photo_url,
-            createdAt: new Date(child.created_at).getTime(),
-            updatedAt: new Date(child.updated_at).getTime(),
+          existing.data.forEach((c: any) => {
+            if (c.parentId === userId) {
+              existingMap.set(c.id, c);
+            }
           });
         }
+
+        // Get IDs of children from database
+        const syncedIds = new Set(childrenData.map(c => c.id));
+
+        // Merge and save children
+        for (const child of childrenData) {
+          const existingChild = existingMap.get(child.id);
+          const mergedChild = {
+            ...existingChild, // Preserve existing fields first
+            id: child.id,
+            parentId: child.parent_id,
+            childNumber: child.child_number ?? existingChild?.childNumber,
+            parentNumber: child.parent_number ?? existingChild?.parentNumber,
+            sitterNumber: child.sitter_number ?? existingChild?.sitterNumber,
+            name: child.name || existingChild?.name,
+            age: child.age ?? existingChild?.age,
+            dateOfBirth: child.date_of_birth ? new Date(child.date_of_birth).getTime() : (existingChild?.dateOfBirth || null),
+            gender: child.gender ?? existingChild?.gender,
+            photoUrl: child.photo_url ?? existingChild?.photoUrl,
+            createdAt: child.created_at ? new Date(child.created_at).getTime() : (existingChild?.createdAt || Date.now()),
+            updatedAt: child.updated_at ? new Date(child.updated_at).getTime() : Date.now(),
+          };
+          await save(STORAGE_KEYS.CHILDREN, mergedChild);
+          existingMap.delete(child.id); // Mark as synced
+        }
+
+        // Remove children that are no longer in database
+        for (const [id, _] of existingMap.entries()) {
+          const { remove } = await import('./local-storage.service');
+          await remove(STORAGE_KEYS.CHILDREN, id);
+          console.log(`🗑️ Removed deleted child from AsyncStorage: ${id}`);
+        }
+
         result.children = childrenData.length;
-        console.log(`✅ ${childrenData.length} children synced`);
+        console.log(`✅ ${childrenData.length} children synced (merged, preserved existing fields)`);
       }
     } catch (error: any) {
       console.warn('⚠️ Failed to sync children:', error.message);

@@ -8,12 +8,20 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 -- USER REGISTRATION SYNC: auth.users <-> public.users
 -- ============================================
 
+-- Drop existing function(s) if they exist (to avoid "function name is not unique" error)
+DROP FUNCTION IF EXISTS create_user_profile(
+  UUID, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, BOOLEAN, TEXT, DECIMAL, TEXT
+);
+DROP FUNCTION IF EXISTS create_user_profile(
+  UUID, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, BOOLEAN, TEXT, NUMERIC, TEXT
+);
+
 -- Function to create/update user profile (called during sign-up)
 CREATE OR REPLACE FUNCTION create_user_profile(
   p_id UUID,
   p_email TEXT,
   p_display_name TEXT DEFAULT NULL,
-  p_role TEXT DEFAULT 'parent',
+  p_role TEXT DEFAULT NULL,  -- Changed: NULL instead of 'parent' to preserve existing role on updates
   p_preferred_language TEXT DEFAULT 'en',
   p_user_number TEXT DEFAULT NULL,
   p_phone_number TEXT DEFAULT NULL,
@@ -38,14 +46,17 @@ BEGIN
     hourly_rate, bio, created_at, updated_at
   )
   VALUES (
-    p_id, p_email, p_display_name, p_role, p_preferred_language, p_user_number,
+    p_id, p_email, p_display_name, 
+    COALESCE(p_role, 'parent'),  -- Use 'parent' as default only for NEW users (INSERT)
+    p_preferred_language, p_user_number,
     p_phone_number, p_photo_url, p_theme, p_is_verified, p_verification_status,
     p_hourly_rate, p_bio, NOW(), NOW()
   )
   ON CONFLICT (id) DO UPDATE SET
     email = EXCLUDED.email,
     display_name = COALESCE(EXCLUDED.display_name, users.display_name),
-    role = COALESCE(EXCLUDED.role, users.role),
+    -- CRITICAL: Always preserve existing role on updates - never change role via this function
+    role = users.role,  -- Preserve existing role, only set during INSERT for new users
     preferred_language = COALESCE(EXCLUDED.preferred_language, users.preferred_language),
     user_number = COALESCE(EXCLUDED.user_number, users.user_number),
     phone_number = COALESCE(EXCLUDED.phone_number, users.phone_number),
@@ -60,8 +71,9 @@ END;
 $$;
 
 -- Grant execute permission to authenticated and anon users
-GRANT EXECUTE ON FUNCTION create_user_profile TO authenticated;
-GRANT EXECUTE ON FUNCTION create_user_profile TO anon;
+-- Specify full signature to avoid ambiguity
+GRANT EXECUTE ON FUNCTION create_user_profile(UUID, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, BOOLEAN, TEXT, DECIMAL, TEXT) TO authenticated;
+GRANT EXECUTE ON FUNCTION create_user_profile(UUID, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, BOOLEAN, TEXT, DECIMAL, TEXT) TO anon;
 
 -- Trigger function to auto-sync auth.users to public.users on INSERT
 CREATE OR REPLACE FUNCTION handle_auth_user_created()
@@ -201,16 +213,21 @@ CREATE TABLE IF NOT EXISTS sessions (
   parent_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   sitter_id UUID REFERENCES users(id) ON DELETE SET NULL,
   child_id UUID NOT NULL REFERENCES children(id) ON DELETE CASCADE,
-  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'active', 'completed', 'cancelled')),
+  status TEXT NOT NULL DEFAULT 'requested' CHECK (status IN ('requested', 'pending', 'accepted', 'active', 'completed', 'cancelled')),
   start_time TIMESTAMPTZ NOT NULL,
   end_time TIMESTAMPTZ,
   location TEXT,
   hourly_rate DECIMAL(10, 2),
   total_amount DECIMAL(10, 2),
   notes TEXT,
+  search_scope TEXT DEFAULT 'invite' CHECK (search_scope IN ('invite', 'nearby', 'city', 'nationwide')), -- Session request scope
+  max_distance_km NUMERIC(5, 2), -- Maximum distance in km for nearby search scope (only used when search_scope = 'nearby')
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Index for sessions search_scope
+CREATE INDEX IF NOT EXISTS idx_sessions_search_scope ON sessions(search_scope) WHERE search_scope != 'invite';
 
 -- Alerts table (for real-time subscriptions)
 CREATE TABLE IF NOT EXISTS alerts (
@@ -261,14 +278,21 @@ CREATE TABLE IF NOT EXISTS gps_tracking (
 CREATE TABLE IF NOT EXISTS verification_requests (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   sitter_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
-  documents JSONB, -- Array of document URLs
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'under_review', 'approved', 'rejected')),
+  documents JSONB, -- JSONB structure: {idDocument: {...}, backgroundCheck: {...}, qualificationDocument: {...}, certifications: [...], bio: "...", hourlyRate: number}
+  qualifications_text TEXT, -- Text field for qualifications
   admin_notes TEXT,
   reviewed_by UUID REFERENCES users(id) ON DELETE SET NULL,
   reviewed_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Indexes for verification_requests
+CREATE INDEX IF NOT EXISTS idx_verification_requests_qualifications ON verification_requests USING gin(to_tsvector('english', qualifications_text));
+CREATE INDEX IF NOT EXISTS idx_verification_requests_status ON verification_requests(status);
+CREATE INDEX IF NOT EXISTS idx_verification_requests_sitter_id ON verification_requests(sitter_id);
+CREATE INDEX IF NOT EXISTS idx_verification_requests_created_at ON verification_requests(created_at DESC);
 
 -- Reviews table
 CREATE TABLE IF NOT EXISTS reviews (
@@ -286,7 +310,10 @@ CREATE INDEX IF NOT EXISTS idx_children_parent_id ON children(parent_id);
 CREATE INDEX IF NOT EXISTS idx_child_instructions_child_id ON child_instructions(child_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_parent_id ON sessions(parent_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_sitter_id ON sessions(sitter_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_child_id ON sessions(child_id); -- Added: Index for child_id lookups
 CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
+CREATE INDEX IF NOT EXISTS idx_sessions_start_time ON sessions(start_time); -- Added: Index for time-based queries
+CREATE INDEX IF NOT EXISTS idx_sessions_created_at ON sessions(created_at DESC); -- Added: Index for sorting by creation time
 CREATE INDEX IF NOT EXISTS idx_alerts_parent_id ON alerts(parent_id);
 CREATE INDEX IF NOT EXISTS idx_alerts_status ON alerts(status);
 CREATE INDEX IF NOT EXISTS idx_alerts_created_at ON alerts(created_at DESC);
@@ -464,6 +491,10 @@ CREATE POLICY "Sitters can read own verification requests" ON verification_reque
 CREATE POLICY "Sitters can create verification requests" ON verification_requests
   FOR INSERT WITH CHECK (sitter_id = auth.uid());
 
+-- Sitters can update their own verification requests (for resubmission)
+CREATE POLICY "Sitters can update own verification requests" ON verification_requests
+  FOR UPDATE USING (sitter_id = auth.uid());
+
 CREATE POLICY "Admins can update verification requests" ON verification_requests
   FOR UPDATE USING (
     EXISTS (SELECT 1 FROM users WHERE id = auth.uid() AND role = 'admin')
@@ -509,6 +540,20 @@ SELECT
   TO_CHAR(acknowledged_at, 'YYYY-MM-DD HH24:MI:SS') as acknowledged_at_readable,
   TO_CHAR(resolved_at, 'YYYY-MM-DD HH24:MI:SS') as resolved_at_readable
 FROM alerts;
+
+-- Add column comments for documentation
+COMMENT ON COLUMN verification_requests.documents IS 
+'JSONB structure: {
+  "idDocument": {"url": "...", "verified": boolean, "adminComment": "..."},
+  "backgroundCheck": {"url": "...", "verified": boolean, "adminComment": "..."},
+  "qualificationDocument": {"url": "...", "verified": boolean, "adminComment": "..."},
+  "certifications": [{"name": "...", "url": "...", "issuedDate": "...", "expiryDate": "...", "verified": boolean, "adminComment": "..."}],
+  "bio": "...",
+  "hourlyRate": number
+}';
+
+COMMENT ON COLUMN sessions.search_scope IS 'Session request scope: invite (specific sitter), nearby (radius search), city (city-wide), nationwide (country-wide)';
+COMMENT ON COLUMN sessions.max_distance_km IS 'Maximum distance in km for nearby search scope. Only used when search_scope = ''nearby''. Values: 5, 10, or 25 km.';
 
 CREATE OR REPLACE VIEW chat_messages_readable AS
 SELECT 

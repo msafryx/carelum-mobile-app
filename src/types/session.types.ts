@@ -1,5 +1,7 @@
 export type SessionStatus = 'requested' | 'accepted' | 'active' | 'completed' | 'cancelled';
 
+export type SessionSearchScope = 'invite' | 'nearby' | 'city' | 'nationwide';
+
 export interface LocationUpdate {
   latitude: number;
   longitude: number;
@@ -22,11 +24,16 @@ export interface Session {
   // Location
   location?: {
     address: string;
+    city?: string; // Extracted city for city-wide search matching
     coordinates?: {
       latitude: number;
       longitude: number;
     };
   };
+  
+  // Multi-scope session requests
+  searchScope?: SessionSearchScope; // 'invite' | 'nearby' | 'city' | 'nationwide'
+  maxDistanceKm?: number; // Only used when searchScope = 'nearby' (5, 10, or 25 km)
   
   // Payment
   hourlyRate: number;
@@ -36,6 +43,7 @@ export interface Session {
   // Session Data
   instructions?: string;
   specialNotes?: string;
+  notes?: string; // Session notes/comments
   
   // Tracking
   gpsTrackingEnabled?: boolean;

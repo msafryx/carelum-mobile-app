@@ -163,16 +163,16 @@ export default function SitterRequestsScreen() {
             <RefreshControl refreshing={refreshing} onRefresh={() => loadRequests(true)} />
           }
         >
-          <Card>
-            <EmptyState
-              icon="mail-outline"
-              title="No Requests"
-              message="You don't have any session requests at the moment. Complete your profile to start receiving requests."
-              actionLabel="Complete Profile"
-              onAction={() => router.push('/(sitter)/profile-setup')}
-            />
-          </Card>
-        </ScrollView>
+        <Card>
+          <EmptyState
+            icon="mail-outline"
+            title="No Requests"
+            message="You don't have any session requests at the moment. Complete your profile to start receiving requests."
+            actionLabel="Complete Profile"
+            onAction={() => router.push('/(sitter)/profile-setup')}
+          />
+        </Card>
+      </ScrollView>
       ) : (
         <ScrollView 
           contentContainerStyle={styles.content}

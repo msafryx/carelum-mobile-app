@@ -5,20 +5,103 @@ import SitterHamburgerMenu from '@/src/components/ui/SitterHamburgerMenu';
 import { useTheme } from '@/src/components/ui/ThemeProvider';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import React, { useState } from 'react';
-import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import React, { useState, useEffect, useCallback } from 'react';
+import { ScrollView, StyleSheet, Text, TouchableOpacity, View, RefreshControl, ActivityIndicator } from 'react-native';
 import { useAuth } from '@/src/hooks/useAuth';
+import { getUserSessions } from '@/src/services/session.service';
+import { getChildById } from '@/src/services/child.service';
+import { getUserById } from '@/src/services/admin.service';
+import { Session } from '@/src/types/session.types';
+import { format } from 'date-fns';
+import { SESSION_STATUS } from '@/src/config/constants';
+
+interface SessionWithDetails extends Session {
+  childName?: string;
+  parentName?: string;
+}
 
 export default function SitterHomeScreen() {
   const { colors, spacing } = useTheme();
   const router = useRouter();
-  const { userProfile } = useAuth();
+  const { user, userProfile } = useAuth();
   const [menuVisible, setMenuVisible] = useState(false);
+  const [activeSessions, setActiveSessions] = useState<SessionWithDetails[]>([]);
+  const [upcomingSessions, setUpcomingSessions] = useState<SessionWithDetails[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
   const handleProfilePress = () => {
     // Always route to profile setup from homepage
     router.push('/(sitter)/profile-setup');
   };
+
+  const loadSessions = useCallback(async (isRefresh = false) => {
+    if (!user || !userProfile) return;
+
+    if (isRefresh) {
+      setRefreshing(true);
+    } else {
+      setLoading(true);
+    }
+
+    try {
+      // Load active sessions
+      const activeResult = await getUserSessions(user.id, 'sitter', SESSION_STATUS.ACTIVE);
+      // Load upcoming sessions (accepted but not yet active)
+      const upcomingResult = await getUserSessions(user.id, 'sitter', SESSION_STATUS.ACCEPTED);
+
+      const loadSessionDetails = async (sessions: Session[]) => {
+        return Promise.all(
+          sessions.map(async (session) => {
+            const details: SessionWithDetails = { ...session };
+            
+            // Get child name
+            if (session.childId) {
+              const childResult = await getChildById(session.childId);
+              if (childResult.success && childResult.data) {
+                details.childName = childResult.data.name;
+              }
+            }
+
+            // Get parent name
+            if (session.parentId) {
+              const parentResult = await getUserById(session.parentId);
+              if (parentResult.success && parentResult.data) {
+                details.parentName = parentResult.data.displayName || 'Parent';
+              }
+            }
+
+            return details;
+          })
+        );
+      };
+
+      if (activeResult.success && activeResult.data) {
+        const activeWithDetails = await loadSessionDetails(activeResult.data);
+        setActiveSessions(activeWithDetails);
+      } else {
+        setActiveSessions([]);
+      }
+
+      if (upcomingResult.success && upcomingResult.data) {
+        const upcomingWithDetails = await loadSessionDetails(upcomingResult.data);
+        setUpcomingSessions(upcomingWithDetails);
+      } else {
+        setUpcomingSessions([]);
+      }
+    } catch (error: any) {
+      console.error('Failed to load sessions:', error);
+      setActiveSessions([]);
+      setUpcomingSessions([]);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, [user, userProfile]);
+
+  useEffect(() => {
+    loadSessions();
+  }, [loadSessions]);
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
@@ -36,7 +119,12 @@ export default function SitterHomeScreen() {
           </TouchableOpacity>
         }
       />
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView 
+        contentContainerStyle={styles.content}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={() => loadSessions(true)} />
+        }
+      >
         <View style={styles.quickRow}>
           <TouchableOpacity
             style={[styles.quickButton, { backgroundColor: colors.primary }]}
@@ -61,41 +149,97 @@ export default function SitterHomeScreen() {
           </TouchableOpacity>
         </View>
 
-        <Text style={[styles.sectionTitle, { color: colors.text }]}>Pending Requests</Text>
-        <Card>
-          <EmptyState
-            icon="mail-outline"
-            title="No pending requests"
-            message="You don't have any new session requests at the moment"
-          />
-        </Card>
-
         <Text style={[styles.sectionTitle, { color: colors.text }]}>Active Sessions</Text>
-        <Card>
-          <EmptyState
-            icon="radio-outline"
-            title="No active sessions"
-            message="You don't have any active babysitting sessions at the moment"
-          />
-        </Card>
+        {loading && !refreshing ? (
+          <Card>
+            <View style={styles.loadingContainer}>
+              <ActivityIndicator size="small" color={colors.primary} />
+            </View>
+          </Card>
+        ) : activeSessions.length === 0 ? (
+          <Card>
+            <EmptyState
+              icon="radio-outline"
+              title="No active sessions"
+              message="You don't have any active babysitting sessions at the moment"
+            />
+          </Card>
+        ) : (
+          activeSessions.map((session) => (
+            <TouchableOpacity
+              key={session.id}
+              onPress={() => router.push(`/(sitter)/session/${session.id}` as any)}
+              activeOpacity={0.7}
+            >
+              <Card style={styles.sessionCard}>
+                <View style={styles.sessionHeader}>
+                  <View style={styles.sessionInfo}>
+                    <Text style={[styles.sessionTitle, { color: colors.text }]}>
+                      {session.childName || 'Child'}
+                    </Text>
+                    {session.parentName && (
+                      <Text style={[styles.parentName, { color: colors.textSecondary }]}>
+                        for {session.parentName}
+                      </Text>
+                    )}
+                  </View>
+                  <Ionicons name="radio" size={20} color={colors.success || '#10b981'} />
+                </View>
+                <View style={styles.sessionDetails}>
+                  <Text style={[styles.sessionTime, { color: colors.textSecondary }]}>
+                    Started {format(session.startTime, 'MMM dd, h:mm a')}
+                  </Text>
+                </View>
+              </Card>
+            </TouchableOpacity>
+          ))
+        )}
 
         <Text style={[styles.sectionTitle, { color: colors.text }]}>Upcoming Sessions</Text>
-        <Card>
-          <EmptyState
-            icon="calendar-outline"
-            title="No upcoming sessions"
-            message="You don't have any upcoming sessions scheduled"
-          />
-        </Card>
-
-        <Text style={[styles.sectionTitle, { color: colors.text }]}>Recent Activities</Text>
-        <Card>
-          <EmptyState
-            icon="time-outline"
-            title="Nothing yet"
-            message="Your recent activities will appear here"
-          />
-        </Card>
+        {loading && !refreshing ? (
+          <Card>
+            <View style={styles.loadingContainer}>
+              <ActivityIndicator size="small" color={colors.primary} />
+            </View>
+          </Card>
+        ) : upcomingSessions.length === 0 ? (
+          <Card>
+            <EmptyState
+              icon="calendar-outline"
+              title="No upcoming sessions"
+              message="You don't have any upcoming sessions scheduled"
+            />
+          </Card>
+        ) : (
+          upcomingSessions.map((session) => (
+            <TouchableOpacity
+              key={session.id}
+              onPress={() => router.push(`/(sitter)/session/${session.id}` as any)}
+              activeOpacity={0.7}
+            >
+              <Card style={styles.sessionCard}>
+                <View style={styles.sessionHeader}>
+                  <View style={styles.sessionInfo}>
+                    <Text style={[styles.sessionTitle, { color: colors.text }]}>
+                      {session.childName || 'Child'}
+                    </Text>
+                    {session.parentName && (
+                      <Text style={[styles.parentName, { color: colors.textSecondary }]}>
+                        for {session.parentName}
+                      </Text>
+                    )}
+                  </View>
+                  <Ionicons name="time" size={20} color={colors.warning || '#f59e0b'} />
+                </View>
+                <View style={styles.sessionDetails}>
+                  <Text style={[styles.sessionTime, { color: colors.textSecondary }]}>
+                    {format(session.startTime, 'MMM dd, yyyy • h:mm a')}
+                  </Text>
+                </View>
+              </Card>
+            </TouchableOpacity>
+          ))
+        )}
       </ScrollView>
 
       <TouchableOpacity
@@ -160,5 +304,35 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.25,
     shadowRadius: 3.84,
+  },
+  loadingContainer: {
+    padding: 20,
+    alignItems: 'center',
+  },
+  sessionCard: {
+    marginBottom: 12,
+  },
+  sessionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: 8,
+  },
+  sessionInfo: {
+    flex: 1,
+  },
+  sessionTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  parentName: {
+    fontSize: 14,
+  },
+  sessionDetails: {
+    marginTop: 4,
+  },
+  sessionTime: {
+    fontSize: 14,
   },
 });

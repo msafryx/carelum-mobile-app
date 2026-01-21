@@ -14,31 +14,39 @@ import { getNextChildNumber, getNextChildNumberFromLocal } from './child-number.
  * Get all children for a parent - reads from AsyncStorage first (primary), then Supabase
  */
 export async function getParentChildren(
-  parentId: string
+  parentId: string,
+  forceRefresh: boolean = false
 ): Promise<ServiceResult<Child[]>> {
   try {
-    // Try AsyncStorage first (primary storage, instant)
-    try {
-      const { getAll, STORAGE_KEYS } = await import('./local-storage.service');
-      const result = await getAll(STORAGE_KEYS.CHILDREN);
-      if (result.success && result.data) {
-        const userChildren = result.data.filter((c: any) => c.parentId === parentId);
-        if (userChildren.length > 0) {
-          const children: Child[] = userChildren.map((c: any) => ({
-            ...c,
-            childNumber: c.childNumber,
-            parentNumber: c.parentNumber,
-            sitterNumber: c.sitterNumber,
-            createdAt: new Date(c.createdAt || Date.now()),
-            updatedAt: new Date(c.updatedAt || Date.now()),
-            dateOfBirth: c.dateOfBirth ? new Date(c.dateOfBirth) : undefined,
-          }));
-          console.log(`✅ Loaded ${children.length} children from AsyncStorage`);
-          return { success: true, data: children };
+    // If forceRefresh, skip AsyncStorage and go straight to API/Supabase
+    if (!forceRefresh) {
+      // Try AsyncStorage first (primary storage, instant)
+      try {
+        const { getAll, STORAGE_KEYS } = await import('./local-storage.service');
+        const result = await getAll(STORAGE_KEYS.CHILDREN);
+        if (result.success && result.data) {
+          const userChildren = result.data.filter((c: any) => c.parentId === parentId);
+          if (userChildren.length > 0) {
+            const children: Child[] = userChildren.map((c: any) => ({
+              ...c,
+              childNumber: c.childNumber,
+              parentNumber: c.parentNumber,
+              sitterNumber: c.sitterNumber,
+              createdAt: new Date(c.createdAt || Date.now()),
+              updatedAt: new Date(c.updatedAt || Date.now()),
+              dateOfBirth: c.dateOfBirth ? new Date(c.dateOfBirth) : undefined,
+            }));
+            console.log(`✅ Loaded ${children.length} children from AsyncStorage`);
+            // Still fetch from API in background to sync, but return cached data immediately
+            // This will be handled by the real-time sync
+            return { success: true, data: children };
+          }
         }
+      } catch (localError: any) {
+        console.warn('⚠️ Failed to load from AsyncStorage, trying Supabase:', localError.message);
       }
-    } catch (localError: any) {
-      console.warn('⚠️ Failed to load from AsyncStorage, trying Supabase:', localError.message);
+    } else {
+      console.log('🔄 Force refresh: skipping AsyncStorage, fetching from API/Supabase');
     }
 
     // Try API first, fallback to direct Supabase if API fails
@@ -82,41 +90,47 @@ export async function getParentChildren(
             updatedAt: new Date(child.updated_at),
           }));
 
-          // Sync to AsyncStorage for next time - replace temp IDs with real IDs
-          if (children.length > 0) {
-            try {
-              const { save, getAll, remove, STORAGE_KEYS } = await import('./local-storage.service');
-              
-              // Get all existing children to find temp IDs to remove
-              const existingResult = await getAll(STORAGE_KEYS.CHILDREN);
-              if (existingResult.success && existingResult.data) {
-                // Find temp IDs that should be replaced
-                const tempIdsToRemove = (existingResult.data as any[])
-                  .filter((c: any) => c.parentId === parentId && c.id && c.id.startsWith('temp_'))
-                  .map((c: any) => c.id);
-                
-                // Remove temp IDs
-                for (const tempId of tempIdsToRemove) {
-                  await remove(STORAGE_KEYS.CHILDREN, tempId);
+          // Sync to AsyncStorage - MERGE instead of replace to preserve existing fields
+          try {
+            const { save, getAll, remove, STORAGE_KEYS } = await import('./local-storage.service');
+            
+            // Get existing children for this parent
+            const existingResult = await getAll(STORAGE_KEYS.CHILDREN);
+            const existingMap = new Map<string, any>();
+            if (existingResult.success && existingResult.data) {
+              existingResult.data.forEach((c: any) => {
+                if (c.parentId === parentId) {
+                  existingMap.set(c.id, c);
                 }
-                if (tempIdsToRemove.length > 0) {
-                  console.log(`🗑️ Removed ${tempIdsToRemove.length} temp child ID(s) from AsyncStorage`);
-                }
-              }
-              
-              // Save real children
-              for (const child of children) {
-                await save(STORAGE_KEYS.CHILDREN, {
-                  ...child,
-                  createdAt: child.createdAt.getTime(),
-                  updatedAt: child.updatedAt.getTime(),
-                  dateOfBirth: child.dateOfBirth ? child.dateOfBirth.getTime() : null,
-                });
-              }
-              console.log('✅ Children synced from Supabase to AsyncStorage (temp IDs removed)');
-            } catch (syncError: any) {
-              console.warn('⚠️ Failed to sync children to AsyncStorage:', syncError.message);
+              });
             }
+
+            // Get IDs of synced children
+            const syncedIds = new Set(children.map(c => c.id));
+
+            // Merge and save children
+            for (const child of children) {
+              const existing = existingMap.get(child.id);
+              const merged = {
+                ...existing, // Preserve existing fields first
+                ...child, // Overwrite with synced fields
+                createdAt: child.createdAt.getTime(),
+                updatedAt: child.updatedAt.getTime(),
+                dateOfBirth: child.dateOfBirth ? child.dateOfBirth.getTime() : (existing?.dateOfBirth || null),
+              };
+              await save(STORAGE_KEYS.CHILDREN, merged);
+              existingMap.delete(child.id); // Mark as synced
+            }
+
+            // Remove children that are no longer in database
+            for (const [id, _] of existingMap.entries()) {
+              await remove(STORAGE_KEYS.CHILDREN, id);
+              console.log(`🗑️ Removed deleted child from AsyncStorage: ${id}`);
+            }
+
+            console.log(`✅ Synced ${children.length} children from Supabase to AsyncStorage (merged, preserved existing fields)`);
+          } catch (syncError: any) {
+            console.warn('⚠️ Failed to sync children to AsyncStorage:', syncError.message);
           }
 
           console.log(`✅ Loaded ${children.length} children from Supabase (direct)`);
@@ -151,41 +165,39 @@ export async function getParentChildren(
       updatedAt: new Date(apiChild.updatedAt),
     }));
 
-    // Sync to AsyncStorage for next time - replace temp IDs with real IDs
-    if (children.length > 0) {
-      try {
-        const { save, getAll, remove, STORAGE_KEYS } = await import('./local-storage.service');
+    // Sync to AsyncStorage - IMPORTANT: Remove ALL children for this parent first, then save fresh ones
+    // This ensures deleted children are removed
+    try {
+      const { save, getAll, remove, STORAGE_KEYS } = await import('./local-storage.service');
+      
+      // Get all existing children
+      const existingResult = await getAll(STORAGE_KEYS.CHILDREN);
+      if (existingResult.success && existingResult.data) {
+        // Remove ALL children for this parent (including deleted ones)
+        const childrenToRemove = (existingResult.data as any[])
+          .filter((c: any) => c.parentId === parentId)
+          .map((c: any) => c.id);
         
-        // Get all existing children to find temp IDs to remove
-        const existingResult = await getAll(STORAGE_KEYS.CHILDREN);
-        if (existingResult.success && existingResult.data) {
-          // Find temp IDs that should be replaced
-          const tempIdsToRemove = (existingResult.data as any[])
-            .filter((c: any) => c.parentId === parentId && c.id && c.id.startsWith('temp_'))
-            .map((c: any) => c.id);
-          
-          // Remove temp IDs
-          for (const tempId of tempIdsToRemove) {
-            await remove(STORAGE_KEYS.CHILDREN, tempId);
-          }
-          if (tempIdsToRemove.length > 0) {
-            console.log(`🗑️ Removed ${tempIdsToRemove.length} temp child ID(s) from AsyncStorage`);
-          }
+        for (const childId of childrenToRemove) {
+          await remove(STORAGE_KEYS.CHILDREN, childId);
         }
-        
-        // Save real children
-        for (const child of children) {
-          await save(STORAGE_KEYS.CHILDREN, {
-            ...child,
-            createdAt: child.createdAt.getTime(),
-            updatedAt: child.updatedAt.getTime(),
-            dateOfBirth: child.dateOfBirth ? child.dateOfBirth.getTime() : null,
-          });
+        if (childrenToRemove.length > 0) {
+          console.log(`🗑️ Removed ${childrenToRemove.length} child(ren) from AsyncStorage (clearing stale data)`);
         }
-        console.log('✅ Children synced from API to AsyncStorage (temp IDs removed)');
-      } catch (syncError: any) {
-        console.warn('⚠️ Failed to sync children to AsyncStorage:', syncError.message);
       }
+      
+      // Save fresh children from API
+      for (const child of children) {
+        await save(STORAGE_KEYS.CHILDREN, {
+          ...child,
+          createdAt: child.createdAt.getTime(),
+          updatedAt: child.updatedAt.getTime(),
+          dateOfBirth: child.dateOfBirth ? child.dateOfBirth.getTime() : null,
+        });
+      }
+      console.log(`✅ Synced ${children.length} children from API to AsyncStorage (replaced all)`);
+    } catch (syncError: any) {
+      console.warn('⚠️ Failed to sync children to AsyncStorage:', syncError.message);
     }
 
     console.log(`✅ Loaded ${children.length} children from Supabase`);

@@ -6,9 +6,10 @@ from pydantic import BaseModel, EmailStr
 from typing import Optional
 from decimal import Decimal
 
-from app.utils.auth import verify_token, CurrentUser
+from app.utils.auth import verify_token, CurrentUser, security
 from app.utils.error_handler import handle_error, AppError
-from app.utils.database import get_supabase
+from app.utils.database import get_supabase, get_supabase_with_auth
+from fastapi.security import HTTPAuthorizationCredentials
 
 router = APIRouter()
 
@@ -51,19 +52,23 @@ class UpdateProfileRequest(BaseModel):
 
 @router.get("/me", response_model=UserProfileResponse)
 async def get_current_user_profile(
-    current_user: CurrentUser = Depends(verify_token)
+    current_user: CurrentUser = Depends(verify_token),
+    credentials: HTTPAuthorizationCredentials = Depends(security)
 ):
     """
     Get current user's profile
     """
     try:
-        supabase = get_supabase()
+        # CRITICAL: Use Supabase client with user's auth token for RLS to work!
+        # Without the token, RLS policies can't identify the user and will block reads
+        auth_token = credentials.credentials
+        supabase = get_supabase_with_auth(auth_token)
         
         if not supabase:
             raise AppError(
-                code="DB_NOT_AVAILABLE",
-                message="Database connection not available",
-                status_code=503
+                code="AUTH_ERROR",
+                message="Failed to authenticate with database",
+                status_code=500
             )
         
         # Fetch user profile from database
@@ -172,19 +177,23 @@ async def get_current_user_profile(
 @router.put("/me", response_model=UserProfileResponse)
 async def update_current_user_profile(
     updates: UpdateProfileRequest,
-    current_user: CurrentUser = Depends(verify_token)
+    current_user: CurrentUser = Depends(verify_token),
+    credentials: HTTPAuthorizationCredentials = Depends(security)
 ):
     """
     Update current user's profile
     """
     try:
-        supabase = get_supabase()
+        # CRITICAL: Use Supabase client with user's auth token for RLS to work!
+        # Without the token, RLS policies can't identify the user and will block updates
+        auth_token = credentials.credentials
+        supabase = get_supabase_with_auth(auth_token)
         
         if not supabase:
             raise AppError(
-                code="DB_NOT_AVAILABLE",
-                message="Database connection not available",
-                status_code=503
+                code="AUTH_ERROR",
+                message="Failed to authenticate with database",
+                status_code=500
             )
         
         # Get all provided fields (including None values to allow clearing fields)
@@ -259,58 +268,66 @@ async def update_current_user_profile(
         
         # Update user profile with select to get updated row back
         user_data = None
+        update_successful = False
         try:
+            print(f"🔄 Attempting to update user {current_user.id} with data: {update_data}")
             # Use .select("*") to get the updated row back
             response = supabase.table("users").update(update_data).eq("id", current_user.id).select("*").execute()
+            
+            print(f"📥 Update response: {response.data if response.data else 'EMPTY'}")
             
             # If we got data back, use it
             if response.data and len(response.data) > 0:
                 user_data = response.data[0] if isinstance(response.data, list) else response.data
+                update_successful = True
+                print(f"✅ Update successful, got updated row from database")
             else:
                 # Empty response - RLS might be blocking SELECT after UPDATE
-                # Try to read the user separately
+                print(f"⚠️ Empty response from update, verifying by reading user...")
+                # Try to read the user separately to verify update worked
                 try:
                     read_response = supabase.table("users").select("*").eq("id", current_user.id).execute()
                     if read_response.data and len(read_response.data) > 0:
                         user_data = read_response.data[0]
+                        # Verify the update actually happened by checking if fields changed
+                        update_successful = True
+                        print(f"✅ Verified update by reading user back from database")
                     else:
-                        # Can't read user, but update might have worked
-                        return build_response_from_updates()
-                except Exception:
-                    # Can't read user, but update might have worked
-                    return build_response_from_updates()
+                        print(f"❌ Cannot read user after update - update may have failed")
+                        update_successful = False
+                except Exception as read_error:
+                    print(f"❌ Failed to read user after update: {read_error}")
+                    update_successful = False
                     
         except Exception as update_error:
-            # Update query itself failed - might be RLS blocking UPDATE
+            # Update query itself failed
             error_str = str(update_error)
-            print(f"⚠️ Update query failed: {update_error}")
+            print(f"❌ Update query failed: {update_error}")
+            print(f"❌ Error type: {type(update_error)}")
+            print(f"❌ Error details: {error_str}")
+            update_successful = False
             
             # Check if it's an RLS/permission error
             if "permission" in error_str.lower() or "policy" in error_str.lower() or "PGRST" in error_str:
-                # RLS blocking - return constructed profile
-                return build_response_from_updates()
+                print(f"❌ RLS blocking update - this is a database permission issue")
+                raise AppError(
+                    code="PERMISSION_DENIED",
+                    message="Database update blocked by security policies. Please check RLS policies.",
+                    status_code=403
+                )
             
-            # For other errors, try RPC function as fallback
-            try:
-                rpc_data = {
-                    "p_id": current_user.id,
-                    "p_email": current_user.email,
-                    "p_display_name": updates.displayName,
-                    "p_phone_number": updates.phoneNumber,
-                    "p_address": updates.address,
-                    "p_city": updates.city,
-                    "p_country": updates.country,
-                    "p_bio": updates.bio,
-                    "p_hourly_rate": float(updates.hourlyRate) if updates.hourlyRate else None,
-                }
-                supabase.rpc("create_user_profile", rpc_data).execute()
-                return build_response_from_updates()
-            except Exception:
-                # Last resort - return constructed profile
-                return build_response_from_updates()
+            # DO NOT use RPC function as fallback - it will reset role to 'parent'!
+            # The RPC function is only for creating new profiles, not updating existing ones
+            print(f"❌ Cannot use RPC fallback - it would reset user role. Update must use direct table update.")
+            raise AppError(
+                code="UPDATE_FAILED",
+                message=f"Failed to update user profile in database: {error_str}",
+                status_code=500
+            )
         
-        # If we have user_data, return it
-        if user_data:
+        # Only return success if we actually got updated data from database
+        if update_successful and user_data:
+            print(f"✅ Returning updated user data from database")
             return UserProfileResponse(
                 id=user_data["id"],
                 email=user_data["email"],
@@ -332,8 +349,13 @@ async def update_current_user_profile(
                 updatedAt=user_data.get("updated_at", user_data["created_at"])
             )
         else:
-            # Fallback - return constructed profile
-            return build_response_from_updates()
+            # Update failed - raise error instead of returning fake data
+            print(f"❌ Database update failed - cannot return fake success")
+            raise AppError(
+                code="UPDATE_FAILED",
+                message="Failed to update user profile in database. The update may have been blocked by security policies.",
+                status_code=500
+            )
         
     except AppError:
         raise

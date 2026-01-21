@@ -20,6 +20,7 @@ import {
   subscribeToSessionAlerts,
 } from '@/src/services/alert.service';
 import { getChildById } from '@/src/services/child.service';
+import { getUserById } from '@/src/services/admin.service';
 import {
   getSessionGPSTracking,
   subscribeToGPSUpdates,
@@ -66,6 +67,7 @@ export default function SessionDetailScreen() {
 
   const [session, setSession] = useState<Session | null>(null);
   const [child, setChild] = useState<Child | null>(null);
+  const [sitter, setSitter] = useState<any>(null);
   const [currentLocation, setCurrentLocation] = useState<LocationUpdate | null>(null);
   const [locationHistory, setLocationHistory] = useState<LocationUpdate[]>([]);
   const [alerts, setAlerts] = useState<AlertType[]>([]);
@@ -100,6 +102,14 @@ export default function SessionDetailScreen() {
         const childResult = await getChildById(sessionData.childId);
         if (childResult.success && childResult.data) {
           setChild(childResult.data);
+        }
+      }
+
+      // Load sitter data (if assigned)
+      if (sessionData.sitterId) {
+        const sitterResult = await getUserById(sessionData.sitterId);
+        if (sitterResult.success && sitterResult.data) {
+          setSitter(sitterResult.data);
         }
       }
 
@@ -352,9 +362,9 @@ export default function SessionDetailScreen() {
             </View>
             {session.endTime && (
               <View style={styles.infoRow}>
-                <Ionicons name="checkmark-outline" size={16} color={colors.textSecondary} />
+                <Ionicons name={session.status === 'requested' ? "time-outline" : "checkmark-outline"} size={16} color={colors.textSecondary} />
                 <Text style={[styles.infoText, { color: colors.textSecondary }]}>
-                  Ended: {session.endTime.toLocaleString()}
+                  {session.status === 'requested' ? 'End' : 'Ended'}: {session.endTime.toLocaleString()}
                 </Text>
               </View>
             )}
@@ -363,6 +373,54 @@ export default function SessionDetailScreen() {
                 <Ionicons name="hourglass-outline" size={16} color={colors.textSecondary} />
                 <Text style={[styles.infoText, { color: colors.textSecondary }]}>
                   Duration: {formatDuration(session.startTime)}
+                </Text>
+              </View>
+            )}
+            {session.status === 'requested' && session.endTime && (
+              <View style={styles.infoRow}>
+                <Ionicons name="hourglass-outline" size={16} color={colors.textSecondary} />
+                <Text style={[styles.infoText, { color: colors.textSecondary }]}>
+                  Expected Duration: {Math.round((session.endTime.getTime() - session.startTime.getTime()) / (1000 * 60 * 60))} hours
+                </Text>
+              </View>
+            )}
+            {sitter && (
+              <View style={styles.infoRow}>
+                <Ionicons name="person-outline" size={16} color={colors.textSecondary} />
+                <Text style={[styles.infoText, { color: colors.textSecondary }]}>
+                  Sitter: {sitter.displayName || sitter.email}
+                </Text>
+              </View>
+            )}
+            {session.searchScope && (
+              <View style={styles.infoRow}>
+                <Ionicons name="search-outline" size={16} color={colors.textSecondary} />
+                <Text style={[styles.infoText, { color: colors.textSecondary }]}>
+                  Search: {session.searchScope === 'invite' ? 'Invite Only' : session.searchScope === 'nearby' ? `Within ${session.maxDistanceKm}km` : session.searchScope === 'city' ? 'City Wide' : 'Nationwide'}
+                </Text>
+              </View>
+            )}
+            {session.location && typeof session.location === 'object' && session.location.address && (
+              <View style={styles.infoRow}>
+                <Ionicons name="location-outline" size={16} color={colors.textSecondary} />
+                <Text style={[styles.infoText, { color: colors.textSecondary }]} numberOfLines={2}>
+                  Location: {session.location.address}
+                </Text>
+              </View>
+            )}
+            {session.hourlyRate && session.hourlyRate > 0 && (
+              <View style={styles.infoRow}>
+                <Ionicons name="cash-outline" size={16} color={colors.textSecondary} />
+                <Text style={[styles.infoText, { color: colors.textSecondary }]}>
+                  Rate: ${session.hourlyRate.toFixed(2)}/hour
+                </Text>
+              </View>
+            )}
+            {session.notes && (
+              <View style={styles.infoRow}>
+                <Ionicons name="document-text-outline" size={16} color={colors.textSecondary} />
+                <Text style={[styles.infoText, { color: colors.textSecondary }]} numberOfLines={3}>
+                  Notes: {session.notes}
                 </Text>
               </View>
             )}

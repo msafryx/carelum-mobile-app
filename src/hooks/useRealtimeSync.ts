@@ -36,10 +36,8 @@ export function useRealtimeSync() {
         },
         (payload: any) => {
           console.log('🔔 Alert update:', payload);
-          // Emit custom event for UI to listen
-          if (typeof window !== 'undefined') {
-            window.dispatchEvent(new CustomEvent('alertUpdated', { detail: payload }));
-          }
+          // Note: CustomEvent is not available in React Native
+          // Components should listen to Supabase real-time updates directly or use the event emitter pattern
         }
       )
       .subscribe();
@@ -77,9 +75,8 @@ export function useRealtimeSync() {
           } catch (error: any) {
             console.warn('⚠️ Failed to sync message:', error);
           }
-          if (typeof window !== 'undefined') {
-            window.dispatchEvent(new CustomEvent('messageReceived', { detail: payload }));
-          }
+          // Note: CustomEvent is not available in React Native
+          // Components should listen to Supabase real-time updates directly
         }
       )
       .subscribe();
@@ -130,11 +127,7 @@ export function useRealtimeSync() {
                 }
               }
             }
-            // Emit event for UI refresh
-            if (typeof window !== 'undefined') {
-              window.dispatchEvent(new CustomEvent('childrenUpdated'));
-            }
-            // Also emit via emitter for cross-platform compatibility
+            // Emit event for UI refresh via emitter (React Native compatible)
             childrenUpdateEmitter.emit();
           } catch (error: any) {
             console.warn('⚠️ Failed to sync child to AsyncStorage:', error);
@@ -156,9 +149,9 @@ export function useRealtimeSync() {
         },
         (payload: any) => {
           console.log('📅 Session update:', payload);
-          if (typeof window !== 'undefined') {
-            window.dispatchEvent(new CustomEvent('sessionUpdated', { detail: payload }));
-          }
+          // Note: CustomEvent is not available in React Native
+          // Components should listen to Supabase real-time updates directly
+          // You can use the sessionUpdateEmitter pattern if needed (similar to childrenUpdateEmitter)
         }
       )
       .subscribe();
@@ -176,9 +169,8 @@ export function useRealtimeSync() {
         },
         (payload: any) => {
           console.log('📅 Sitter session update:', payload);
-          if (typeof window !== 'undefined') {
-            window.dispatchEvent(new CustomEvent('sessionUpdated', { detail: payload }));
-          }
+          // Note: CustomEvent is not available in React Native
+          // Components should listen to Supabase real-time updates directly
         }
       )
       .subscribe();
