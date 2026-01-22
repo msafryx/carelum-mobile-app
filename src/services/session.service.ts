@@ -65,6 +65,10 @@ export async function createSessionRequest(
       notes: apiSession.notes,
       searchScope: apiSession.searchScope || apiSession.search_scope,
       maxDistanceKm: apiSession.maxDistanceKm || apiSession.max_distance_km,
+      cancelledAt: apiSession.cancelledAt ? new Date(apiSession.cancelledAt) : undefined,
+      cancelledBy: apiSession.cancelledBy,
+      cancellationReason: apiSession.cancellationReason,
+      completedAt: apiSession.completedAt ? new Date(apiSession.completedAt) : undefined,
       createdAt: new Date(apiSession.createdAt),
       updatedAt: new Date(apiSession.updatedAt),
     };
@@ -104,6 +108,10 @@ export async function getSessionById(sessionId: string): Promise<ServiceResult<S
           notes: s.notes,
           searchScope: s.searchScope || s.search_scope,
           maxDistanceKm: s.maxDistanceKm || s.max_distance_km,
+          cancelledAt: s.cancelledAt ? new Date(s.cancelledAt) : undefined,
+          cancelledBy: s.cancelledBy,
+          cancellationReason: s.cancellationReason,
+          completedAt: s.completedAt ? new Date(s.completedAt) : undefined,
           createdAt: new Date(s.createdAt || Date.now()),
           updatedAt: new Date(s.updatedAt || Date.now()),
         };
@@ -154,6 +162,10 @@ async function syncSessionFromAPI(sessionId: string): Promise<ServiceResult<Sess
       notes: apiSession.notes,
       searchScope: apiSession.searchScope || apiSession.search_scope,
       maxDistanceKm: apiSession.maxDistanceKm || apiSession.max_distance_km,
+      cancelledAt: apiSession.cancelledAt ? new Date(apiSession.cancelledAt) : undefined,
+      cancelledBy: apiSession.cancelledBy,
+      cancellationReason: apiSession.cancellationReason,
+      completedAt: apiSession.completedAt ? new Date(apiSession.completedAt) : undefined,
       createdAt: new Date(apiSession.createdAt),
       updatedAt: new Date(apiSession.updatedAt),
     };
@@ -279,6 +291,10 @@ async function syncSessionsFromAPI(
       notes: apiSession.notes,
       searchScope: apiSession.searchScope || apiSession.search_scope,
       maxDistanceKm: apiSession.maxDistanceKm || apiSession.max_distance_km,
+      cancelledAt: apiSession.cancelledAt ? new Date(apiSession.cancelledAt) : undefined,
+      cancelledBy: apiSession.cancelledBy,
+      cancellationReason: apiSession.cancellationReason,
+      completedAt: apiSession.completedAt ? new Date(apiSession.completedAt) : undefined,
       createdAt: new Date(apiSession.createdAt),
       updatedAt: new Date(apiSession.updatedAt),
     }));
@@ -372,9 +388,7 @@ export async function declineSessionRequest(
   sessionId: string,
   reason?: string
 ): Promise<ServiceResult<void>> {
-  return updateSessionStatus(sessionId, 'cancelled', {
-    notes: reason,
-  } as any);
+  return cancelSession(sessionId, reason);
 }
 
 /**
@@ -399,11 +413,18 @@ export async function completeSession(
 }
 
 /**
- * Cancel session
+ * Cancel session (Uber-like: with reason tracking)
  */
-export async function cancelSession(sessionId: string): Promise<ServiceResult<void>> {
+export async function cancelSession(
+  sessionId: string,
+  reason?: string
+): Promise<ServiceResult<void>> {
   try {
-    const result = await apiRequest<any>(API_ENDPOINTS.SESSION_BY_ID(sessionId), {
+    const url = reason
+      ? `${API_ENDPOINTS.SESSION_BY_ID(sessionId)}?reason=${encodeURIComponent(reason)}`
+      : API_ENDPOINTS.SESSION_BY_ID(sessionId);
+    
+    const result = await apiRequest<any>(url, {
       method: 'DELETE',
     });
 
@@ -412,6 +433,65 @@ export async function cancelSession(sessionId: string): Promise<ServiceResult<vo
     }
 
     return { success: true };
+  } catch (error: any) {
+    return {
+      success: false,
+      error: handleUnexpectedError(error),
+    };
+  }
+}
+
+/**
+ * Discover available sessions for sitters (Uber-like discovery)
+ */
+export async function discoverAvailableSessions(
+  scope?: 'nearby' | 'city' | 'nationwide',
+  maxDistance?: number
+): Promise<ServiceResult<Session[]>> {
+  try {
+    let endpoint = `${API_ENDPOINTS.SESSIONS}/discover/available`;
+    const params = new URLSearchParams();
+    
+    if (scope) {
+      params.append('scope', scope);
+    }
+    if (maxDistance) {
+      params.append('max_distance', maxDistance.toString());
+    }
+    
+    if (params.toString()) {
+      endpoint += `?${params.toString()}`;
+    }
+
+    const result = await apiRequest<any[]>(endpoint);
+
+    if (!result.success) {
+      return result;
+    }
+
+    const sessions: Session[] = (result.data || []).map((apiSession: any) => ({
+      id: apiSession.id,
+      parentId: apiSession.parentId,
+      sitterId: apiSession.sitterId || '',
+      childId: apiSession.childId,
+      status: apiSession.status,
+      startTime: new Date(apiSession.startTime),
+      endTime: apiSession.endTime ? new Date(apiSession.endTime) : undefined,
+      location: apiSession.location,
+      hourlyRate: apiSession.hourlyRate,
+      totalAmount: apiSession.totalAmount,
+      notes: apiSession.notes,
+      searchScope: apiSession.searchScope || apiSession.search_scope,
+      maxDistanceKm: apiSession.maxDistanceKm || apiSession.max_distance_km,
+      cancelledAt: apiSession.cancelledAt ? new Date(apiSession.cancelledAt) : undefined,
+      cancelledBy: apiSession.cancelledBy,
+      cancellationReason: apiSession.cancellationReason,
+      completedAt: apiSession.completedAt ? new Date(apiSession.completedAt) : undefined,
+      createdAt: new Date(apiSession.createdAt),
+      updatedAt: new Date(apiSession.updatedAt),
+    }));
+
+    return { success: true, data: sessions };
   } catch (error: any) {
     return {
       success: false,

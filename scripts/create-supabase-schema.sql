@@ -222,6 +222,13 @@ CREATE TABLE IF NOT EXISTS sessions (
   notes TEXT,
   search_scope TEXT DEFAULT 'invite' CHECK (search_scope IN ('invite', 'nearby', 'city', 'nationwide')), -- Session request scope
   max_distance_km NUMERIC(5, 2), -- Maximum distance in km for nearby search scope (only used when search_scope = 'nearby')
+  -- Cancellation tracking (Uber-like)
+  cancelled_at TIMESTAMPTZ,
+  cancelled_by TEXT CHECK (cancelled_by IN ('parent', 'sitter', 'system')),
+  cancellation_reason TEXT,
+  -- Completion tracking
+  completed_at TIMESTAMPTZ,
+  -- Timestamps
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -314,6 +321,11 @@ CREATE INDEX IF NOT EXISTS idx_sessions_child_id ON sessions(child_id); -- Added
 CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
 CREATE INDEX IF NOT EXISTS idx_sessions_start_time ON sessions(start_time); -- Added: Index for time-based queries
 CREATE INDEX IF NOT EXISTS idx_sessions_created_at ON sessions(created_at DESC); -- Added: Index for sorting by creation time
+
+-- Indexes for cancellation and completion tracking (Uber-like)
+CREATE INDEX IF NOT EXISTS idx_sessions_cancelled_at ON sessions(cancelled_at) WHERE cancelled_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_sessions_completed_at ON sessions(completed_at) WHERE completed_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_sessions_cancelled_by ON sessions(cancelled_by) WHERE cancelled_by IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_alerts_parent_id ON alerts(parent_id);
 CREATE INDEX IF NOT EXISTS idx_alerts_status ON alerts(status);
 CREATE INDEX IF NOT EXISTS idx_alerts_created_at ON alerts(created_at DESC);

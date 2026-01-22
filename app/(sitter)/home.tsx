@@ -8,7 +8,7 @@ import { useRouter } from 'expo-router';
 import React, { useState, useEffect, useCallback } from 'react';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View, RefreshControl, ActivityIndicator } from 'react-native';
 import { useAuth } from '@/src/hooks/useAuth';
-import { getUserSessions } from '@/src/services/session.service';
+import { getUserSessions, discoverAvailableSessions } from '@/src/services/session.service';
 import { getChildById } from '@/src/services/child.service';
 import { getUserById } from '@/src/services/admin.service';
 import { Session } from '@/src/types/session.types';
@@ -27,6 +27,7 @@ export default function SitterHomeScreen() {
   const [menuVisible, setMenuVisible] = useState(false);
   const [activeSessions, setActiveSessions] = useState<SessionWithDetails[]>([]);
   const [upcomingSessions, setUpcomingSessions] = useState<SessionWithDetails[]>([]);
+  const [availableSessions, setAvailableSessions] = useState<SessionWithDetails[]>([]);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -49,6 +50,8 @@ export default function SitterHomeScreen() {
       const activeResult = await getUserSessions(user.id, 'sitter', SESSION_STATUS.ACTIVE);
       // Load upcoming sessions (accepted but not yet active)
       const upcomingResult = await getUserSessions(user.id, 'sitter', SESSION_STATUS.ACCEPTED);
+      // Discover available sessions (Uber-like discovery)
+      const availableResult = await discoverAvailableSessions();
 
       const loadSessionDetails = async (sessions: Session[]) => {
         return Promise.all(
@@ -88,6 +91,13 @@ export default function SitterHomeScreen() {
         setUpcomingSessions(upcomingWithDetails);
       } else {
         setUpcomingSessions([]);
+      }
+
+      if (availableResult.success && availableResult.data) {
+        const availableWithDetails = await loadSessionDetails(availableResult.data);
+        setAvailableSessions(availableWithDetails);
+      } else {
+        setAvailableSessions([]);
       }
     } catch (error: any) {
       console.error('Failed to load sessions:', error);
@@ -240,6 +250,64 @@ export default function SitterHomeScreen() {
             </TouchableOpacity>
           ))
         )}
+
+        <Text style={[styles.sectionTitle, { color: colors.text }]}>Available Sessions</Text>
+        {loading && !refreshing ? (
+          <Card>
+            <View style={styles.loadingContainer}>
+              <ActivityIndicator size="small" color={colors.primary} />
+            </View>
+          </Card>
+        ) : availableSessions.length === 0 ? (
+          <Card>
+            <EmptyState
+              icon="search-outline"
+              title="No available sessions"
+              message="There are no session requests available at the moment. Check back later!"
+            />
+          </Card>
+        ) : (
+          availableSessions.map((session) => (
+            <TouchableOpacity
+              key={session.id}
+              onPress={() => router.push(`/(sitter)/session/${session.id}` as any)}
+              activeOpacity={0.7}
+            >
+              <Card style={styles.sessionCard}>
+                <View style={styles.sessionHeader}>
+                  <View style={styles.sessionInfo}>
+                    <Text style={[styles.sessionTitle, { color: colors.text }]}>
+                      {session.childName || 'Child'}
+                    </Text>
+                    {session.parentName && (
+                      <Text style={[styles.parentName, { color: colors.textSecondary }]}>
+                        from {session.parentName}
+                      </Text>
+                    )}
+                  </View>
+                  <Ionicons name="location" size={20} color={colors.primary} />
+                </View>
+                <View style={styles.sessionDetails}>
+                  <Text style={[styles.sessionTime, { color: colors.textSecondary }]}>
+                    {format(session.startTime, 'MMM dd, yyyy • h:mm a')}
+                  </Text>
+                  {session.hourlyRate && (
+                    <Text style={[styles.sessionRate, { color: colors.primary }]}>
+                      ${session.hourlyRate}/hr
+                    </Text>
+                  )}
+                  {session.searchScope && session.searchScope !== 'invite' && (
+                    <Text style={[styles.sessionScope, { color: colors.textSecondary }]}>
+                      {session.searchScope === 'nearby' && session.maxDistanceKm
+                        ? `Within ${session.maxDistanceKm}km`
+                        : session.searchScope.charAt(0).toUpperCase() + session.searchScope.slice(1)}
+                    </Text>
+                  )}
+                </View>
+              </Card>
+            </TouchableOpacity>
+          ))
+        )}
       </ScrollView>
 
       <TouchableOpacity
@@ -334,5 +402,15 @@ const styles = StyleSheet.create({
   },
   sessionTime: {
     fontSize: 14,
+  },
+  sessionRate: {
+    fontSize: 16,
+    fontWeight: '600',
+    marginTop: 4,
+  },
+  sessionScope: {
+    fontSize: 12,
+    marginTop: 2,
+    fontStyle: 'italic',
   },
 });

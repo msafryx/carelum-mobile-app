@@ -5,7 +5,8 @@ import Header from '@/src/components/ui/Header';
 import { useTheme } from '@/src/components/ui/ThemeProvider';
 import { useAuth } from '@/src/hooks/useAuth';
 import { getAll, save, STORAGE_KEYS } from '@/src/services/local-storage.service';
-import { getUserSessions } from '@/src/services/session.service';
+import { getUserSessions, cancelSession } from '@/src/services/session.service';
+import CancelSessionModal from '@/src/components/session/CancelSessionModal';
 import { getChildById } from '@/src/services/child.service';
 import { getUserById } from '@/src/services/admin.service';
 import { Session } from '@/src/types/session.types';
@@ -13,7 +14,7 @@ import { SESSION_STATUS } from '@/src/config/constants';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useState, useCallback } from 'react';
-import { ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View, RefreshControl, ActivityIndicator } from 'react-native';
+import { ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View, RefreshControl, ActivityIndicator, Alert } from 'react-native';
 import { format } from 'date-fns';
 
 interface SessionWithDetails extends Session {
@@ -31,6 +32,9 @@ export default function ParentHomeScreen() {
   const [requestedSessions, setRequestedSessions] = useState<SessionWithDetails[]>([]);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [cancelModalVisible, setCancelModalVisible] = useState(false);
+  const [selectedSessionForCancel, setSelectedSessionForCancel] = useState<SessionWithDetails | null>(null);
+  const [cancelling, setCancelling] = useState(false);
   
   const loadSessions = useCallback(async (isRefresh = false) => {
     if (!user) return;
@@ -286,6 +290,19 @@ export default function ParentHomeScreen() {
                     {session.endTime && ` - ${format(session.endTime, 'h:mm a')}`}
                   </Text>
                 </View>
+                <TouchableOpacity
+                  style={[styles.cancelButton, { borderColor: colors.error || '#ef4444' }]}
+                  onPress={(e) => {
+                    e.stopPropagation();
+                    setSelectedSessionForCancel(session);
+                    setCancelModalVisible(true);
+                  }}
+                >
+                  <Ionicons name="close-circle" size={18} color={colors.error || '#ef4444'} />
+                  <Text style={[styles.cancelButtonText, { color: colors.error || '#ef4444' }]}>
+                    Cancel
+                  </Text>
+                </TouchableOpacity>
               </Card>
             </TouchableOpacity>
           ))
@@ -332,10 +349,67 @@ export default function ParentHomeScreen() {
                     {format(session.startTime, 'MMM dd, yyyy • h:mm a')}
                   </Text>
                 </View>
-        </Card>
+                <TouchableOpacity
+                  style={[styles.cancelButton, { borderColor: colors.error || '#ef4444' }]}
+                  onPress={(e) => {
+                    e.stopPropagation();
+                    setSelectedSessionForCancel(session);
+                    setCancelModalVisible(true);
+                  }}
+                >
+                  <Ionicons name="close-circle" size={18} color={colors.error || '#ef4444'} />
+                  <Text style={[styles.cancelButtonText, { color: colors.error || '#ef4444' }]}>
+                    Cancel
+                  </Text>
+                </TouchableOpacity>
+              </Card>
             </TouchableOpacity>
           ))
         )}
+
+        {/* Cancel Session Modal */}
+        <CancelSessionModal
+          visible={cancelModalVisible}
+          session={selectedSessionForCancel}
+          onClose={() => {
+            setCancelModalVisible(false);
+            setSelectedSessionForCancel(null);
+          }}
+          onConfirm={async (reason) => {
+            if (!selectedSessionForCancel) return;
+            setCancelling(true);
+            const result = await cancelSession(selectedSessionForCancel.id, reason);
+            if (result.success) {
+              Alert.alert(
+                'Session Cancelled',
+                'Your session has been cancelled successfully.',
+                [
+                  {
+                    text: 'Request New Session',
+                    onPress: () => {
+                      setCancelModalVisible(false);
+                      setSelectedSessionForCancel(null);
+                      // Navigate to search to create new session
+                      router.push('/(parent)/search');
+                    },
+                  },
+                  {
+                    text: 'OK',
+                    onPress: () => {
+                      setCancelModalVisible(false);
+                      setSelectedSessionForCancel(null);
+                      loadSessions(true);
+                    },
+                  },
+                ]
+              );
+            } else {
+              Alert.alert('Error', result.error?.message || 'Failed to cancel session');
+            }
+            setCancelling(false);
+          }}
+          loading={cancelling}
+        />
 
         <Text style={[styles.sectionTitle, { color: colors.text }]}>Recommended Sitters</Text>
         <Card>
@@ -474,5 +548,20 @@ const styles = StyleSheet.create({
   },
   sessionTime: {
     fontSize: 14,
+  },
+  cancelButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    marginTop: 12,
+    gap: 6,
+  },
+  cancelButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
   },
 });

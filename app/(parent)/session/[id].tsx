@@ -28,8 +28,10 @@ import {
 import {
   completeSession,
   getSessionById,
-  subscribeToSession
+  subscribeToSession,
+  cancelSession,
 } from '@/src/services/session.service';
+import CancelSessionModal from '@/src/components/session/CancelSessionModal';
 import { Child } from '@/src/types/child.types';
 import { LocationUpdate, Session } from '@/src/types/session.types';
 import { Ionicons } from '@expo/vector-icons';
@@ -76,6 +78,7 @@ export default function SessionDetailScreen() {
   const [error, setError] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
   const [menuVisible, setMenuVisible] = useState(false);
+  const [cancelModalVisible, setCancelModalVisible] = useState(false);
 
   // Load session data
   const loadSessionData = useCallback(async () => {
@@ -502,6 +505,7 @@ export default function SessionDetailScreen() {
           sessionStatus={session.status}
           onEndSession={handleEndSession}
           onEmergency={handleEmergency}
+          onCancel={() => setCancelModalVisible(true)}
           isLoading={actionLoading}
           canEndSession={session.status === 'active'}
         />
