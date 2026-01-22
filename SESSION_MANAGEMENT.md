@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Carelum app now uses a professional session management system that ensures proper user session lifecycle, database synchronization, and profile management through the REST API.
+The Carelum app now uses a professional session management system that ensures proper user session lifecycle, database synchronization, and profile management through the REST API. The system includes an Uber-like session CRUD system with cancellation, rebooking, and session discovery features.
 
 ## Architecture
 
@@ -313,3 +313,50 @@ const result = await sessionManager.syncProfileFromAPI(userId);
 2. Check `lastSyncTime`
 3. Verify periodic sync is running
 4. Check network connectivity
+
+## Session CRUD System (Uber-like)
+
+### Overview
+The app implements a comprehensive session CRUD system similar to Uber's ride-booking model, with proper state management, status transitions, and cancellation tracking.
+
+### Session Status Flow
+```
+requested → accepted → active → completed
+    ↓           ↓         ↓
+cancelled   cancelled  cancelled
+```
+
+### Key Features
+
+#### 1. Session Creation
+- Parents can create session requests
+- Multiple search scopes: `invite`, `nearby`, `city`, `nationwide`
+- Status starts as `requested`
+
+#### 2. Session Discovery (Sitters)
+- Sitters can discover available sessions via `GET /api/sessions/discover/available`
+- Filters by scope and distance
+- Shows only relevant sessions based on search scope
+
+#### 3. Session Cancellation (Parents)
+- Parents can cancel sessions at any stage (requested, accepted, active)
+- Uber-like cancellation modal with reason selection
+- 7 predefined reasons + custom reason option
+- Automatic rebooking option after cancellation
+- Tracks: `cancelled_at`, `cancelled_by`, `cancellation_reason`
+
+#### 4. Status Transitions
+- Validated state machine with role-based permissions
+- Terminal states (`completed`, `cancelled`) cannot be changed
+- Automatic tracking of status changes
+
+### Database Schema
+All session features are included in `scripts/create-supabase-schema.sql`:
+- Cancellation tracking columns (`cancelled_at`, `cancelled_by`, `cancellation_reason`)
+- Completion tracking (`completed_at`)
+- Proper indexes for performance
+- Status constraint with all valid states
+
+### Related Documentation
+- See `SESSION_CRUD_UBER_LIKE.md` for complete API documentation
+- See `APP_FEATURES_STATUS.md` for feature status

@@ -45,6 +45,8 @@
 - ✅ Search for babysitters
 - ✅ Filter by criteria
 - ✅ View sitter profiles
+- ✅ Create session requests
+- ✅ Multiple search scopes (invite, nearby, city, nationwide)
 
 #### **Instructions** (`app/(parent)/instructions.tsx`)
 - ✅ Child care instructions
@@ -62,16 +64,27 @@
 - ✅ GPS tracking display with real-time updates
 - ✅ Real-time monitoring via Supabase Realtime
 - ✅ Cry detection alerts with notifications
-- ✅ Session controls (end session, emergency)
+- ✅ Session controls (end session, emergency, cancel)
+- ✅ Session cancellation with reason selection (Uber-like)
 - ✅ Session timeline with event history
 - ✅ Child information display
 - ✅ Location history visualization
+- ✅ Cancellation tracking (who, when, why)
+
+#### **Session Cancellation** (`src/components/session/CancelSessionModal.tsx`)
+- ✅ Uber-like cancellation modal
+- ✅ 7 predefined cancellation reasons
+- ✅ Custom reason input option
+- ✅ Status-based cancellation warnings
+- ✅ Rebooking flow after cancellation
 
 ### 👶 **Babysitter App Features**
 
 #### **Home Screen** (`app/(sitter)/home.tsx`)
 - ✅ Dashboard
-- ✅ Available requests
+- ✅ Active sessions display
+- ✅ Upcoming sessions display
+- ✅ Available sessions discovery (Uber-like)
 - ✅ Quick actions
 - ✅ Hamburger menu
 
@@ -198,11 +211,19 @@
 #### **REST API Services (FastAPI)**
 - ✅ User/Profile API (`GET/PUT /api/users/me`)
 - ✅ Admin API (`GET /api/admin/users`, `/api/admin/stats`, etc.)
+- ✅ Session CRUD API (`GET/POST/PUT/DELETE /api/sessions`)
+  - ✅ Create session requests (parents)
+  - ✅ List user sessions (parents/sitters)
+  - ✅ Get session by ID
+  - ✅ Update session status (with state machine validation)
+  - ✅ Cancel sessions (soft delete with tracking)
+  - ✅ Session discovery for sitters (`GET /api/sessions/discover/available`)
 - ✅ Cry detection API (`POST /predict`)
 - ✅ Chatbot update API (`POST /bot/update`)
 - ✅ Chatbot ask API (`POST /bot/ask`)
 - ✅ JWT authentication middleware
 - ✅ Role-based access control
+- ✅ RLS (Row Level Security) with authenticated Supabase client
 
 #### **Frontend API Services**
 - ✅ `user-api.service.ts` - User/profile operations via REST API
@@ -218,6 +239,12 @@
 - ✅ Auth service
 - ✅ Child service
 - ✅ Session service
+  - ✅ Create session requests
+  - ✅ Get sessions (with caching)
+  - ✅ Update session status
+  - ✅ Cancel sessions (with reason tracking)
+  - ✅ Discover available sessions (sitters)
+  - ✅ Real-time session subscriptions
 - ✅ Alert service
 - ✅ Location service
 - ✅ Monitoring service
