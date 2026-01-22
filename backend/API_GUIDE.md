@@ -377,9 +377,30 @@ Get admin statistics.
 }
 ```
 
-### Session Endpoints
+### Session Endpoints (Uber-like CRUD System)
 
 All session endpoints require authentication. Users can only access sessions they're involved in (as parent or sitter).
+
+**Session Status Flow:**
+```
+requested → accepted → active → completed
+    ↓           ↓         ↓
+cancelled   cancelled  cancelled
+```
+
+**Status Definitions:**
+- `requested`: Parent creates a session request (default status)
+- `accepted`: Sitter accepts the request
+- `active`: Session has started
+- `completed`: Session ended successfully
+- `cancelled`: Session was cancelled (can happen at any stage before completion)
+
+**Key Features:**
+- State machine validation for status transitions
+- Role-based permissions enforced
+- Cancellation tracking (who, when, why)
+- Session discovery for sitters
+- Multiple search scopes (invite, nearby, city, nationwide)
 
 #### GET `/api/sessions`
 Get current user's sessions.
@@ -438,26 +459,44 @@ Create a new session request.
 **Response:** Created session
 
 #### PUT `/api/sessions/{session_id}`
-Update session (status, notes, etc.).
+Update session (status, notes, etc.) with state machine validation.
 
 **Authentication:** Required (must be parent or sitter in session)
 
 **Request Body:**
 ```json
 {
-  "status": "active",
+  "status": "active",  // Validated state transitions
   "endTime": "2024-01-01T14:00:00Z",
   "totalAmount": 100.00,
-  "notes": "Session completed successfully"
+  "notes": "Session completed successfully",
+  "cancellationReason": "Change of plans"  // Optional, for cancellation
 }
 ```
 
 **Response:** Updated session
 
+**Status Transitions (Validated):**
+- `requested` → `accepted` (sitter only)
+- `requested` → `cancelled` (anyone)
+- `accepted` → `active` (sitter only)
+- `accepted` → `cancelled` (anyone)
+- `active` → `completed` (sitter only)
+- `active` → `cancelled` (anyone)
+- Terminal states (`completed`, `cancelled`) cannot be changed
+
+**Automatic Tracking:**
+- When `accepted`: Sitter automatically assigned (`sitter_id` set)
+- When `cancelled`: Tracks `cancelled_at`, `cancelled_by`, `cancellation_reason`
+- When `completed`: Tracks `completed_at`, sets `end_time` if not provided
+
 #### DELETE `/api/sessions/{session_id}`
-Cancel a session.
+Cancel a session (Uber-like soft delete with tracking).
 
 **Authentication:** Required (must be parent or sitter in session)
+
+**Query Parameters:**
+- `reason` (optional): Cancellation reason
 
 **Response:**
 ```json
@@ -466,6 +505,28 @@ Cancel a session.
   "message": "Session cancelled successfully"
 }
 ```
+
+**Behavior:**
+- Soft delete: Updates status to `cancelled` (doesn't actually delete)
+- Tracks: `cancelled_at`, `cancelled_by` (parent/sitter), `cancellation_reason`
+- Cannot cancel terminal states (`completed`, `cancelled`)
+
+#### GET `/api/sessions/discover/available`
+Discover available session requests for sitters (Uber-like discovery).
+
+**Authentication:** Required (Sitter only)
+
+**Query Parameters:**
+- `scope` (optional): Filter by search scope (`nearby`, `city`, `nationwide`)
+- `max_distance` (optional): Maximum distance in km (for nearby scope)
+
+**Response:** List of available sessions with status `requested`
+
+**Logic:**
+- Shows sessions with status `requested`
+- For `invite` scope: Only shows if sitter is invited
+- For other scopes: Shows all matching sessions
+- Ordered by start time (soonest first)
 
 ### Children Endpoints
 
