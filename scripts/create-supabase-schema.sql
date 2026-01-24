@@ -208,11 +208,16 @@ CREATE TABLE IF NOT EXISTS child_instructions (
 );
 
 -- Sessions table
+-- Note: For existing databases, run UPDATE_SESSIONS_STATUS.sql to update status constraint
+--       and ADD_SESSION_TRACKING_COLUMNS.sql to add cancellation/completion tracking columns
 CREATE TABLE IF NOT EXISTS sessions (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   parent_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   sitter_id UUID REFERENCES users(id) ON DELETE SET NULL,
-  child_id UUID NOT NULL REFERENCES children(id) ON DELETE CASCADE,
+  child_id UUID NOT NULL REFERENCES children(id) ON DELETE CASCADE, -- Primary child (for backward compatibility)
+  child_ids JSONB DEFAULT '[]'::jsonb, -- Array of child IDs for sessions with multiple children. Stored as JSONB array. The child_id column remains as the primary child for backward compatibility.
+  -- Status: 'requested' (default), 'pending', 'accepted', 'active', 'completed', 'cancelled'
+  -- For existing databases: Run UPDATE_SESSIONS_STATUS.sql to add 'requested' status support
   status TEXT NOT NULL DEFAULT 'requested' CHECK (status IN ('requested', 'pending', 'accepted', 'active', 'completed', 'cancelled')),
   start_time TIMESTAMPTZ NOT NULL,
   end_time TIMESTAMPTZ,
@@ -222,12 +227,24 @@ CREATE TABLE IF NOT EXISTS sessions (
   notes TEXT,
   search_scope TEXT DEFAULT 'invite' CHECK (search_scope IN ('invite', 'nearby', 'city', 'nationwide')), -- Session request scope
   max_distance_km NUMERIC(5, 2), -- Maximum distance in km for nearby search scope (only used when search_scope = 'nearby')
+  time_slots JSONB DEFAULT '[]'::jsonb, -- Array of time slots for multi-day sessions (Time Slots mode). Format: [{"date": "2026-01-29", "startTime": "09:00", "endTime": "12:00", "hours": 3}, ...]
+  -- Cancellation tracking (Uber-like)
+  -- For existing databases: Run ADD_SESSION_TRACKING_COLUMNS.sql to add these columns
+  cancelled_at TIMESTAMPTZ,
+  cancelled_by TEXT CHECK (cancelled_by IN ('parent', 'sitter', 'system')),
+  cancellation_reason TEXT,
+  -- Completion tracking
+  completed_at TIMESTAMPTZ,
+  -- Timestamps
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- Index for sessions search_scope
 CREATE INDEX IF NOT EXISTS idx_sessions_search_scope ON sessions(search_scope) WHERE search_scope != 'invite';
+
+-- Index for child_ids JSONB queries (useful for filtering sessions by multiple children)
+CREATE INDEX IF NOT EXISTS idx_sessions_child_ids ON sessions USING GIN (child_ids);
 
 -- Alerts table (for real-time subscriptions)
 CREATE TABLE IF NOT EXISTS alerts (
@@ -314,6 +331,30 @@ CREATE INDEX IF NOT EXISTS idx_sessions_child_id ON sessions(child_id); -- Added
 CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
 CREATE INDEX IF NOT EXISTS idx_sessions_start_time ON sessions(start_time); -- Added: Index for time-based queries
 CREATE INDEX IF NOT EXISTS idx_sessions_created_at ON sessions(created_at DESC); -- Added: Index for sorting by creation time
+
+-- Indexes for cancellation and completion tracking (Uber-like)
+-- For existing databases: These indexes are created by ADD_SESSION_TRACKING_COLUMNS.sql
+CREATE INDEX IF NOT EXISTS idx_sessions_cancelled_at ON sessions(cancelled_at) WHERE cancelled_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_sessions_completed_at ON sessions(completed_at) WHERE completed_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_sessions_cancelled_by ON sessions(cancelled_by) WHERE cancelled_by IS NOT NULL;
+
+-- ============================================
+-- MIGRATION SCRIPTS FOR EXISTING DATABASES
+-- ============================================
+-- If you have an existing database, run these scripts in order:
+--
+-- 1. UPDATE_SESSIONS_STATUS.sql
+--    - Updates status constraint to include 'requested' status
+--    - Sets default status to 'requested'
+--    - Adds missing indexes (idx_sessions_child_id, idx_sessions_start_time, idx_sessions_created_at)
+--
+-- 2. ADD_SESSION_TRACKING_COLUMNS.sql
+--    - Adds cancellation tracking columns (cancelled_at, cancelled_by, cancellation_reason)
+--    - Adds completion tracking column (completed_at)
+--    - Creates indexes for cancellation/completion queries
+--    - Adds column comments for documentation
+--
+-- These migrations are already included in this schema file for new installations.
 CREATE INDEX IF NOT EXISTS idx_alerts_parent_id ON alerts(parent_id);
 CREATE INDEX IF NOT EXISTS idx_alerts_status ON alerts(status);
 CREATE INDEX IF NOT EXISTS idx_alerts_created_at ON alerts(created_at DESC);

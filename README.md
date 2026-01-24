@@ -88,7 +88,6 @@ A cross-platform mobile application for connecting parents with verified babysit
 - **[SECURITY.md](./SECURITY.md)** - Security best practices and guidelines
 - **[TESTING_GUIDE.md](./TESTING_GUIDE.md)** - Complete testing guide
 - **[QUICK_START_TESTING.md](./QUICK_START_TESTING.md)** - Quick testing reference
-- **[SESSION_MANAGEMENT.md](./SESSION_MANAGEMENT.md)** - Session management documentation
 - **[backend/API_GUIDE.md](./backend/API_GUIDE.md)** - Complete REST API documentation with setup, testing, and usage
 - **[backend/README_SETUP.md](./backend/README_SETUP.md)** - Backend setup and quick start guide
 
@@ -119,7 +118,13 @@ A cross-platform mobile application for connecting parents with verified babysit
 - ✅ Role-based access (Parent, Sitter, Admin)
 - ✅ Profile management with image uploads
 - ✅ Child management
-- ✅ Session management
+- ✅ Session management (Uber-like CRUD system)
+  - Session creation with multiple search scopes (invite, nearby, city, nationwide)
+  - Session discovery for sitters
+  - Status transitions with state machine validation
+  - Parent cancellation with reason selection (Uber-like modal)
+  - Rebooking flow after cancellation
+  - Automatic tracking (cancelled_at, cancelled_by, cancellation_reason, completed_at)
 - ✅ Verification system
 - ✅ Chat and messaging
 - ✅ GPS tracking
@@ -187,8 +192,29 @@ frontend/
 **Backend API (FastAPI):**
 - User/Profile endpoints (`/api/users/me`)
 - Admin endpoints (`/api/admin/*`)
+- Session CRUD endpoints (`/api/sessions/*`) - Uber-like session management
+  - `POST /api/sessions` - Create session requests (parents only)
+  - `GET /api/sessions` - List user's sessions (filterable by status)
+  - `GET /api/sessions/{id}` - Get session by ID
+  - `GET /api/sessions/discover/available` - Discover available sessions (sitters only)
+  - `PUT /api/sessions/{id}` - Update session (status transitions with validation)
+  - `DELETE /api/sessions/{id}` - Cancel session (soft delete with tracking)
 - AI endpoints (`/predict`, `/bot/*`)
 - See `backend/API_GUIDE.md` for complete API documentation
+
+**Session Status Flow:**
+```
+requested → accepted → active → completed
+    ↓           ↓         ↓
+cancelled   cancelled  cancelled
+```
+
+**Session Features:**
+- State machine validation for status transitions
+- Role-based permissions (parents create, sitters accept/start/complete)
+- Cancellation tracking (who, when, why)
+- Multiple search scopes (invite, nearby, city, nationwide)
+- Real-time updates via Supabase Realtime
 
 ### Scripts
 

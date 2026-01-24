@@ -122,17 +122,18 @@ export default function SessionControls({
           </>
         )}
 
-        {sessionStatus === 'requested' && onCancel && (
+        {(sessionStatus === 'requested' || sessionStatus === 'accepted') && onCancel && (
           <Button
-            title="Cancel Request"
+            title={sessionStatus === 'requested' ? 'Cancel Request' : 'Cancel Session'}
             onPress={onCancel}
             variant="outline"
             disabled={isLoading}
-            style={styles.button}
+            style={[styles.button, { borderColor: colors.error || '#ef4444' }]}
+            textStyle={{ color: colors.error || '#ef4444' }}
           />
         )}
 
-        {sessionStatus === 'accepted' && (
+        {sessionStatus === 'accepted' && !onCancel && (
           <View style={styles.waitingContainer}>
             <Ionicons name="hourglass-outline" size={24} color={colors.warning} />
             <Text style={[styles.waitingText, { color: colors.textSecondary }]}>

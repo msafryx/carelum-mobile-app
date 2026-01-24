@@ -5,11 +5,19 @@
 -- Run this ENTIRE script in Supabase SQL Editor
 --
 -- Buckets created:
--- 1. profile-images - For user profile pictures
--- 2. child-images - For child profile pictures
--- 3. verification-documents - For sitter verification documents (ID, background check, certifications)
+-- 1. profile-images - For user profile pictures (5MB limit, public)
+-- 2. child-images - For child profile pictures (5MB limit, public)
+-- 3. verification-documents - For sitter verification documents (10MB limit, public)
+--    - ID documents, background checks, qualifications, certifications
 --
--- Each bucket has 4 RLS policies: INSERT, UPDATE, SELECT, DELETE
+-- Policies per bucket:
+-- - profile-images: 4 policies (INSERT, UPDATE, SELECT, DELETE)
+-- - child-images: 4 policies (INSERT, UPDATE, SELECT, DELETE)
+-- - verification-documents: 5 policies (INSERT, UPDATE, SELECT public, SELECT authenticated, DELETE)
+--
+-- Total: 13 policies
+-- All buckets are PUBLIC for direct URL access
+-- Users can only upload/update/delete files in their own folder ({user_id}/)
 -- ============================================
 
 -- ============================================

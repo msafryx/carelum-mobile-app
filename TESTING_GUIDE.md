@@ -221,16 +221,20 @@ curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/api/children/<child
 
 **Via Frontend:**
 1. Login as **Parent**
-2. Create a new session:
+2. Go to **Search** screen
+3. Create a new session:
    - Select child
-   - Select sitter (if available)
+   - Select search scope (invite, nearby, city, nationwide)
    - Set start time
    - Set end time
    - Add location
+   - Set hourly rate
+   - Add notes (optional)
 
 **Expected:**
 - ✅ Session created in `sessions` table
-- ✅ Status: `pending`
+- ✅ Status: `requested` (default)
+- ✅ Session appears in **Requested Sessions** section on home screen
 - ✅ Session appears in **Activities** screen
 
 **Verify in Supabase:**
@@ -238,25 +242,64 @@ curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/api/children/<child
 SELECT * FROM sessions WHERE parent_id = '<your-user-id>' ORDER BY created_at DESC LIMIT 1;
 ```
 
-### 6.2 Accept Session (Sitter)
+**Test API:**
+```bash
+# Create session
+curl -X POST -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "parentId": "<parent-id>",
+    "childId": "<child-id>",
+    "startTime": "2024-12-25T10:00:00Z",
+    "endTime": "2024-12-25T14:00:00Z",
+    "location": "123 Main St",
+    "hourlyRate": 25.50,
+    "searchScope": "invite",
+    "sitterId": "<sitter-id>"
+  }' \
+  http://localhost:8000/api/sessions
+```
+
+### 6.2 Discover Available Sessions (Sitter)
 
 **Via Frontend:**
 1. Login as **Sitter**
-2. Go to **Requests** or **Activities** screen
-3. Find pending session
-4. Accept session
+2. Go to **Home** screen
+3. Scroll to **Available Sessions** section
+
+**Expected:**
+- ✅ Shows sessions with status `requested`
+- ✅ Filters by search scope (nearby, city, nationwide)
+- ✅ Shows invited sessions if `searchScope = 'invite'`
+- ✅ Displays hourly rate, location, and time
+
+**Test API:**
+```bash
+# Discover available sessions
+curl -H "Authorization: Bearer $TOKEN" \
+  "http://localhost:8000/api/sessions/discover/available?scope=nearby&max_distance=10"
+```
+
+### 6.3 Accept Session (Sitter)
+
+**Via Frontend:**
+1. Login as **Sitter**
+2. Go to **Requests** or **Home** screen
+3. Find requested session
+4. Click **Accept**
 
 **Expected:**
 - ✅ Session status changes to `accepted`
-- ✅ `sitter_id` updated
+- ✅ `sitter_id` automatically assigned
 - ✅ Both parent and sitter see updated status
+- ✅ Session moves to **Upcoming Sessions** for parent
 
 **Verify in Supabase:**
 ```sql
-SELECT status, sitter_id FROM sessions WHERE id = '<session-id>';
+SELECT status, sitter_id, updated_at FROM sessions WHERE id = '<session-id>';
 ```
 
-### 6.3 Start Session (Sitter)
+### 6.4 Start Session (Sitter)
 
 **Via Frontend:**
 1. Sitter starts session
@@ -267,7 +310,60 @@ SELECT status, sitter_id FROM sessions WHERE id = '<session-id>';
 - ✅ GPS tracking begins
 - ✅ Real-time monitoring available
 
-### 6.4 View Session Details
+### 6.5 Cancel Session (Parent - Uber-like)
+
+**Via Frontend:**
+1. Login as **Parent**
+2. Go to **Home** screen
+3. Find session in **Requested Sessions** or **Upcoming Sessions**
+4. Click **Cancel** button
+5. Select cancellation reason from modal:
+   - Change of plans
+   - Found another sitter
+   - No longer needed
+   - Sitter too far
+   - Wrong time
+   - Emergency
+   - Other (with custom input)
+6. Confirm cancellation
+
+**Expected:**
+- ✅ Session status changes to `cancelled`
+- ✅ `cancelled_at` timestamp set
+- ✅ `cancelled_by` set to 'parent'
+- ✅ `cancellation_reason` saved
+- ✅ Option to "Request New Session" appears
+- ✅ Session removed from active lists
+
+**Verify in Supabase:**
+```sql
+SELECT status, cancelled_at, cancelled_by, cancellation_reason 
+FROM sessions WHERE id = '<session-id>';
+```
+
+**Test API:**
+```bash
+# Cancel session with reason
+curl -X DELETE \
+  -H "Authorization: Bearer $TOKEN" \
+  "http://localhost:8000/api/sessions/<session-id>?reason=Change%20of%20plans"
+```
+
+### 6.6 Cancel Session (Sitter)
+
+**Via Frontend:**
+1. Login as **Sitter**
+2. Go to **Requests** screen
+3. Find requested session
+4. Click **Decline**
+5. Optionally provide reason
+
+**Expected:**
+- ✅ Session status changes to `cancelled`
+- ✅ `cancelled_by` set to 'sitter'
+- ✅ Session removed from sitter's requests
+
+### 6.7 View Session Details
 
 **Via Frontend:**
 1. Click on session in **Activities** screen
@@ -289,7 +385,7 @@ curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/api/sessions/<sessi
 curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/api/sessions
 ```
 
-### 6.5 Complete Session
+### 6.8 Complete Session
 
 **Via Frontend:**
 1. Sitter ends session

@@ -11,15 +11,24 @@ export interface LocationUpdate {
   speed?: number;
 }
 
+export interface TimeSlot {
+  date: string; // Date string in format "YYYY-MM-DD" or "MMM dd, yyyy"
+  startTime: string; // Time string in format "HH:mm" or ISO string
+  endTime: string; // Time string in format "HH:mm" or ISO string
+  hours: number; // Duration in hours
+}
+
 export interface Session {
   id: string;
   parentId: string;
   sitterId: string;
-  childId: string;
+  childId: string; // Primary child (for backward compatibility)
+  childIds?: string[]; // Array of child IDs for sessions with multiple children
   status: SessionStatus;
   startTime: Date;
   endTime?: Date;
   duration?: number; // in hours
+  timeSlots?: TimeSlot[]; // Array of time slots for multi-day sessions (Time Slots mode)
   
   // Location
   location?: {

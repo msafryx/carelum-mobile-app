@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from typing import Optional, List
 from decimal import Decimal
 from datetime import datetime
+import json
 
 from app.utils.auth import verify_token, CurrentUser, security
 from app.utils.error_handler import handle_error, AppError
@@ -15,12 +16,21 @@ from fastapi.security import HTTPAuthorizationCredentials
 router = APIRouter()
 
 
+class TimeSlot(BaseModel):
+    """Time slot model for multi-day sessions"""
+    date: str
+    startTime: str
+    endTime: str
+    hours: float
+
+
 class SessionResponse(BaseModel):
     """Session response model"""
     id: str
     parentId: str
     sitterId: Optional[str] = None
     childId: str
+    childIds: Optional[List[str]] = None  # Array of child IDs for sessions with multiple children
     status: str
     startTime: str
     endTime: Optional[str] = None
@@ -30,6 +40,11 @@ class SessionResponse(BaseModel):
     notes: Optional[str] = None
     searchScope: Optional[str] = None
     maxDistanceKm: Optional[float] = None
+    timeSlots: Optional[List[TimeSlot]] = None  # Array of time slots for multi-day sessions
+    cancelledAt: Optional[str] = None
+    cancelledBy: Optional[str] = None
+    cancellationReason: Optional[str] = None
+    completedAt: Optional[str] = None
     createdAt: str
     updatedAt: str
 
@@ -39,12 +54,15 @@ class CreateSessionRequest(BaseModel):
     parentId: str
     sitterId: Optional[str] = None
     childId: str
+    childIds: Optional[List[str]] = None  # Array of child IDs for sessions with multiple children
     startTime: str
+    endTime: Optional[str] = None
     location: Optional[str] = None
     hourlyRate: Optional[float] = None
     notes: Optional[str] = None
     searchScope: Optional[str] = None  # 'invite' | 'nearby' | 'city' | 'nationwide'
     maxDistanceKm: Optional[float] = None  # Only used when searchScope = 'nearby'
+    timeSlots: Optional[List[TimeSlot]] = None  # Array of time slots for multi-day sessions
 
 
 class UpdateSessionRequest(BaseModel):
@@ -55,15 +73,39 @@ class UpdateSessionRequest(BaseModel):
     hourlyRate: Optional[float] = None
     totalAmount: Optional[float] = None
     notes: Optional[str] = None
+    cancellationReason: Optional[str] = None  # For cancellation tracking
 
 
 def db_to_session_response(session_data: dict) -> SessionResponse:
     """Convert database session to API response"""
+    # Parse child_ids JSONB field if present
+    child_ids = None
+    if session_data.get("child_ids"):
+        if isinstance(session_data["child_ids"], str):
+            try:
+                child_ids = json.loads(session_data["child_ids"])
+            except:
+                child_ids = None
+        elif isinstance(session_data["child_ids"], list):
+            child_ids = session_data["child_ids"]
+    
+    # Parse time_slots JSONB field if present
+    time_slots = None
+    if session_data.get("time_slots"):
+        if isinstance(session_data["time_slots"], str):
+            try:
+                time_slots = json.loads(session_data["time_slots"])
+            except:
+                time_slots = None
+        elif isinstance(session_data["time_slots"], list):
+            time_slots = session_data["time_slots"]
+    
     return SessionResponse(
         id=session_data["id"],
         parentId=session_data["parent_id"],
         sitterId=session_data.get("sitter_id"),
         childId=session_data["child_id"],
+        childIds=child_ids,  # Array of child IDs
         status=session_data["status"],
         startTime=session_data["start_time"],
         endTime=session_data.get("end_time"),
@@ -73,6 +115,11 @@ def db_to_session_response(session_data: dict) -> SessionResponse:
         notes=session_data.get("notes"),
         searchScope=session_data.get("search_scope"),
         maxDistanceKm=float(session_data["max_distance_km"]) if session_data.get("max_distance_km") else None,
+        timeSlots=time_slots,  # Array of time slots
+        cancelledAt=session_data.get("cancelled_at"),
+        cancelledBy=session_data.get("cancelled_by"),
+        cancellationReason=session_data.get("cancellation_reason"),
+        completedAt=session_data.get("completed_at"),
         createdAt=session_data["created_at"],
         updatedAt=session_data.get("updated_at", session_data["created_at"])
     )
@@ -86,6 +133,57 @@ def verify_session_access(session_data: dict, user: CurrentUser) -> bool:
         session_data.get("parent_id") == user.id or
         session_data.get("sitter_id") == user.id
     )
+
+
+def validate_status_transition(current_status: str, new_status: str, user_role: str, session_data: dict) -> tuple[bool, str]:
+    """
+    Validate session status transition (Uber-like state machine)
+    Returns: (is_valid, error_message)
+    """
+    # Define valid transitions
+    valid_transitions = {
+        'requested': ['accepted', 'cancelled'],  # Can be accepted by sitter or cancelled by anyone
+        'accepted': ['active', 'cancelled'],     # Can start (active) or cancel
+        'active': ['completed', 'cancelled'],    # Can complete or cancel
+        'completed': [],                          # Terminal state
+        'cancelled': [],                          # Terminal state
+        'pending': ['accepted', 'cancelled']     # Legacy support
+    }
+    
+    # Terminal states cannot be changed
+    if current_status in ['completed', 'cancelled']:
+        return False, f"Cannot change status from {current_status} (terminal state)"
+    
+    # Check if transition is valid
+    if new_status not in valid_transitions.get(current_status, []):
+        return False, f"Invalid status transition from {current_status} to {new_status}"
+    
+    # Role-based validation
+    if new_status == 'accepted':
+        # Only sitters can accept, and only if they're assigned or it's an open request
+        if user_role != 'sitter':
+            return False, "Only sitters can accept session requests"
+        # For 'invite' scope, sitter_id must match
+        if session_data.get('search_scope') == 'invite' and session_data.get('sitter_id') != session_data.get('current_user_id'):
+            return False, "This session was not invited to you"
+    
+    if new_status == 'active':
+        # Only sitter can start the session
+        if user_role != 'sitter':
+            return False, "Only sitters can start sessions"
+        # Must be accepted first
+        if current_status != 'accepted':
+            return False, "Session must be accepted before it can be started"
+    
+    if new_status == 'completed':
+        # Only sitter can complete
+        if user_role != 'sitter':
+            return False, "Only sitters can complete sessions"
+        # Must be active first
+        if current_status != 'active':
+            return False, "Session must be active before it can be completed"
+    
+    return True, ""
 
 
 @router.get("", response_model=List[SessionResponse])
@@ -151,13 +249,16 @@ async def get_user_sessions(
 @router.get("/{session_id}", response_model=SessionResponse)
 async def get_session_by_id(
     session_id: str,
-    current_user: CurrentUser = Depends(verify_token)
+    current_user: CurrentUser = Depends(verify_token),
+    credentials: HTTPAuthorizationCredentials = Depends(security)
 ):
     """
     Get session by ID
     """
     try:
-        supabase = get_supabase()
+        # Use authenticated Supabase client for RLS
+        auth_token = credentials.credentials
+        supabase = get_supabase_with_auth(auth_token)
         
         if not supabase:
             raise AppError(
@@ -265,10 +366,13 @@ async def create_session(
         
         # Insert session
         # Convert Decimal to float for JSON serialization (Supabase will handle the conversion to DECIMAL in DB)
+        # Handle child_ids: if provided, use it; otherwise, default to array with single child_id
+        child_ids_array = session_data.childIds if session_data.childIds else [session_data.childId]
+        
         insert_data = {
             "parent_id": session_data.parentId,
             "sitter_id": session_data.sitterId if search_scope == 'invite' else None,
-            "child_id": session_data.childId,
+            "child_id": session_data.childId,  # Primary child (for backward compatibility)
             "status": "requested",
             "start_time": session_data.startTime,
             "end_time": session_data.endTime if session_data.endTime else None,  # Include end_time
@@ -278,6 +382,26 @@ async def create_session(
             "search_scope": search_scope,
             "max_distance_km": float(session_data.maxDistanceKm) if session_data.maxDistanceKm else None,
         }
+        
+        # Only include child_ids if the column exists (try-catch will handle if it doesn't)
+        # If child_ids column doesn't exist, we'll fall back to just using child_id
+        if child_ids_array and len(child_ids_array) > 1:
+            # Only add child_ids if we have multiple children (optimization)
+            insert_data["child_ids"] = json.dumps(child_ids_array)
+        
+        # Include time_slots if provided (for Time Slots mode)
+        # Note: This column may not exist in older databases, so we'll handle it gracefully
+        if session_data.timeSlots and len(session_data.timeSlots) > 0:
+            time_slots_data = [
+                {
+                    "date": slot.date,
+                    "startTime": slot.startTime,
+                    "endTime": slot.endTime,
+                    "hours": slot.hours
+                }
+                for slot in session_data.timeSlots
+            ]
+            insert_data["time_slots"] = json.dumps(time_slots_data)
         
         print(f"🔄 Attempting to insert session with data: {insert_data}")
         print(f"📤 Insert data keys: {list(insert_data.keys())}")
@@ -292,7 +416,25 @@ async def create_session(
             # Supabase Python client: The insert() method returns a query builder
             # In newer versions, we need to use execute() directly, which returns the inserted data
             # The .select() method might not be available on SyncQueryRequestBuilder
-            response = supabase.table("sessions").insert(insert_data).execute()
+            
+            # Try to insert with child_ids and time_slots first, if it fails due to missing column, retry without them
+            try:
+                response = supabase.table("sessions").insert(insert_data).execute()
+            except Exception as column_error:
+                error_str = str(column_error)
+                # Check if error is about missing columns
+                if "child_ids" in error_str.lower() or "time_slots" in error_str.lower() or "PGRST204" in error_str:
+                    print(f"⚠️ Some columns not found in database, retrying without optional columns")
+                    # Remove optional columns from insert_data and retry
+                    insert_data_retry = {k: v for k, v in insert_data.items() 
+                                       if k not in ["child_ids", "time_slots"]}
+                    if "child_ids" in error_str.lower():
+                        print(f"💡 Run scripts/ADD_CHILD_IDS_COLUMN.sql in Supabase SQL Editor to enable multiple children per session")
+                    if "time_slots" in error_str.lower():
+                        print(f"💡 Run scripts/ADD_TIME_SLOTS_COLUMN.sql in Supabase SQL Editor to enable time slots")
+                    response = supabase.table("sessions").insert(insert_data_retry).execute()
+                else:
+                    raise  # Re-raise if it's a different error
             print(f"📥 Insert response type: {type(response)}")
             print(f"📥 Response has data attr: {hasattr(response, 'data')}")
             print(f"📥 Response has error attr: {hasattr(response, 'error')}")
@@ -414,13 +556,16 @@ async def create_session(
 async def update_session(
     session_id: str,
     updates: UpdateSessionRequest,
-    current_user: CurrentUser = Depends(verify_token)
+    current_user: CurrentUser = Depends(verify_token),
+    credentials: HTTPAuthorizationCredentials = Depends(security)
 ):
     """
-    Update session (status, notes, etc.)
+    Update session (status, notes, etc.) with proper state machine validation
     """
     try:
-        supabase = get_supabase()
+        # Use authenticated Supabase client for RLS
+        auth_token = credentials.credentials
+        supabase = get_supabase_with_auth(auth_token)
         
         if not supabase:
             raise AppError(
@@ -440,6 +585,7 @@ async def update_session(
             )
         
         session_data = response.data
+        current_status = session_data.get("status")
         
         # Verify access
         if not verify_session_access(session_data, current_user):
@@ -449,18 +595,55 @@ async def update_session(
                 status_code=403
             )
         
+        # Validate status transition if status is being updated
+        if updates.status is not None and updates.status != current_status:
+            is_valid, error_msg = validate_status_transition(
+                current_status, 
+                updates.status, 
+                current_user.role,
+                {**session_data, 'current_user_id': current_user.id}
+            )
+            if not is_valid:
+                raise AppError(
+                    code="INVALID_STATUS_TRANSITION",
+                    message=error_msg,
+                    status_code=400
+                )
+        
         # Build update data
         update_data = {}
         if updates.status is not None:
             update_data["status"] = updates.status
+            
+            # Handle status-specific updates (Uber-like tracking)
+            if updates.status == "accepted":
+                # When sitter accepts, assign them to the session
+                if current_user.role == "sitter" and not session_data.get("sitter_id"):
+                    update_data["sitter_id"] = current_user.id
+            elif updates.status == "cancelled":
+                # Track who cancelled and when
+                update_data["cancelled_at"] = datetime.utcnow().isoformat()
+                update_data["cancelled_by"] = current_user.role
+                if updates.cancellationReason:
+                    update_data["cancellation_reason"] = updates.cancellationReason
+            elif updates.status == "completed":
+                # Track completion time
+                update_data["completed_at"] = datetime.utcnow().isoformat()
+                if not updates.endTime:
+                    update_data["end_time"] = datetime.utcnow().isoformat()
+            elif updates.status == "active":
+                # Ensure sitter is assigned
+                if current_user.role == "sitter" and not session_data.get("sitter_id"):
+                    update_data["sitter_id"] = current_user.id
+        
         if updates.endTime is not None:
             update_data["end_time"] = updates.endTime
         if updates.location is not None:
             update_data["location"] = updates.location
         if updates.hourlyRate is not None:
-            update_data["hourly_rate"] = Decimal(str(updates.hourlyRate))
+            update_data["hourly_rate"] = float(updates.hourlyRate)  # Convert to float for JSON
         if updates.totalAmount is not None:
-            update_data["total_amount"] = Decimal(str(updates.totalAmount))
+            update_data["total_amount"] = float(updates.totalAmount)  # Convert to float for JSON
         if updates.notes is not None:
             update_data["notes"] = updates.notes
         
@@ -488,13 +671,17 @@ async def update_session(
 @router.delete("/{session_id}")
 async def cancel_session(
     session_id: str,
-    current_user: CurrentUser = Depends(verify_token)
+    current_user: CurrentUser = Depends(verify_token),
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    reason: Optional[str] = Query(None, description="Cancellation reason")
 ):
     """
-    Cancel a session
+    Cancel a session (Uber-like: soft delete with tracking)
     """
     try:
-        supabase = get_supabase()
+        # Use authenticated Supabase client for RLS
+        auth_token = credentials.credentials
+        supabase = get_supabase_with_auth(auth_token)
         
         if not supabase:
             raise AppError(
@@ -514,6 +701,7 @@ async def cancel_session(
             )
         
         session_data = response.data
+        current_status = session_data.get("status")
         
         # Verify access
         if not verify_session_access(session_data, current_user):
@@ -523,11 +711,24 @@ async def cancel_session(
                 status_code=403
             )
         
-        # Update status to cancelled instead of deleting
+        # Validate cancellation is allowed
+        if current_status in ['completed', 'cancelled']:
+            raise AppError(
+                code="INVALID_STATUS",
+                message=f"Cannot cancel session with status {current_status}",
+                status_code=400
+            )
+        
+        # Update status to cancelled with tracking
         update_data = {
             "status": "cancelled",
+            "cancelled_at": datetime.utcnow().isoformat(),
+            "cancelled_by": current_user.role,
             "updated_at": datetime.utcnow().isoformat()
         }
+        
+        if reason:
+            update_data["cancellation_reason"] = reason
         
         response = supabase.table("sessions").update(update_data).eq("id", session_id).execute()
         
@@ -547,3 +748,80 @@ async def cancel_session(
         raise
     except Exception as e:
         raise handle_error(e, "Failed to cancel session")
+
+
+@router.get("/discover/available", response_model=List[SessionResponse])
+async def discover_available_sessions(
+    current_user: CurrentUser = Depends(verify_token),
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    scope: Optional[str] = Query(None, description="Filter by search scope: nearby, city, nationwide"),
+    max_distance: Optional[float] = Query(None, description="Maximum distance in km (for nearby scope)")
+):
+    """
+    Discover available session requests for sitters (Uber-like discovery)
+    Returns sessions that match the sitter's location and preferences
+    """
+    try:
+        # Only sitters can discover sessions
+        if current_user.role != "sitter":
+            raise AppError(
+                code="FORBIDDEN",
+                message="Only sitters can discover available sessions",
+                status_code=403
+            )
+        
+        # Use authenticated Supabase client for RLS
+        auth_token = credentials.credentials
+        supabase = get_supabase_with_auth(auth_token)
+        
+        if not supabase:
+            raise AppError(
+                code="DB_NOT_AVAILABLE",
+                message="Database connection not available",
+                status_code=503
+            )
+        
+        # Query for available sessions (status = 'requested')
+        # Show: non-invite scopes OR invite scopes where sitter is invited
+        query = supabase.table("sessions").select("*").eq("status", "requested")
+        
+        # Filter by scope if provided
+        if scope:
+            if scope not in ['nearby', 'city', 'nationwide']:
+                raise AppError(
+                    code="INVALID_SCOPE",
+                    message="Scope must be one of: nearby, city, nationwide",
+                    status_code=400
+                )
+            query = query.eq("search_scope", scope)
+        
+        # For nearby scope, filter by max_distance if provided
+        if scope == 'nearby' and max_distance:
+            query = query.lte("max_distance_km", max_distance)
+        
+        # Order by start_time (soonest first)
+        query = query.order("start_time", desc=False).limit(100)
+        
+        response = query.execute()
+        
+        sessions = []
+        for session_data in (response.data or []):
+            # Filter: show non-invite scopes OR invite scopes where sitter is invited
+            search_scope = session_data.get("search_scope")
+            sitter_id = session_data.get("sitter_id")
+            
+            if search_scope == "invite":
+                # Only show if this sitter is invited
+                if sitter_id != current_user.id:
+                    continue  # Skip if not invited to this session
+            
+            # For other scopes (nearby, city, nationwide), show all
+            sessions.append(db_to_session_response(session_data))
+        
+        print(f"🔍 Discovered {len(sessions)} available sessions for sitter {current_user.id}")
+        return sessions
+        
+    except AppError:
+        raise
+    except Exception as e:
+        raise handle_error(e, "Failed to discover available sessions")

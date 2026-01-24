@@ -138,10 +138,90 @@ export function handleNetworkError(error: any): AppError {
 
 /**
  * Handle API errors
+ * Backend returns errors in format: { success: false, error: { code: string, message: string } }
  */
 export function handleAPIError(error: any, statusCode?: number): AppError {
+  // Extract error details from backend response format
+  let errorCode: ErrorCode = ErrorCode.API_ERROR;
+  let errorMessage: string | undefined;
+  let errorDetails: any = error;
+
+  // Check if error is in backend format: { success: false, error: { code, message } }
+  if (error && typeof error === 'object') {
+    if (error.error && typeof error.error === 'object') {
+      // Backend error format
+      const backendError = error.error;
+      errorMessage = backendError.message;
+      errorDetails = backendError;
+
+      // Map backend error codes to frontend error codes
+      const backendCode = backendError.code?.toUpperCase() || '';
+      switch (backendCode) {
+        case 'UNAUTHORIZED':
+        case 'AUTH_ERROR':
+          errorCode = ErrorCode.AUTH_ERROR;
+          break;
+        case 'FORBIDDEN':
+        case 'PERMISSION_DENIED':
+          errorCode = ErrorCode.PERMISSION_DENIED;
+          break;
+        case 'NOT_FOUND':
+        case 'PROFILE_NOT_FOUND':
+        case 'USER_NOT_FOUND':
+        case 'SESSION_NOT_FOUND':
+        case 'CHILD_NOT_FOUND':
+          errorCode = ErrorCode.DOCUMENT_NOT_FOUND;
+          break;
+        case 'BAD_REQUEST':
+        case 'INVALID_REQUEST':
+        case 'INVALID_SCOPE':
+        case 'INVALID_STATUS':
+        case 'VALIDATION_ERROR':
+          errorCode = ErrorCode.BAD_REQUEST;
+          break;
+        case 'CREATE_FAILED':
+        case 'UPDATE_FAILED':
+        case 'DB_NOT_AVAILABLE':
+        case 'INTERNAL_SERVER_ERROR':
+          errorCode = ErrorCode.SERVER_ERROR;
+          break;
+        default:
+          // Use status code as fallback
+          if (statusCode === 400) {
+            errorCode = ErrorCode.BAD_REQUEST;
+          } else if (statusCode === 401 || statusCode === 403) {
+            errorCode = ErrorCode.AUTH_ERROR;
+          } else if (statusCode === 404) {
+            errorCode = ErrorCode.DOCUMENT_NOT_FOUND;
+          } else if (statusCode === 500 || statusCode === 502 || statusCode === 503) {
+            errorCode = ErrorCode.SERVER_ERROR;
+          }
+      }
+    } else if (error.message) {
+      // Direct error object with message
+      errorMessage = error.message;
+    }
+  }
+
+  // Use extracted message or fallback to status-based message
+  if (errorMessage) {
+    return {
+      code: errorCode,
+      message: errorMessage,
+      details: errorDetails,
+      originalError: error,
+    };
+  }
+
+  // Fallback to status code-based errors
   if (statusCode === 400) {
     return createError(ErrorCode.BAD_REQUEST, error);
+  }
+  if (statusCode === 401 || statusCode === 403) {
+    return createError(ErrorCode.AUTH_ERROR, error);
+  }
+  if (statusCode === 404) {
+    return createError(ErrorCode.DOCUMENT_NOT_FOUND, error);
   }
   if (statusCode === 500 || statusCode === 502 || statusCode === 503) {
     return createError(ErrorCode.SERVER_ERROR, error);
