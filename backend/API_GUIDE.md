@@ -290,11 +290,19 @@ Update current user's profile.
   "preferredLanguage": "en",
   "theme": "dark",
   "bio": "About me...",
-  "hourlyRate": 25.50
+  "hourlyRate": 25.50,
+  "address": "123 Main St",
+  "city": "New York",
+  "country": "USA"
 }
 ```
 
-**Response:** Same as GET `/api/users/me`
+**Response:** Updated user profile (same format as GET `/api/users/me`)
+
+**Note:** 
+- All fields are optional
+- Role cannot be changed via this endpoint (admin only)
+- Uses authenticated Supabase client for RLS
 
 ### Admin Endpoints
 
@@ -425,6 +433,12 @@ Get current user's sessions.
     "hourlyRate": 25.50,
     "totalAmount": null,
     "notes": null,
+    "searchScope": "invite",
+    "maxDistanceKm": null,
+    "cancelledAt": null,
+    "cancelledBy": null,
+    "cancellationReason": null,
+    "completedAt": null,
     "createdAt": "2024-01-01T09:00:00Z",
     "updatedAt": "2024-01-01T10:00:00Z"
   }
@@ -436,7 +450,7 @@ Get session by ID.
 
 **Authentication:** Required (must be parent or sitter in session)
 
-**Response:** Same format as session in list
+**Response:** Same format as session in list (includes all cancellation/completion tracking fields)
 
 #### POST `/api/sessions`
 Create a new session request.
@@ -447,16 +461,25 @@ Create a new session request.
 ```json
 {
   "parentId": "uuid",
-  "sitterId": "uuid",
+  "sitterId": "uuid",  // Required if searchScope = 'invite'
   "childId": "uuid",
   "startTime": "2024-01-01T10:00:00Z",
+  "endTime": "2024-01-01T14:00:00Z",  // Optional
   "location": "123 Main St",
   "hourlyRate": 25.50,
-  "notes": "Please arrive 10 minutes early"
+  "notes": "Please arrive 10 minutes early",
+  "searchScope": "invite",  // 'invite' | 'nearby' | 'city' | 'nationwide'
+  "maxDistanceKm": 10  // Required if searchScope = 'nearby' (5, 10, or 25)
 }
 ```
 
-**Response:** Created session
+**Response:** Created session with status `requested`
+
+**Validation:**
+- Parent ID must match authenticated user
+- If `searchScope = 'invite'`: `sitterId` is required
+- If `searchScope = 'nearby'`: `maxDistanceKm` is required (must be 5, 10, or 25)
+- Status always starts as `requested`
 
 #### PUT `/api/sessions/{session_id}`
 Update session (status, notes, etc.) with state machine validation.
@@ -641,7 +664,7 @@ Get child instructions.
 ```
 
 #### PUT `/api/children/{child_id}/instructions`
-Update child instructions.
+Update or create child instructions.
 
 **Authentication:** Required (must be parent of child)
 
@@ -656,13 +679,22 @@ Update child instructions.
     "doctor": {
       "name": "Dr. Smith",
       "phone": "+1234567890"
+    },
+    "parent": {
+      "name": "John Doe",
+      "phone": "+1234567890"
     }
   },
   "specialInstructions": "Likes to be read to before nap"
 }
 ```
 
-**Response:** Updated instructions
+**Response:** Updated or created instructions (same format as GET)
+
+**Note:** 
+- All fields are optional
+- Creates instructions if they don't exist, updates if they do
+- `emergencyContacts` is stored as JSON in the database
 
 ### Alert Endpoints
 
@@ -880,17 +912,81 @@ Mark message as read.
 #### POST `/predict`
 Predict if audio contains crying sounds.
 
-**Authentication:** Not required (or can be added)
+**Authentication:** Not required (currently)
+
+**Request:**
+- Content-Type: `multipart/form-data`
+- Body: `audio` file (audio file upload)
+
+**Response:**
+```json
+{
+  "label": "crying" | "normal",
+  "score": 0.85
+}
+```
+
+**Note:** This is a placeholder endpoint. In production, this will:
+1. Extract MFCC features from audio
+2. Run CRNN model inference
+3. Return prediction label and confidence score
 
 #### POST `/bot/update`
-Update child care instructions.
+Update child care instructions for chatbot context.
 
-**Authentication:** Not required (or can be added)
+**Authentication:** Not required (currently)
+
+**Request Body:**
+```json
+{
+  "parentId": "uuid",
+  "instructions": "Feed every 3 hours, nap at 2 PM",
+  "schedule": "Daily routine",
+  "allergies": ["peanuts", "dairy"],
+  "emergencyContacts": [
+    {
+      "name": "Dr. Smith",
+      "phone": "+1234567890"
+    }
+  ]
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Instructions updated successfully"
+}
+```
+
+**Note:** This is a placeholder endpoint. In production, this will store instructions in Firestore and index them for retrieval.
 
 #### POST `/bot/ask`
-Ask chatbot a question.
+Ask chatbot a question about child care instructions.
 
-**Authentication:** Not required (or can be added)
+**Authentication:** Not required (currently)
+
+**Request Body:**
+```json
+{
+  "sessionId": "uuid",
+  "question": "What time should I feed the baby?"
+}
+```
+
+**Response:**
+```json
+{
+  "answer": "Based on the instructions, feed the baby every 3 hours...",
+  "sources": ["instruction_id_1", "instruction_id_2"]
+}
+```
+
+**Note:** This is a placeholder endpoint. In production, this will:
+1. Retrieve relevant instructions from Firestore using RAG-like retrieval
+2. Generate answer using LLM
+3. Return answer with source references
 
 ## Error Responses
 
@@ -1108,14 +1204,116 @@ These services handle:
 Example usage:
 
 ```typescript
+// User profile
 import { getCurrentUserProfileFromAPI } from '@/src/services/user-api.service';
-
 const result = await getCurrentUserProfileFromAPI();
-if (result.success) {
-  const user = result.data;
-  // Use user profile
-} else {
-  // Handle error
-  console.error(result.error);
-}
+
+// Sessions
+import { createSessionRequest, cancelSession, discoverAvailableSessions } from '@/src/services/session.service';
+const session = await createSessionRequest({ parentId, childId, startTime, ... });
+const cancelled = await cancelSession(sessionId, "Change of plans");
+const available = await discoverAvailableSessions("nearby", 10);
+
+// Children
+import { getChildren, updateChildInstructions } from '@/src/services/child.service';
+const children = await getChildren();
 ```
+
+**Error Handling Pattern:**
+All services return `{ success: boolean, data?: T, error?: AppError }` format for consistent error handling.
+
+---
+
+## API Endpoints Summary
+
+### Quick Reference
+
+**User Management:**
+- `GET /api/users/me` - Get current user profile
+- `PUT /api/users/me` - Update current user profile
+
+**Admin Operations:**
+- `GET /api/admin/users` - List all users (admin only)
+- `GET /api/admin/users/{user_id}` - Get user by ID (admin only)
+- `PUT /api/admin/users/{user_id}` - Update user (admin only)
+- `DELETE /api/admin/users/{user_id}` - Delete user (admin only)
+- `GET /api/admin/stats` - Get admin statistics
+
+**Session Management (Uber-like CRUD):**
+- `GET /api/sessions` - Get user's sessions (filter by status)
+- `GET /api/sessions/{session_id}` - Get session by ID
+- `POST /api/sessions` - Create session request (parent only)
+- `PUT /api/sessions/{session_id}` - Update session (status transitions)
+- `DELETE /api/sessions/{session_id}` - Cancel session (soft delete)
+- `GET /api/sessions/discover/available` - Discover available sessions (sitter only)
+
+**Children Management:**
+- `GET /api/children` - Get user's children (parent only)
+- `GET /api/children/{child_id}` - Get child by ID
+- `POST /api/children` - Create child profile (parent only)
+- `PUT /api/children/{child_id}` - Update child profile
+- `DELETE /api/children/{child_id}` - Delete child profile
+- `GET /api/children/{child_id}/instructions` - Get child instructions
+- `PUT /api/children/{child_id}/instructions` - Update/create child instructions
+
+**Alerts:**
+- `GET /api/alerts` - Get user's alerts (filter by session, status, type)
+- `GET /api/alerts/{alert_id}` - Get alert by ID
+- `POST /api/alerts` - Create alert (system use)
+- `PUT /api/alerts/{alert_id}/view` - Mark alert as viewed
+- `PUT /api/alerts/{alert_id}/acknowledge` - Acknowledge alert
+- `PUT /api/alerts/{alert_id}/resolve` - Resolve alert
+
+**GPS Tracking:**
+- `POST /api/gps/track` - Record GPS location (sitter for active sessions)
+- `GET /api/gps/sessions/{session_id}/gps` - Get GPS history for session
+- `GET /api/gps/sessions/{session_id}/gps/latest` - Get latest GPS location
+
+**Chat Messages:**
+- `GET /api/sessions/{session_id}/messages` - Get session messages
+- `POST /api/sessions/{session_id}/messages` - Send message
+- `PUT /api/messages/{message_id}/read` - Mark message as read
+
+**AI Services:**
+- `POST /predict` - Cry detection prediction (audio upload)
+- `POST /bot/update` - Update child care instructions for chatbot
+- `POST /bot/ask` - Ask chatbot a question
+
+**System:**
+- `GET /health` - Health check
+- `GET /` - API information and endpoint list
+
+### Total Endpoints: 35
+
+### Authentication Requirements
+
+- **No Auth Required:** `/health`, `/`, `/predict`, `/bot/*` (currently)
+- **User Auth Required:** All `/api/*` endpoints
+- **Admin Only:** All `/api/admin/*` endpoints
+- **Parent Only:** `/api/children/*`, `POST /api/sessions`
+- **Sitter Only:** `GET /api/sessions/discover/available`, `POST /api/gps/track` (for active sessions)
+
+### Latest Updates
+
+**Session Management (Uber-like System):**
+- ✅ State machine validation for status transitions
+- ✅ Soft delete with cancellation tracking (`cancelled_at`, `cancelled_by`, `cancellation_reason`)
+- ✅ Completion tracking (`completed_at`)
+- ✅ Session discovery for sitters with multiple search scopes
+- ✅ Automatic field updates based on status changes
+
+**User Profile:**
+- ✅ Address, city, country fields added
+- ✅ RLS-aware authentication for database access
+
+**Error Handling:**
+- ✅ Comprehensive error codes
+- ✅ Detailed error messages
+- ✅ RLS permission error detection
+
+**Documentation:**
+- ✅ Complete endpoint documentation
+- ✅ Request/response examples
+- ✅ Query parameter details
+- ✅ Authentication requirements
+- ✅ Status transition rules
