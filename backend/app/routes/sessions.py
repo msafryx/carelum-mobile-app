@@ -44,6 +44,7 @@ class CreateSessionRequest(BaseModel):
     sitterId: Optional[str] = None
     childId: str
     startTime: str
+    endTime: Optional[str] = None
     location: Optional[str] = None
     hourlyRate: Optional[float] = None
     notes: Optional[str] = None
