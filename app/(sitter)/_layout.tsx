@@ -1,7 +1,7 @@
-import { Tabs } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
-import { useTheme } from '@/src/components/ui/ThemeProvider';
 import ErrorBoundary from '@/src/components/ui/ErrorBoundary';
+import { useTheme } from '@/src/components/ui/ThemeProvider';
+import { Ionicons } from '@expo/vector-icons';
+import { Tabs } from 'expo-router';
 
 export default function SitterLayout() {
   const { colors } = useTheme();
@@ -11,12 +11,24 @@ export default function SitterLayout() {
       <Tabs
         screenOptions={{
           headerShown: false,
-          tabBarShowLabel: false,
+          tabBarShowLabel: true,
           tabBarActiveTintColor: colors.primary,
           tabBarInactiveTintColor: colors.textSecondary,
+          tabBarLabelStyle: {
+            fontSize: 11,
+            fontWeight: '500',
+            marginTop: 2,
+            marginBottom: 4,
+          },
+          tabBarIconStyle: {
+            marginBottom: 0,
+          },
           tabBarStyle: {
             backgroundColor: colors.white,
             borderTopColor: colors.border,
+            height: 60,
+            paddingBottom: 4,
+            paddingTop: 4,
           },
         }}
       >

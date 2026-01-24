@@ -73,6 +73,8 @@ export default function SearchScreen() {
   const [notes, setNotes] = useState('');
   const [slotTimePickers, setSlotTimePickers] = useState<Record<string, { showStart: boolean; showEnd: boolean }>>({});
   const [creating, setCreating] = useState(false);
+  const creatingRef = useRef(false); // Guard against double execution
+  const lastCallIdRef = useRef<string | null>(null); // Track last call to prevent duplicates
   const [menuVisible, setMenuVisible] = useState(false);
   const [requestMode, setRequestMode] = useState<SessionSearchScope>('invite');
   const [maxDistanceKm, setMaxDistanceKm] = useState<number | undefined>(undefined);
@@ -389,6 +391,19 @@ export default function SearchScreen() {
           // Wrap the require in try-catch in case the module itself throws during import
           let mapsModule: any = null;
           try {
+            // Check if we're in Expo Go before requiring
+            const Constants = require('expo-constants');
+            const isExpoGoEnv = (
+              Constants.executionEnvironment === 'storeClient' ||
+              (Constants.executionEnvironment === undefined && Constants.appOwnership === 'expo')
+            );
+            
+            if (isExpoGoEnv) {
+              console.warn('⚠️ Skipping maps.native: Expo Go detected');
+              setMapViewAvailable(false);
+              return;
+            }
+            
             mapsModule = require('@/src/components/gps/maps.native');
           } catch (importError: any) {
             // Module import failed - likely Expo Go issue
@@ -778,6 +793,51 @@ export default function SearchScreen() {
   };
 
   const handleConfirmBooking = async () => {
+    // CRITICAL: Guard against double execution - check FIRST before anything else
+    if (creatingRef.current) {
+      console.warn('⚠️ [handleConfirmBooking] BLOCKED - Already in progress. Ignoring duplicate call.');
+      return;
+    }
+    
+    if (creating) {
+      console.warn('⚠️ [handleConfirmBooking] BLOCKED - Creating state is true. Ignoring duplicate call.');
+      return;
+    }
+    
+    // Generate unique call ID for this invocation
+    const callId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    
+    // Set guard IMMEDIATELY and SYNCHRONOUSLY - no async operations before this
+    creatingRef.current = true;
+    setCreating(true);
+    lastCallIdRef.current = callId;
+    
+    console.log('📝 [handleConfirmBooking] Starting session creation. Call ID:', callId);
+    
+    // Use requestAnimationFrame to ensure state is set before any potential re-renders
+    await new Promise(resolve => {
+      if (typeof requestAnimationFrame !== 'undefined') {
+        requestAnimationFrame(() => resolve(undefined));
+      } else {
+        setTimeout(resolve, 0);
+      }
+    });
+    
+    // Double-check guard after async delay (in case of rapid clicks or React Strict Mode)
+    if (lastCallIdRef.current !== callId) {
+      console.warn('⚠️ [handleConfirmBooking] ABORTED - Call ID mismatch. Expected:', callId, 'Got:', lastCallIdRef.current);
+      creatingRef.current = false;
+      setCreating(false);
+      return;
+    }
+    
+    // Triple-check guard
+    if (!creatingRef.current) {
+      console.warn('⚠️ [handleConfirmBooking] ABORTED - Guard was cleared unexpectedly.');
+      setCreating(false);
+      return;
+    }
+    
     // Collect all validation errors with clear field names
     const errors: string[] = [];
 
@@ -939,78 +999,162 @@ export default function SearchScreen() {
       // If time slot mode is enabled, create separate sessions for each day with configured hours
       const sessionPromises: Promise<any>[] = [];
       
+      // Deduplicate selectedChildren to prevent duplicate sessions
+      const uniqueChildren = selectedChildren.filter((child, index, self) => 
+        index === self.findIndex(c => c.id === child.id)
+      );
+      
+      if (uniqueChildren.length !== selectedChildren.length) {
+        console.warn(`⚠️ Removed ${selectedChildren.length - uniqueChildren.length} duplicate child(ren) from selection`);
+      }
+      
+      console.log(`📝 Creating sessions for ${uniqueChildren.length} unique child(ren)${useTimeSlotMode ? ' in time slot mode' : ' in continuous mode'}`);
+      
       if (useTimeSlotMode && Object.keys(dailyTimeSlots).length > 0) {
-        // Time slot mode: create sessions for each day with configured hours
-        selectedChildren.forEach(child => {
-          Object.entries(dailyTimeSlots).forEach(([dateStr, slot]) => {
-            // Handle both object format { startTime, endTime, hours } and number format
-            const slotHours = typeof slot === 'object' && slot !== null && 'hours' in slot 
-              ? (slot.hours || 0) 
-              : (typeof slot === 'number' ? slot : 0);
+        // Time slot mode: create ONE session with ALL time slots and ALL selected children
+        const childIds = uniqueChildren.map(child => child.id);
+        
+        // Collect all time slots
+        const timeSlots: Array<{ date: string; startTime: string; endTime: string; hours: number }> = [];
+        let earliestStart: Date | null = null;
+        let latestEnd: Date | null = null;
+        
+        Object.entries(dailyTimeSlots).forEach(([dateStr, slot]) => {
+          // Handle both object format { startTime, endTime, hours } and number format
+          const slotHours = typeof slot === 'object' && slot !== null && 'hours' in slot 
+            ? (slot.hours || 0) 
+            : (typeof slot === 'number' ? slot : 0);
+          
+          if (slotHours > 0) {
+            // Use the configured start and end times from the slot if available
+            let slotStart: Date;
+            let slotEnd: Date;
             
-            if (slotHours > 0) {
-              // Use the configured start and end times from the slot if available
-              let slotStart: Date;
-              let slotEnd: Date;
+            if (typeof slot === 'object' && slot !== null && 'startTime' in slot && 'endTime' in slot) {
+              // Use the configured times from the slot
+              slotStart = isValid(slot.startTime) ? new Date(slot.startTime) : new Date(dateStr);
+              slotEnd = isValid(slot.endTime) ? new Date(slot.endTime) : new Date(dateStr);
+            } else {
+              // Fallback: use the date with default start/end times
+              const slotDate = parse(dateStr, 'MMM dd, yyyy', new Date());
+              slotStart = isValid(slotDate) ? new Date(slotDate) : new Date(dateStr);
+              slotStart.setHours(startTime.getHours());
+              slotStart.setMinutes(startTime.getMinutes());
+              slotStart.setSeconds(0);
               
-              if (typeof slot === 'object' && slot !== null && 'startTime' in slot && 'endTime' in slot) {
-                // Use the configured times from the slot
-                slotStart = isValid(slot.startTime) ? new Date(slot.startTime) : new Date(dateStr);
-                slotEnd = isValid(slot.endTime) ? new Date(slot.endTime) : new Date(dateStr);
-              } else {
-                // Fallback: use the date with default start/end times
-                const slotDate = parse(dateStr, 'MMM dd, yyyy', new Date());
-                slotStart = isValid(slotDate) ? new Date(slotDate) : new Date(dateStr);
-                slotStart.setHours(startTime.getHours());
-                slotStart.setMinutes(startTime.getMinutes());
-                slotStart.setSeconds(0);
-                
-                slotEnd = new Date(slotStart);
-                slotEnd.setHours(slotStart.getHours() + slotHours);
-              }
-              
-              sessionPromises.push(
-                createSessionRequest({
-                  parentId: user.id,
-                  sitterId: requestMode === 'invite' ? selected!.id : '',
-                  childId: child.id,
-                  status: 'requested',
-                  startTime: slotStart,
-                  endTime: slotEnd,
-                  location: locationObj,
-                  hourlyRate: requestMode === 'invite' && rate > 0 ? rate : 0,
-                  notes: notes || undefined,
-                  searchScope: requestMode,
-                  maxDistanceKm: requestMode === 'nearby' ? maxDistanceKm : undefined,
-                })
-              );
+              slotEnd = new Date(slotStart);
+              slotEnd.setHours(slotStart.getHours() + slotHours);
             }
-          });
+            
+            // Track earliest start and latest end for overall session range
+            if (!earliestStart || slotStart < earliestStart) {
+              earliestStart = slotStart;
+            }
+            if (!latestEnd || slotEnd > latestEnd) {
+              latestEnd = slotEnd;
+            }
+            
+            // Add to time slots array
+            timeSlots.push({
+              date: dateStr,
+              startTime: slotStart.toISOString(),
+              endTime: slotEnd.toISOString(),
+              hours: slotHours
+            });
+          }
         });
-      } else {
-        // Continuous mode: create one session per child for the entire time range
-        selectedChildren.forEach(child => {
+        
+        // Create ONE session with all time slots
+        if (timeSlots.length > 0 && childIds.length > 0 && earliestStart && latestEnd) {
+          console.log('📝 [handleConfirmBooking] Creating ONE session with', timeSlots.length, 'time slot(s) for', uniqueChildren.length, 'child(ren)');
+          
           sessionPromises.push(
             createSessionRequest({
               parentId: user.id,
               sitterId: requestMode === 'invite' ? selected!.id : '',
-              childId: child.id,
+              childId: uniqueChildren[0].id, // Primary child (for backward compatibility)
+              childIds: childIds, // All children in this session
               status: 'requested',
-              startTime: startDateTime,
-              endTime: endDateTime,
+              startTime: earliestStart, // Overall start time (earliest slot)
+              endTime: latestEnd, // Overall end time (latest slot)
               location: locationObj,
               hourlyRate: requestMode === 'invite' && rate > 0 ? rate : 0,
               notes: notes || undefined,
               searchScope: requestMode,
               maxDistanceKm: requestMode === 'nearby' ? maxDistanceKm : undefined,
+              timeSlots: timeSlots, // All time slots stored in the session
             })
           );
-        });
+        }
+      } else {
+        // Continuous mode: create ONE session for all selected children (parent needs one sitter for multiple children)
+        if (uniqueChildren.length > 0) {
+          const childIds = uniqueChildren.map(child => child.id);
+          
+          console.log('📝 [handleConfirmBooking] Creating ONE session for', uniqueChildren.length, 'child(ren):', uniqueChildren.map(c => c.name).join(', '));
+          console.log('📝 [handleConfirmBooking] Session data:', {
+            parentId: user.id,
+            childIds: childIds,
+            startTime: startDateTime.toISOString(),
+            endTime: endDateTime.toISOString(),
+            requestMode,
+            callId: callId
+          });
+          
+          // CRITICAL: Only add ONE session promise
+          if (sessionPromises.length === 0) {
+            sessionPromises.push(
+              createSessionRequest({
+                parentId: user.id,
+                sitterId: requestMode === 'invite' ? selected!.id : '',
+                childId: uniqueChildren[0].id, // Primary child (for backward compatibility)
+                childIds: childIds, // All children in this session
+                status: 'requested',
+                startTime: startDateTime,
+                endTime: endDateTime,
+                location: locationObj,
+                hourlyRate: requestMode === 'invite' && rate > 0 ? rate : 0,
+                notes: notes || undefined,
+                searchScope: requestMode,
+                maxDistanceKm: requestMode === 'nearby' ? maxDistanceKm : undefined,
+              })
+            );
+            console.log('✅ [handleConfirmBooking] Added ONE session promise. Total promises:', sessionPromises.length);
+          } else {
+            console.error('❌ [handleConfirmBooking] ERROR: sessionPromises already has', sessionPromises.length, 'promises! This should not happen in continuous mode!');
+          }
+        }
+      }
+      
+      console.log('📝 [handleConfirmBooking] About to create', sessionPromises.length, 'session(s). Call ID:', callId);
+      
+      // CRITICAL: If we're in continuous mode and have more than 1 promise, something is wrong
+      if (!useTimeSlotMode && sessionPromises.length > 1) {
+        console.error('❌ [handleConfirmBooking] CRITICAL ERROR: Continuous mode should only create 1 session, but we have', sessionPromises.length, 'promises! Aborting to prevent duplicates.');
+        Alert.alert('Error', 'Multiple sessions detected. Please try again.');
+        creatingRef.current = false;
+        setCreating(false);
+        lastCallIdRef.current = null;
+        return;
       }
 
       const sessionResults = await Promise.allSettled(sessionPromises);
       const successfulSessions = sessionResults.filter(r => r.status === 'fulfilled' && r.value.success).length;
       const failedSessions = sessionResults.filter(r => r.status === 'rejected' || (r.status === 'fulfilled' && !r.value.success)).length;
+      
+      // Log results to debug duplicate creation
+      console.log('📝 [handleConfirmBooking] Session creation results:', {
+        total: sessionPromises.length,
+        successful: successfulSessions,
+        failed: failedSessions,
+        results: sessionResults.map((r, i) => ({
+          index: i,
+          status: r.status,
+          success: r.status === 'fulfilled' ? r.value.success : false,
+          sessionId: r.status === 'fulfilled' && r.value.success ? r.value.data?.id : null,
+          error: r.status === 'fulfilled' ? r.value.error : r.reason
+        }))
+      });
       
       // Log detailed error information
       if (failedSessions > 0) {
@@ -1117,7 +1261,15 @@ export default function SearchScreen() {
         : `Failed to create booking request: ${error?.message || 'Unknown error'}`;
       Alert.alert('Error', errorMessage);
     } finally {
-      setCreating(false);
+      // Only clear guard if this is still the active call
+      if (lastCallIdRef.current === callId) {
+        console.log('📝 [handleConfirmBooking] Completing session creation. Call ID:', callId);
+        creatingRef.current = false;
+        setCreating(false);
+        lastCallIdRef.current = null;
+      } else {
+        console.warn('⚠️ [handleConfirmBooking] Call ID mismatch in finally. Expected:', callId, 'Got:', lastCallIdRef.current);
+      }
     }
   };
 

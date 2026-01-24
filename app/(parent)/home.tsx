@@ -13,14 +13,56 @@ import { Session } from '@/src/types/session.types';
 import { SESSION_STATUS } from '@/src/config/constants';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import React, { useEffect, useState, useCallback } from 'react';
-import { ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View, RefreshControl, ActivityIndicator, Alert } from 'react-native';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
+import { ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View, RefreshControl, ActivityIndicator, Alert, Image, Animated } from 'react-native';
 import { format } from 'date-fns';
+import { formatSearchDuration, getSearchingMessage } from '@/src/utils/sessionSearchUtils';
 
 interface SessionWithDetails extends Session {
   childName?: string;
+  childNames?: string[]; // Array of all child names for sessions with multiple children
+  childPhotoUrl?: string;
+  childPhotoUrls?: string[]; // Array of all child photo URLs
   sitterName?: string;
 }
+
+// Searching Animation Component (Uber-like pulsing animation)
+function SearchingAnimation() {
+  const pulseAnim = useRef(new Animated.Value(1)).current;
+  
+  useEffect(() => {
+    const pulse = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, {
+          toValue: 1.2,
+          duration: 1000,
+          useNativeDriver: true,
+        }),
+        Animated.timing(pulseAnim, {
+          toValue: 1,
+          duration: 1000,
+          useNativeDriver: true,
+        }),
+      ])
+    );
+    pulse.start();
+    return () => pulse.stop();
+  }, [pulseAnim]);
+  
+  return (
+    <Animated.View
+      style={[
+        styles.pulsingDot,
+        {
+          transform: [{ scale: pulseAnim }],
+        },
+      ]}
+    >
+      <View style={styles.pulsingDotInner} />
+    </Animated.View>
+  );
+}
+
 
 export default function ParentHomeScreen() {
   const { colors, spacing } = useTheme();
@@ -34,6 +76,8 @@ export default function ParentHomeScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [cancelModalVisible, setCancelModalVisible] = useState(false);
   const [selectedSessionForCancel, setSelectedSessionForCancel] = useState<SessionWithDetails | null>(null);
+  const [searchDurations, setSearchDurations] = useState<Record<string, string>>({});
+  const searchDurationIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const [cancelling, setCancelling] = useState(false);
   
   const loadSessions = useCallback(async (isRefresh = false) => {
@@ -58,11 +102,47 @@ export default function ParentHomeScreen() {
           sessions.map(async (session) => {
             const details: SessionWithDetails = { ...session };
             
-            // Get child name
-            if (session.childId) {
+            // Get child names and photos - handle multiple children if childIds exists
+            if (session.childIds && session.childIds.length > 0) {
+              console.log(`📝 Loading ${session.childIds.length} children for session ${session.id}:`, session.childIds);
+              // Multiple children: load all
+              const childResults = await Promise.all(
+                session.childIds.map(childId => getChildById(childId))
+              );
+              const childNames: string[] = [];
+              const childPhotoUrls: string[] = [];
+              
+              childResults.forEach((result, index) => {
+                if (result.success && result.data) {
+                  childNames.push(result.data.name);
+                  if (result.data.photoUrl) {
+                    childPhotoUrls.push(result.data.photoUrl);
+                  }
+                } else {
+                  console.warn(`⚠️ Failed to load child ${session.childIds[index]}:`, result.error);
+                }
+              });
+              
+              console.log(`✅ Loaded ${childNames.length} children:`, childNames);
+              details.childNames = childNames;
+              details.childPhotoUrls = childPhotoUrls;
+              // Set primary child name for backward compatibility
+              if (childNames.length > 0) {
+                details.childName = childNames[0];
+              }
+              if (childPhotoUrls.length > 0) {
+                details.childPhotoUrl = childPhotoUrls[0];
+              }
+            } else if (session.childId) {
+              // Single child: load primary child
               const childResult = await getChildById(session.childId);
               if (childResult.success && childResult.data) {
                 details.childName = childResult.data.name;
+                details.childPhotoUrl = childResult.data.photoUrl;
+                details.childNames = [childResult.data.name];
+                if (childResult.data.photoUrl) {
+                  details.childPhotoUrls = [childResult.data.photoUrl];
+                }
               }
             }
 
@@ -120,6 +200,43 @@ export default function ParentHomeScreen() {
   useEffect(() => {
     loadSessions();
   }, [loadSessions]);
+
+  // Real-time search duration updates for requested sessions
+  useEffect(() => {
+    if (requestedSessions.length === 0) {
+      if (searchDurationIntervalRef.current) {
+        clearInterval(searchDurationIntervalRef.current);
+        searchDurationIntervalRef.current = null;
+      }
+      setSearchDurations({});
+      return;
+    }
+
+    // Update search duration every second for all requested sessions
+    const updateDurations = () => {
+      const durations: Record<string, string> = {};
+      requestedSessions.forEach((session) => {
+        if (session.createdAt) {
+          try {
+            durations[session.id] = formatSearchDuration(session.createdAt);
+          } catch (error) {
+            console.warn('Error formatting search duration:', error);
+          }
+        }
+      });
+      setSearchDurations((prev) => ({ ...prev, ...durations }));
+    };
+
+    updateDurations(); // Initial update
+    searchDurationIntervalRef.current = setInterval(updateDurations, 1000);
+
+    return () => {
+      if (searchDurationIntervalRef.current) {
+        clearInterval(searchDurationIntervalRef.current);
+        searchDurationIntervalRef.current = null;
+      }
+    };
+  }, [requestedSessions]);
   
   const syncUserToLocal = async () => {
     try {
@@ -224,7 +341,9 @@ export default function ParentHomeScreen() {
                 <View style={styles.sessionHeader}>
                   <View style={styles.sessionInfo}>
                     <Text style={[styles.sessionTitle, { color: colors.text }]}>
-                      {session.childName || 'Child'}
+                      {session.childNames && session.childNames.length > 1
+                        ? `${session.childNames.length} Children: ${session.childNames.join(', ')}`
+                        : session.childName || 'Child'}
                     </Text>
                     {session.sitterName && (
                       <Text style={[styles.sitterName, { color: colors.textSecondary }]}>
@@ -268,27 +387,107 @@ export default function ParentHomeScreen() {
             >
               <Card style={styles.sessionCard}>
                 <View style={styles.sessionHeader}>
+                  {/* Show overlapping avatars for multiple children */}
+                  {session.childNames && session.childNames.length > 1 ? (
+                    <View style={styles.overlappingAvatars}>
+                      {session.childNames.slice(0, 3).map((childName, index) => {
+                        const photoUrl = session.childPhotoUrls?.[index];
+                        return photoUrl ? (
+                          <Image
+                            key={index}
+                            source={{ uri: photoUrl }}
+                            style={[
+                              styles.overlappingAvatar,
+                              { marginLeft: index > 0 ? -12 : 0, zIndex: session.childNames.length - index }
+                            ]}
+                            defaultSource={require('@/assets/images/child.webp')}
+                          />
+                        ) : (
+                          <View
+                            key={index}
+                            style={[
+                              styles.overlappingAvatar,
+                              styles.overlappingAvatarPlaceholder,
+                              { 
+                                marginLeft: index > 0 ? -12 : 0, 
+                                zIndex: session.childNames.length - index,
+                                backgroundColor: colors.border 
+                              }
+                            ]}
+                          >
+                            <Ionicons name="person" size={20} color={colors.textSecondary} />
+                          </View>
+                        );
+                      })}
+                      {session.childNames.length > 3 && (
+                        <View style={[
+                          styles.overlappingAvatar,
+                          styles.avatarOverflow,
+                          { marginLeft: -12, zIndex: 0, backgroundColor: colors.primary }
+                        ]}>
+                          <Text style={[styles.avatarOverflowText, { color: colors.white }]}>
+                            +{session.childNames.length - 3}
+                          </Text>
+                        </View>
+                      )}
+                    </View>
+                  ) : session.childPhotoUrl ? (
+                    <Image 
+                      source={{ uri: session.childPhotoUrl }} 
+                      style={styles.childAvatar}
+                      defaultSource={require('@/assets/images/child.webp')}
+                    />
+                  ) : (
+                    <View style={[styles.childAvatarPlaceholder, { backgroundColor: colors.border }]}>
+                      <Ionicons name="person" size={24} color={colors.textSecondary} />
+                    </View>
+                  )}
                   <View style={styles.sessionInfo}>
                     <Text style={[styles.sessionTitle, { color: colors.text }]}>
-                      {session.childName || 'Child'}
+                      {session.childNames && session.childNames.length > 1
+                        ? `${session.childNames.length} Children: ${session.childNames.join(', ')}`
+                        : session.childName || 'Child'}
                     </Text>
-                    <Text style={[styles.sitterName, { color: colors.textSecondary }]}>
-                      {session.searchScope === 'invite' && session.sitterName 
-                        ? `Invited: ${session.sitterName}`
-                        : session.searchScope === 'nearby'
-                        ? `Searching within ${session.maxDistanceKm}km`
-                        : session.searchScope === 'city'
-                        ? 'Searching in city'
-                        : 'Searching nationwide'}
-                    </Text>
+                    <View style={styles.searchingContainer}>
+                      <View style={styles.searchingIndicator}>
+                        <SearchingAnimation />
+                        <Text style={[styles.searchingText, { color: colors.primary }]}>
+                          {getSearchingMessage(session)}
+                        </Text>
+                      </View>
+                      <Text style={[styles.searchingSubtext, { color: colors.textSecondary }]}>
+                        {session.searchScope === 'invite' && session.sitterName 
+                          ? `Invited: ${session.sitterName}`
+                          : session.searchScope === 'nearby'
+                          ? `Within ${session.maxDistanceKm}km`
+                          : session.searchScope === 'city'
+                          ? 'City wide search'
+                          : 'Nationwide search'}
+                      </Text>
+                    </View>
                   </View>
-                  <Ionicons name="hourglass-outline" size={20} color={colors.textSecondary} />
                 </View>
                 <View style={styles.sessionDetails}>
                   <Text style={[styles.sessionTime, { color: colors.textSecondary }]}>
                     {format(session.startTime, 'MMM dd, yyyy • h:mm a')}
-                    {session.endTime && ` - ${format(session.endTime, 'h:mm a')}`}
+                    {session.endTime && (() => {
+                      const startDateStr = format(session.startTime, 'MMM dd, yyyy');
+                      const endDateStr = format(session.endTime, 'MMM dd, yyyy');
+                      const endTimeStr = format(session.endTime, 'h:mm a');
+                      // If end date is different from start date, show date with time
+                      if (startDateStr !== endDateStr) {
+                        return ` - ${endDateStr} • ${endTimeStr}`;
+                      }
+                      return ` - ${endTimeStr}`;
+                    })()}
                   </Text>
+                  {session.createdAt && searchDurations[session.id] && (
+                    <View style={styles.searchingTimeContainer}>
+                      <Text style={[styles.searchingTimeText, { color: colors.textSecondary }]}>
+                        Searching for {searchDurations[session.id]}
+                      </Text>
+                    </View>
+                  )}
                 </View>
                 <TouchableOpacity
                   style={[styles.cancelButton, { borderColor: colors.error || '#ef4444' }]}
@@ -334,7 +533,9 @@ export default function ParentHomeScreen() {
                 <View style={styles.sessionHeader}>
                   <View style={styles.sessionInfo}>
                     <Text style={[styles.sessionTitle, { color: colors.text }]}>
-                      {session.childName || 'Child'}
+                      {session.childNames && session.childNames.length > 1
+                        ? `${session.childNames.length} Children: ${session.childNames.join(', ')}`
+                        : session.childName || 'Child'}
                     </Text>
                     {session.sitterName && (
                       <Text style={[styles.sitterName, { color: colors.textSecondary }]}>
@@ -531,6 +732,49 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'flex-start',
     marginBottom: 8,
+    gap: 12,
+  },
+  childAvatar: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    borderWidth: 2,
+    borderColor: '#e0e0e0',
+  },
+  childAvatarPlaceholder: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  overlappingAvatars: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    height: 50,
+  },
+  overlappingAvatar: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    borderWidth: 2,
+    borderColor: '#fff',
+  },
+  overlappingAvatarPlaceholder: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#fff',
+  },
+  avatarOverflow: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#fff',
+  },
+  avatarOverflowText: {
+    fontSize: 12,
+    fontWeight: 'bold',
   },
   sessionInfo: {
     flex: 1,
@@ -563,5 +807,42 @@ const styles = StyleSheet.create({
   cancelButtonText: {
     fontSize: 14,
     fontWeight: '600',
+  },
+  searchingContainer: {
+    marginTop: 4,
+  },
+  searchingIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  searchingText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  searchingSubtext: {
+    fontSize: 12,
+    marginTop: 2,
+  },
+  searchingTimeContainer: {
+    marginTop: 4,
+  },
+  searchingTimeText: {
+    fontSize: 12,
+    fontStyle: 'italic',
+  },
+  pulsingDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#10b981',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  pulsingDotInner: {
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#fff',
   },
 });

@@ -8,6 +8,7 @@ import { useTheme } from '@/src/components/ui/ThemeProvider';
 import Card from '@/src/components/ui/Card';
 import { Ionicons } from '@expo/vector-icons';
 import { Session } from '@/src/types/session.types';
+import { getAcceptedDuration } from '@/src/utils/sessionSearchUtils';
 
 interface TimelineEvent {
   id: string;
@@ -39,10 +40,12 @@ export default function SessionTimeline({ session, events = [] }: SessionTimelin
     });
 
     if (session.status === 'accepted' || ['active', 'completed', 'cancelled'].includes(session.status)) {
+      const acceptedDuration = getAcceptedDuration(session);
       timeline.push({
         id: 'accepted',
         type: 'accepted',
         title: 'Session Accepted',
+        description: acceptedDuration ? `Accepted in ${acceptedDuration}` : undefined,
         timestamp: session.updatedAt,
         icon: 'checkmark-circle-outline',
       });

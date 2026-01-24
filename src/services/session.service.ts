@@ -10,6 +10,47 @@ import { apiRequest } from './api-base.service';
 import { API_ENDPOINTS } from '@/src/config/constants';
 
 /**
+ * Helper function to parse childIds from API response
+ */
+function parseChildIds(apiSession: any): string[] | undefined {
+  if (apiSession.childIds && Array.isArray(apiSession.childIds)) {
+    return apiSession.childIds;
+  }
+  if (apiSession.child_ids) {
+    if (Array.isArray(apiSession.child_ids)) {
+      return apiSession.child_ids;
+    }
+    if (typeof apiSession.child_ids === 'string') {
+      try {
+        return JSON.parse(apiSession.child_ids);
+      } catch {
+        return undefined;
+      }
+    }
+  }
+  return undefined;
+}
+
+function parseTimeSlots(apiSession: any): any[] | undefined {
+  if (apiSession.timeSlots && Array.isArray(apiSession.timeSlots)) {
+    return apiSession.timeSlots;
+  }
+  if (apiSession.time_slots) {
+    if (Array.isArray(apiSession.time_slots)) {
+      return apiSession.time_slots;
+    }
+    if (typeof apiSession.time_slots === 'string') {
+      try {
+        return JSON.parse(apiSession.time_slots);
+      } catch {
+        return undefined;
+      }
+    }
+  }
+  return undefined;
+}
+
+/**
  * Create a new session request
  */
 export async function createSessionRequest(
@@ -20,6 +61,7 @@ export async function createSessionRequest(
       parentId: sessionData.parentId,
       sitterId: sessionData.sitterId || undefined,
       childId: sessionData.childId,
+      childIds: sessionData.childIds || undefined, // Array of child IDs for multiple children
       status: sessionData.status || 'requested', // Include status field (required by database)
       startTime: sessionData.startTime.toISOString(),
       endTime: sessionData.endTime ? sessionData.endTime.toISOString() : undefined,
@@ -28,6 +70,7 @@ export async function createSessionRequest(
       notes: sessionData.notes || undefined,
       searchScope: sessionData.searchScope || undefined,
       maxDistanceKm: sessionData.maxDistanceKm || undefined,
+      timeSlots: sessionData.timeSlots || undefined, // Array of time slots for multi-day sessions
     };
 
     console.log('📤 Creating session request:', {
@@ -56,6 +99,7 @@ export async function createSessionRequest(
       parentId: apiSession.parentId,
       sitterId: apiSession.sitterId || '',
       childId: apiSession.childId,
+      childIds: parseChildIds(apiSession),
       status: apiSession.status,
       startTime: new Date(apiSession.startTime),
       endTime: apiSession.endTime ? new Date(apiSession.endTime) : undefined,
@@ -65,6 +109,7 @@ export async function createSessionRequest(
       notes: apiSession.notes,
       searchScope: apiSession.searchScope || apiSession.search_scope,
       maxDistanceKm: apiSession.maxDistanceKm || apiSession.max_distance_km,
+      timeSlots: parseTimeSlots(apiSession),
       cancelledAt: apiSession.cancelledAt ? new Date(apiSession.cancelledAt) : undefined,
       cancelledBy: apiSession.cancelledBy,
       cancellationReason: apiSession.cancellationReason,
@@ -99,6 +144,7 @@ export async function getSessionById(sessionId: string): Promise<ServiceResult<S
           parentId: s.parentId,
           sitterId: s.sitterId || '',
           childId: s.childId,
+          childIds: s.childIds || (s.child_ids ? (Array.isArray(s.child_ids) ? s.child_ids : JSON.parse(s.child_ids)) : undefined),
           status: s.status,
           startTime: new Date(s.startTime || s.createdAt || Date.now()),
           endTime: s.endTime ? new Date(s.endTime) : undefined,
@@ -108,6 +154,7 @@ export async function getSessionById(sessionId: string): Promise<ServiceResult<S
           notes: s.notes,
           searchScope: s.searchScope || s.search_scope,
           maxDistanceKm: s.maxDistanceKm || s.max_distance_km,
+          timeSlots: s.timeSlots || (s.time_slots ? (Array.isArray(s.time_slots) ? s.time_slots : JSON.parse(s.time_slots)) : undefined),
           cancelledAt: s.cancelledAt ? new Date(s.cancelledAt) : undefined,
           cancelledBy: s.cancelledBy,
           cancellationReason: s.cancellationReason,
@@ -153,6 +200,7 @@ async function syncSessionFromAPI(sessionId: string): Promise<ServiceResult<Sess
       parentId: apiSession.parentId,
       sitterId: apiSession.sitterId || '',
       childId: apiSession.childId,
+      childIds: parseChildIds(apiSession),
       status: apiSession.status,
       startTime: new Date(apiSession.startTime),
       endTime: apiSession.endTime ? new Date(apiSession.endTime) : undefined,
@@ -162,6 +210,7 @@ async function syncSessionFromAPI(sessionId: string): Promise<ServiceResult<Sess
       notes: apiSession.notes,
       searchScope: apiSession.searchScope || apiSession.search_scope,
       maxDistanceKm: apiSession.maxDistanceKm || apiSession.max_distance_km,
+      timeSlots: parseTimeSlots(apiSession),
       cancelledAt: apiSession.cancelledAt ? new Date(apiSession.cancelledAt) : undefined,
       cancelledBy: apiSession.cancelledBy,
       cancellationReason: apiSession.cancellationReason,
@@ -224,6 +273,7 @@ export async function getUserSessions(
             parentId: s.parentId,
             sitterId: s.sitterId || '',
             childId: s.childId,
+            childIds: s.childIds || (s.child_ids ? (Array.isArray(s.child_ids) ? s.child_ids : JSON.parse(s.child_ids)) : undefined),
             status: s.status,
             startTime: new Date(s.startTime || s.createdAt || Date.now()),
             endTime: s.endTime ? new Date(s.endTime) : undefined,
@@ -233,6 +283,7 @@ export async function getUserSessions(
             notes: s.notes,
             searchScope: s.searchScope || s.search_scope,
             maxDistanceKm: s.maxDistanceKm || s.max_distance_km,
+            timeSlots: s.timeSlots || (s.time_slots ? (Array.isArray(s.time_slots) ? s.time_slots : JSON.parse(s.time_slots)) : undefined),
             createdAt: new Date(s.createdAt || Date.now()),
             updatedAt: new Date(s.updatedAt || Date.now()),
           }));
@@ -282,6 +333,7 @@ async function syncSessionsFromAPI(
       parentId: apiSession.parentId,
       sitterId: apiSession.sitterId || '',
       childId: apiSession.childId,
+      childIds: parseChildIds(apiSession),
       status: apiSession.status,
       startTime: new Date(apiSession.startTime),
       endTime: apiSession.endTime ? new Date(apiSession.endTime) : undefined,
@@ -291,6 +343,7 @@ async function syncSessionsFromAPI(
       notes: apiSession.notes,
       searchScope: apiSession.searchScope || apiSession.search_scope,
       maxDistanceKm: apiSession.maxDistanceKm || apiSession.max_distance_km,
+      timeSlots: parseTimeSlots(apiSession),
       cancelledAt: apiSession.cancelledAt ? new Date(apiSession.cancelledAt) : undefined,
       cancelledBy: apiSession.cancelledBy,
       cancellationReason: apiSession.cancellationReason,
@@ -299,9 +352,31 @@ async function syncSessionsFromAPI(
       updatedAt: new Date(apiSession.updatedAt),
     }));
 
-    // Save to AsyncStorage for next time
+    // Save to AsyncStorage and remove deleted sessions
     try {
-      const { save, STORAGE_KEYS } = await import('./local-storage.service');
+      const { save, getAll, remove, STORAGE_KEYS } = await import('./local-storage.service');
+      
+      // Get all current sessions from AsyncStorage for this user
+      const allCachedResult = await getAll(STORAGE_KEYS.SESSIONS);
+      if (allCachedResult.success && allCachedResult.data) {
+        // Filter to get only this user's sessions
+        const userCachedSessions = allCachedResult.data.filter((s: any) => 
+          role === 'parent' ? s.parentId === userId : s.sitterId === userId
+        );
+        
+        // Get IDs of sessions from API (these are the ones that should exist)
+        const apiSessionIds = new Set(sessions.map(s => s.id));
+        
+        // Remove sessions from cache that are no longer in the API response (deleted from DB)
+        for (const cachedSession of userCachedSessions) {
+          if (!apiSessionIds.has(cachedSession.id)) {
+            console.log('🗑️ Removing deleted session from cache:', cachedSession.id);
+            await remove(STORAGE_KEYS.SESSIONS, cachedSession.id);
+          }
+        }
+      }
+      
+      // Save/update sessions from API
       for (const session of sessions) {
         await save(STORAGE_KEYS.SESSIONS, {
           ...session,
@@ -309,9 +384,10 @@ async function syncSessionsFromAPI(
           endTime: session.endTime ? session.endTime.getTime() : null,
           createdAt: session.createdAt.getTime(),
           updatedAt: session.updatedAt.getTime(),
+          timeSlots: session.timeSlots || undefined,
         });
       }
-      console.log('✅ Sessions synced from API to AsyncStorage');
+      console.log('✅ Sessions synced from API to AsyncStorage (removed deleted sessions)');
     } catch (syncError: any) {
       console.warn('⚠️ Failed to sync sessions to AsyncStorage:', syncError.message);
     }
@@ -469,11 +545,12 @@ export async function discoverAvailableSessions(
       return result;
     }
 
-    const sessions: Session[] = (result.data || []).map((apiSession: any) => ({
+      const sessions: Session[] = (result.data || []).map((apiSession: any) => ({
       id: apiSession.id,
       parentId: apiSession.parentId,
       sitterId: apiSession.sitterId || '',
       childId: apiSession.childId,
+      childIds: parseChildIds(apiSession),
       status: apiSession.status,
       startTime: new Date(apiSession.startTime),
       endTime: apiSession.endTime ? new Date(apiSession.endTime) : undefined,
@@ -483,6 +560,7 @@ export async function discoverAvailableSessions(
       notes: apiSession.notes,
       searchScope: apiSession.searchScope || apiSession.search_scope,
       maxDistanceKm: apiSession.maxDistanceKm || apiSession.max_distance_km,
+      timeSlots: parseTimeSlots(apiSession),
       cancelledAt: apiSession.cancelledAt ? new Date(apiSession.cancelledAt) : undefined,
       cancelledBy: apiSession.cancelledBy,
       cancellationReason: apiSession.cancellationReason,

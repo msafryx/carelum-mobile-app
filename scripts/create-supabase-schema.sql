@@ -214,7 +214,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   parent_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   sitter_id UUID REFERENCES users(id) ON DELETE SET NULL,
-  child_id UUID NOT NULL REFERENCES children(id) ON DELETE CASCADE,
+  child_id UUID NOT NULL REFERENCES children(id) ON DELETE CASCADE, -- Primary child (for backward compatibility)
+  child_ids JSONB DEFAULT '[]'::jsonb, -- Array of child IDs for sessions with multiple children. Stored as JSONB array. The child_id column remains as the primary child for backward compatibility.
   -- Status: 'requested' (default), 'pending', 'accepted', 'active', 'completed', 'cancelled'
   -- For existing databases: Run UPDATE_SESSIONS_STATUS.sql to add 'requested' status support
   status TEXT NOT NULL DEFAULT 'requested' CHECK (status IN ('requested', 'pending', 'accepted', 'active', 'completed', 'cancelled')),
@@ -226,6 +227,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   notes TEXT,
   search_scope TEXT DEFAULT 'invite' CHECK (search_scope IN ('invite', 'nearby', 'city', 'nationwide')), -- Session request scope
   max_distance_km NUMERIC(5, 2), -- Maximum distance in km for nearby search scope (only used when search_scope = 'nearby')
+  time_slots JSONB DEFAULT '[]'::jsonb, -- Array of time slots for multi-day sessions (Time Slots mode). Format: [{"date": "2026-01-29", "startTime": "09:00", "endTime": "12:00", "hours": 3}, ...]
   -- Cancellation tracking (Uber-like)
   -- For existing databases: Run ADD_SESSION_TRACKING_COLUMNS.sql to add these columns
   cancelled_at TIMESTAMPTZ,
@@ -240,6 +242,9 @@ CREATE TABLE IF NOT EXISTS sessions (
 
 -- Index for sessions search_scope
 CREATE INDEX IF NOT EXISTS idx_sessions_search_scope ON sessions(search_scope) WHERE search_scope != 'invite';
+
+-- Index for child_ids JSONB queries (useful for filtering sessions by multiple children)
+CREATE INDEX IF NOT EXISTS idx_sessions_child_ids ON sessions USING GIN (child_ids);
 
 -- Alerts table (for real-time subscriptions)
 CREATE TABLE IF NOT EXISTS alerts (
