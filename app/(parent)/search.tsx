@@ -1,38 +1,39 @@
+import FullscreenMapModal from '@/src/components/gps/FullscreenMapModal';
 import Card from '@/src/components/ui/Card';
 import EmptyState from '@/src/components/ui/EmptyState';
 import HamburgerMenu from '@/src/components/ui/HamburgerMenu';
 import Header from '@/src/components/ui/Header';
 import { useTheme } from '@/src/components/ui/ThemeProvider';
 import { useAuth } from '@/src/hooks/useAuth';
-import { getAllUsers } from '@/src/services/admin.service';
 import { getParentChildren } from '@/src/services/child.service';
 import { createSessionRequest } from '@/src/services/session.service';
+import { getVerifiedSitters } from '@/src/services/user-api.service';
+import { getSitterVerification } from '@/src/services/verification.service';
+import { isSupabaseConfigured, supabase } from '@/src/config/supabase';
 import { Child } from '@/src/types/child.types';
 import { SessionSearchScope } from '@/src/types/session.types';
 import { User } from '@/src/types/user.types';
 import { Ionicons } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import { format, parse, isValid } from 'date-fns';
+import { format, isValid, parse } from 'date-fns';
 import * as Location from 'expo-location';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  ActivityIndicator,
-  Alert,
-  Image,
-  Modal,
-  Platform,
-  Pressable,
-  RefreshControl,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View
+    ActivityIndicator,
+    Alert,
+    Image,
+    Modal,
+    Platform,
+    Pressable,
+    RefreshControl,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    View
 } from 'react-native';
-import WebMapView from '@/src/components/gps/WebMapView';
-import FullscreenMapModal from '@/src/components/gps/FullscreenMapModal';
 // Platform-specific map imports - DO NOT load at module level
 // Will be loaded dynamically only when needed to avoid native module errors
 
@@ -111,6 +112,13 @@ export default function SearchScreen() {
   } | null>(null);
   const mapRef = useRef<any>(null);
   const [fullscreenMapVisible, setFullscreenMapVisible] = useState(false);
+  const [filterFullscreenMapVisible, setFilterFullscreenMapVisible] = useState(false);
+  const [profileModalVisible, setProfileModalVisible] = useState(false);
+  const [selectedSitterProfile, setSelectedSitterProfile] = useState<Sitter | null>(null);
+  const [sitterVerification, setSitterVerification] = useState<any>(null);
+  const [sitterReviews, setSitterReviews] = useState<any[]>([]);
+  const [sitterRating, setSitterRating] = useState<{ average: number; count: number } | null>(null);
+  const [loadingProfileData, setLoadingProfileData] = useState(false);
 
   const rate = selected?.hourlyRate || 0;
   
@@ -302,7 +310,8 @@ export default function SearchScreen() {
     }
 
     try {
-      const result = await getAllUsers('babysitter', 100);
+      // Load only verified sitters for parents to browse and select
+      const result = await getVerifiedSitters(100);
       if (result.success && result.data) {
         // Filter by search, location, rating, price if provided
         let filtered = result.data;
@@ -330,7 +339,7 @@ export default function SearchScreen() {
         setSitters([]);
       }
     } catch (error: any) {
-      console.error('Failed to load sitters:', error);
+      console.error('Failed to load verified sitters:', error);
       setSitters([]);
     } finally {
       setLoading(false);
@@ -386,28 +395,37 @@ export default function SearchScreen() {
     // Use lazy loading approach from maps.native.ts
     if (Platform.OS !== 'web') {
       const loadMaps = () => {
+        // Use a more defensive approach - check for Expo Go FIRST before any requires
         try {
-          // Use the lazy loading approach from maps.native.ts
-          // Wrap the require in try-catch in case the module itself throws during import
-          let mapsModule: any = null;
+          // Check if we're in Expo Go BEFORE requiring anything
+          let isExpoGoEnv = false;
           try {
-            // Check if we're in Expo Go before requiring
             const Constants = require('expo-constants');
-            const isExpoGoEnv = (
+            isExpoGoEnv = (
               Constants.executionEnvironment === 'storeClient' ||
               (Constants.executionEnvironment === undefined && Constants.appOwnership === 'expo')
             );
-            
-            if (isExpoGoEnv) {
-              console.warn('⚠️ Skipping maps.native: Expo Go detected');
-              setMapViewAvailable(false);
-              return;
-            }
-            
+          } catch (constantsError: any) {
+            // If we can't check, assume Expo Go to be safe
+            isExpoGoEnv = true;
+            console.warn('⚠️ Could not check Expo Go status, assuming Expo Go (safe fallback)');
+          }
+          
+          if (isExpoGoEnv) {
+            console.warn('⚠️ Skipping maps.native: Expo Go detected (native maps not supported)');
+            setMapViewAvailable(false);
+            return;
+          }
+          
+          // Only try to require if we're NOT in Expo Go
+          let mapsModule: any = null;
+          try {
+            // Wrap require in try-catch to catch any errors during module evaluation
             mapsModule = require('@/src/components/gps/maps.native');
           } catch (importError: any) {
-            // Module import failed - likely Expo Go issue
-            console.warn('⚠️ Failed to import maps.native module:', importError?.message || importError);
+            // Module import failed - likely Expo Go issue or codegenNativeCommands error
+            const errorMsg = importError?.message || String(importError) || 'Unknown error';
+            console.warn('⚠️ Failed to import maps.native module:', errorMsg);
             console.warn('💡 Note: react-native-maps requires a development build and does not work in Expo Go');
             setMapViewAvailable(false);
             return;
@@ -424,11 +442,17 @@ export default function SearchScreen() {
           let MarkerComponent: any = null;
           
           try {
-            MapViewComponent = mapsModule.getMapView?.();
-            MarkerComponent = mapsModule.getMarker?.();
+            // Check if the functions exist before calling
+            if (typeof mapsModule.getMapView === 'function') {
+              MapViewComponent = mapsModule.getMapView();
+            }
+            if (typeof mapsModule.getMarker === 'function') {
+              MarkerComponent = mapsModule.getMarker();
+            }
           } catch (nativeError: any) {
             // This error is expected in Expo Go - react-native-maps requires a development build
-            console.warn('⚠️ Native maps not available (requires development build):', nativeError?.message || nativeError);
+            const errorMsg = nativeError?.message || String(nativeError) || 'Unknown error';
+            console.warn('⚠️ Native maps not available (requires development build):', errorMsg);
             setMapViewAvailable(false);
             return;
           }
@@ -443,7 +467,9 @@ export default function SearchScreen() {
             setMapViewAvailable(false);
           }
         } catch (error: any) {
-          console.warn('⚠️ Failed to load MapView:', error?.message || error);
+          // Catch-all for any unexpected errors
+          const errorMsg = error?.message || String(error) || 'Unknown error';
+          console.warn('⚠️ Failed to load MapView:', errorMsg);
           console.warn('💡 Note: react-native-maps requires a development build and does not work in Expo Go');
           setMapViewAvailable(false);
         }
@@ -572,6 +598,77 @@ export default function SearchScreen() {
   }, [location]);
 
   // Get current location
+  // Handle get current location for filters
+  const handleGetFilterCurrentLocation = async () => {
+    setLocationLoading(true);
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert(
+          'Permission Denied',
+          'Location permission is required to use current location. Please enable it in settings.'
+        );
+        setLocationLoading(false);
+        return;
+      }
+
+      const location = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Balanced,
+      });
+      const { latitude, longitude } = location.coords;
+      
+      let address = `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
+      let city: string | undefined = undefined;
+
+      try {
+        const reverseGeocodePromise = Location.reverseGeocodeAsync({ latitude, longitude });
+        const reverseTimeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Reverse geocoding timeout')), 5000)
+        );
+        const reverseGeocoded = await Promise.race([reverseGeocodePromise, reverseTimeoutPromise]) as any[];
+        
+        if (reverseGeocoded && reverseGeocoded.length > 0) {
+          address = `${reverseGeocoded[0].street || ''} ${reverseGeocoded[0].streetNumber || ''}, ${reverseGeocoded[0].city || ''}, ${reverseGeocoded[0].region || ''}`.trim() || address;
+          city = reverseGeocoded[0].city || undefined;
+        }
+      } catch (reverseError) {
+        // If reverse geocoding fails, use coordinates as address
+        if (__DEV__) {
+          console.log('Reverse geocoding failed, using coordinates:', reverseError);
+        }
+      }
+
+      setLocation(address);
+      setFilterLocation({ address, latitude, longitude, city });
+      setFilterMapRegion({
+        latitude,
+        longitude,
+        latitudeDelta: 0.01,
+        longitudeDelta: 0.01,
+      });
+      // Animate map to location
+      if (filterMapRef.current && typeof filterMapRef.current.animateToRegion === 'function') {
+        filterMapRef.current.animateToRegion({
+          latitude,
+          longitude,
+          latitudeDelta: 0.01,
+          longitudeDelta: 0.01,
+        }, 500);
+      }
+    } catch (error: any) {
+      // Show user-friendly error message
+      const errorMessage = error?.message?.includes('timeout')
+        ? 'Location request timed out. Please try again or enter address manually.'
+        : 'Failed to get current location. Please enter address manually.';
+      Alert.alert('Location Error', errorMessage);
+      if (__DEV__) {
+        console.log('Failed to get current location:', error);
+      }
+    } finally {
+      setLocationLoading(false);
+    }
+  };
+
   const handleGetCurrentLocation = async () => {
     try {
       setLocationLoading(true);
@@ -696,6 +793,75 @@ export default function SearchScreen() {
     }, 1500);
     return () => clearTimeout(debounceGeocode);
   }, [location, filterModalVisible]);
+
+  // Load sitter verification and reviews when profile modal opens
+  useEffect(() => {
+    const loadSitterProfileData = async () => {
+      if (!profileModalVisible || !selectedSitterProfile) {
+        return;
+      }
+
+      setLoadingProfileData(true);
+      
+      try {
+        // Load verification data
+        const verificationResult = await getSitterVerification(selectedSitterProfile.id);
+        if (verificationResult.success && verificationResult.data) {
+          console.log('✅ Verification data loaded:', {
+            hasQualifications: !!verificationResult.data.qualifications,
+            qualifications: verificationResult.data.qualifications,
+            hasCertifications: !!verificationResult.data.certifications,
+            certifications: verificationResult.data.certifications,
+            qualificationsType: typeof verificationResult.data.qualifications,
+            certificationsType: Array.isArray(verificationResult.data.certifications),
+            qualificationsText: verificationResult.data.qualifications,
+            fullData: verificationResult.data,
+          });
+          setSitterVerification(verificationResult.data);
+        } else {
+          console.log('⚠️ No verification data found for sitter:', selectedSitterProfile.id, verificationResult);
+          if (verificationResult.error) {
+            console.error('❌ Verification error:', verificationResult.error);
+          }
+        }
+
+        // Load reviews and calculate rating
+        if (isSupabaseConfigured() && supabase) {
+          try {
+            const { data: reviewsData, error: reviewsError } = await supabase
+              .from('reviews')
+              .select('*')
+              .eq('reviewee_id', selectedSitterProfile.id)
+              .order('created_at', { ascending: false })
+              .limit(10);
+
+            if (!reviewsError && reviewsData) {
+              setSitterReviews(reviewsData);
+              
+              // Calculate average rating
+              if (reviewsData.length > 0) {
+                const totalRating = reviewsData.reduce((sum, review) => sum + (review.rating || 0), 0);
+                const averageRating = totalRating / reviewsData.length;
+                setSitterRating({
+                  average: Math.round(averageRating * 10) / 10, // Round to 1 decimal
+                  count: reviewsData.length,
+                });
+              }
+            }
+          } catch (reviewsErr) {
+            console.warn('Failed to load reviews:', reviewsErr);
+            // Keep default values if reviews fail to load
+          }
+        }
+      } catch (error) {
+        console.warn('Failed to load sitter profile data:', error);
+      } finally {
+        setLoadingProfileData(false);
+      }
+    };
+
+    loadSitterProfileData();
+  }, [profileModalVisible, selectedSitterProfile]);
 
   // Handle map press (drop pin)
   const handleMapPress = async (event: any) => {
@@ -1719,60 +1885,118 @@ export default function SearchScreen() {
             <Card>
               <EmptyState
                 icon="search-outline"
-                title="No sitters found"
+                title="No verified sitters found"
                 message={
                   search
                     ? "Try adjusting your search criteria"
-                    : "No babysitters available at the moment"
+                    : "No verified babysitters available at the moment. Only verified sitters are shown here."
                 }
               />
             </Card>
           ) : (
             filteredSitters.map((sitter) => (
-              <Card key={sitter.id}>
-                <View style={styles.sitterCard}>
-                  {sitter.profileImageUrl ? (
-                    <Image 
-                      source={{ uri: sitter.profileImageUrl }} 
-                      style={styles.avatar}
-                      defaultSource={require('@/assets/images/adult.webp')}
-                    />
-                  ) : (
-                    <View style={[styles.avatar, styles.avatarPlaceholder, { backgroundColor: colors.border }]}>
-                      <Ionicons name="person" size={40} color={colors.textSecondary} />
+              <Card key={sitter.id} style={styles.sitterCardWrapper}>
+                <TouchableOpacity
+                  style={styles.sitterCard}
+                  activeOpacity={0.7}
+                  onPress={() => {
+                    setSelectedSitterProfile(sitter);
+                    setProfileModalVisible(true);
+                  }}
+                >
+                  {/* Sitter Info Row */}
+                  <View style={styles.sitterCardHeader}>
+                    {/* Avatar */}
+                    <View style={styles.sitterAvatarContainer}>
+                      {sitter.profileImageUrl ? (
+                        <Image 
+                          source={{ uri: sitter.profileImageUrl }} 
+                          style={styles.sitterAvatar}
+                          defaultSource={require('@/assets/images/adult.webp')}
+                        />
+                      ) : (
+                        <View style={[styles.sitterAvatar, styles.sitterAvatarPlaceholder, { backgroundColor: colors.border }]}>
+                          <Ionicons name="person" size={24} color={colors.textSecondary} />
+                        </View>
+                      )}
                     </View>
-                  )}
-                  <Text style={[styles.name, { color: colors.text }]}>
-                    {sitter.displayName || 'Sitter'}
-                  </Text>
-                  {sitter.bio && (
-                    <Text style={[styles.info, { color: colors.textSecondary }]} numberOfLines={2}>
-                      {sitter.bio}
-                    </Text>
-                  )}
-                  <View style={styles.ratingRow}>
-                    <Ionicons name="cash-outline" size={16} color={colors.textSecondary} />
-                    <Text style={[styles.ratingText, { color: colors.text }]}>
-                      ${sitter.hourlyRate || 'N/A'}/hr
-                    </Text>
-                    {sitter.isVerified && (
-                      <>
-                        <Ionicons name="checkmark-circle" size={16} color={colors.success || '#10b981'} style={{ marginLeft: 8 }} />
-                        <Text style={[styles.verifiedText, { color: colors.success || '#10b981' }]}>
-                          Verified
+
+                    {/* Name and Info */}
+                    <View style={styles.sitterInfoContainer}>
+                      <View style={styles.sitterNameRow}>
+                        <Text style={[styles.sitterName, { color: colors.text }]} numberOfLines={1}>
+                          {sitter.displayName || 'Sitter'}
                         </Text>
-                      </>
-                    )}
+                        <View style={[styles.verifiedBadgeInline, { backgroundColor: (colors.success || '#10b981') + '15' }]}>
+                          <Ionicons name="checkmark-circle" size={14} color={colors.success || '#10b981'} />
+                          <Text style={[styles.verifiedBadgeInlineText, { color: colors.success || '#10b981' }]}>
+                            Verified
+                          </Text>
+                        </View>
+                      </View>
+
+                      {/* Rating Row */}
+                      <View style={styles.sitterRatingRow}>
+                        <View style={styles.ratingContainer}>
+                          <Ionicons name="star" size={14} color="#FFB800" />
+                          <Text style={[styles.ratingValue, { color: colors.text }]}>
+                            {sitter.rating?.toFixed(1) || 'N/A'}
+                          </Text>
+                          <Text style={[styles.ratingCount, { color: colors.textSecondary }]}>
+                            ({sitter.reviews || 0})
+                          </Text>
+                        </View>
+                        {sitter.city && (
+                          <View style={styles.locationContainer}>
+                            <Ionicons name="location" size={12} color={colors.textSecondary} />
+                            <Text style={[styles.locationText, { color: colors.textSecondary }]} numberOfLines={1}>
+                              {sitter.city}
+                            </Text>
+                          </View>
+                        )}
+                      </View>
+
+                      {/* Price Row */}
+                      <View style={styles.sitterPriceRow}>
+                        <Ionicons name="cash" size={14} color={colors.primary} />
+                        <Text style={[styles.priceText, { color: colors.text }]}>
+                          Rs. {sitter.hourlyRate ? sitter.hourlyRate.toFixed(0) : 'N/A'}/hr
+                        </Text>
+                      </View>
+
+                      {/* Bio Preview */}
+                      {sitter.bio && (
+                        <Text style={[styles.bioPreview, { color: colors.textSecondary }]} numberOfLines={2}>
+                          {sitter.bio}
+                        </Text>
+                      )}
+                    </View>
                   </View>
-                  <View style={styles.actionRow}>
+
+                  {/* Action Buttons */}
+                  <View style={styles.sitterCardActions}>
                     <TouchableOpacity
-                      style={[styles.bookButton, { backgroundColor: colors.primary }]}
-                      onPress={() => handleBookSitter(sitter)}
+                      style={[styles.viewProfileButton, { backgroundColor: colors.background, borderColor: colors.border }]}
+                      onPress={(e) => {
+                        e.stopPropagation();
+                        setSelectedSitterProfile(sitter);
+                        setProfileModalVisible(true);
+                      }}
                     >
-                      <Text style={styles.bookText}>Book</Text>
+                      <Ionicons name="person-outline" size={16} color={colors.text} />
+                      <Text style={[styles.viewProfileText, { color: colors.text }]}>View Profile</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.bookButtonCompact, { backgroundColor: colors.primary }]}
+                      onPress={(e) => {
+                        e.stopPropagation();
+                        handleBookSitter(sitter);
+                      }}
+                    >
+                      <Text style={styles.bookButtonText}>Book</Text>
                     </TouchableOpacity>
                   </View>
-                </View>
+                </TouchableOpacity>
               </Card>
             ))
           )
@@ -1843,15 +2067,18 @@ export default function SearchScreen() {
               <View style={styles.filterSection}>
                 <View style={styles.filterSectionHeader}>
                   <Ionicons name="location-sharp" size={20} color={colors.primary} />
-                  <Text style={[styles.filterSectionTitle, { color: colors.text }]}>Location</Text>
+                  <Text style={[styles.filterSectionTitle, { color: colors.text }]}>Location *</Text>
                 </View>
+                <Text style={[styles.filterSectionSubtitle, { color: colors.textSecondary }]}>
+                  GPS coordinates required for distance calculation
+                </Text>
                 <View style={[styles.filterInputContainer, { 
                   backgroundColor: colors.white, 
                   borderColor: location ? colors.primary : colors.border,
                   borderWidth: location ? 2 : 1.5,
                   marginBottom: 12,
                 }]}>
-                  <Ionicons name="search" size={18} color={colors.textSecondary} style={{ marginRight: 8 }} />
+                  <Ionicons name="location" size={18} color={colors.textSecondary} style={{ marginRight: 8 }} />
                   <TextInput
                     style={[styles.filterInput, { color: colors.text }]}
                     placeholder="Search address or drop pin on map"
@@ -1864,126 +2091,95 @@ export default function SearchScreen() {
                   )}
                 </View>
 
-                {/* Map View in Filter */}
-                <View style={[styles.filterMapContainer, { backgroundColor: colors.background, borderColor: colors.border }]}>
-                    {mapViewAvailable && MapViewComponent && (typeof MapViewComponent === 'function' || typeof MapViewComponent === 'object' && MapViewComponent !== null && 'render' in MapViewComponent) ? (
-                      // Native MapView (works in development builds)
-                      // Use JSX syntax instead of React.createElement for better type checking
-                      (() => {
-                        // Validate MapViewComponent is actually a component
-                        if (!MapViewComponent || (typeof MapViewComponent !== 'function' && typeof MapViewComponent !== 'object')) {
-                          return null;
-                        }
-                        const MapView = MapViewComponent as any;
-                        return (
-                          <MapView
-                            ref={filterMapRef}
-                            style={styles.filterMap}
-                            initialRegion={filterMapRegion || {
-                              latitude: 6.9271, // Default to Sri Lanka (Colombo)
-                              longitude: 79.8612,
-                              latitudeDelta: 0.1,
-                              longitudeDelta: 0.1,
-                            }}
-                            region={filterMapRegion || undefined}
-                            onRegionChangeComplete={setFilterMapRegion}
-                            onPress={async (event: any) => {
-                              const { latitude, longitude } = event.nativeEvent.coordinate;
-                              try {
-                                const reverseGeocodePromise = Location.reverseGeocodeAsync({ latitude, longitude });
-                                const timeoutPromise = new Promise((_, reject) =>
-                                  setTimeout(() => reject(new Error('Reverse geocoding timeout')), 5000)
-                                );
-                                const reverseGeocoded = await Promise.race([reverseGeocodePromise, timeoutPromise]) as any[];
-                                const address = reverseGeocoded && reverseGeocoded.length > 0
-                                  ? `${reverseGeocoded[0].street || ''} ${reverseGeocoded[0].streetNumber || ''}, ${reverseGeocoded[0].city || ''}, ${reverseGeocoded[0].region || ''}`.trim()
-                                  : `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
-                                const city = reverseGeocoded && reverseGeocoded.length > 0 ? (reverseGeocoded[0].city || undefined) : undefined;
-                                setLocation(address);
-                                setFilterLocation({ address, latitude, longitude, city });
-                              } catch (error) {
-                                const address = `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
-                                setLocation(address);
-                                setFilterLocation({ address, latitude, longitude });
-                              }
-                            }}
-                            showsUserLocation={false}
-                            showsMyLocationButton={false}
-                            showsCompass={true}
-                            showsScale={true}
-                          >
-                            {filterLocation?.latitude && filterLocation?.longitude && MarkerComponent && typeof MarkerComponent !== 'object' ? (
-                              (() => {
-                                const Marker = MarkerComponent as any;
-                                return (
-                                  <Marker
-                                    coordinate={{
-                                      latitude: filterLocation.latitude,
-                                      longitude: filterLocation.longitude,
-                                    }}
-                                    title="Filter Location"
-                                    description={filterLocation.address}
-                                    pinColor={colors.primary}
-                                  />
-                                );
-                              })()
-                            ) : null}
-                          </MapView>
-                        );
-                      })()
-                    ) : (
-                      // WebView-based map (works in Expo Go)
-                      <WebMapView
-                        initialRegion={filterMapRegion || {
-                          latitude: 6.9271,
-                          longitude: 79.8612,
-                          latitudeDelta: 0.1,
-                          longitudeDelta: 0.1,
-                        }}
-                        region={filterMapRegion || undefined}
-                        onRegionChangeComplete={setFilterMapRegion}
-                        onPress={async (coordinate: { latitude: number; longitude: number }) => {
-                          const { latitude, longitude } = coordinate;
-                          try {
-                            const reverseGeocodePromise = Location.reverseGeocodeAsync({ latitude, longitude });
-                            const timeoutPromise = new Promise((_, reject) =>
-                              setTimeout(() => reject(new Error('Reverse geocoding timeout')), 5000)
-                            );
-                            const reverseGeocoded = await Promise.race([reverseGeocodePromise, timeoutPromise]) as any[];
-                            const address = reverseGeocoded && reverseGeocoded.length > 0
-                              ? `${reverseGeocoded[0].street || ''} ${reverseGeocoded[0].streetNumber || ''}, ${reverseGeocoded[0].city || ''}, ${reverseGeocoded[0].region || ''}`.trim()
-                              : `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
-                            const city = reverseGeocoded && reverseGeocoded.length > 0 ? (reverseGeocoded[0].city || undefined) : undefined;
-                            setLocation(address);
-                            setFilterLocation({ address, latitude, longitude, city });
-                          } catch (error) {
-                            const address = `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
-                            setLocation(address);
-                            setFilterLocation({ address, latitude, longitude });
-                          }
-                        }}
-                        marker={filterLocation?.latitude && filterLocation?.longitude ? {
-                          latitude: filterLocation.latitude,
-                          longitude: filterLocation.longitude,
-                          title: "Filter Location",
-                          description: filterLocation.address,
-                        } : null}
-                        showsUserLocation={false}
-                        showsMyLocationButton={false}
-                        showsCompass={true}
-                        showsScale={true}
-                        style={styles.filterMap}
-                      />
-                    )}
-                  </View>
-                )}
+                {/* Use Current Location Button */}
+                <Pressable
+                  style={[styles.currentLocationButton, { backgroundColor: colors.primary + '15', borderColor: colors.primary, marginBottom: 12 }]}
+                  onPress={handleGetFilterCurrentLocation}
+                  hitSlop={8}
+                  disabled={locationLoading}
+                >
+                  {locationLoading ? (
+                    <ActivityIndicator size="small" color={colors.primary} />
+                  ) : (
+                    <>
+                      <Ionicons name="locate" size={18} color={colors.primary} />
+                      <Text style={[styles.currentLocationText, { color: colors.primary }]}>
+                        Use Current Location
+                      </Text>
+                    </>
+                  )}
+                </Pressable>
 
-                {location && (
-                  <View style={[styles.filterSelectedValue, { backgroundColor: colors.primary + '15', marginTop: 12 }]}>
-                    <Ionicons name="checkmark-circle" size={16} color={colors.primary} />
-                    <Text style={[styles.filterSelectedText, { color: colors.primary }]}>
-                      Selected: {location}
+                {/* Map View - Show preview/thumbnail like booking modal */}
+                <View style={[styles.mapContainer, { backgroundColor: colors.background, borderColor: colors.border, marginBottom: 12 }]}>
+                  {/* Show map thumbnail or placeholder */}
+                  {filterLocation?.latitude && filterLocation?.longitude ? (
+                    <TouchableOpacity
+                      style={styles.mapThumbnail}
+                      onPress={() => setFilterFullscreenMapVisible(true)}
+                      activeOpacity={0.8}
+                    >
+                      <Image
+                        source={{
+                          uri: `https://api.mapbox.com/styles/v1/mapbox/streets-v11/static/pin-s+FF0000(${filterLocation.longitude},${filterLocation.latitude})/${filterLocation.longitude},${filterLocation.latitude},15/300x200@2x?access_token=pk.eyJ1IjoibWFwYm94IiwiYSI6ImNpejY4NXVycTA2emYycXBndHRqcmZ3N3gifQ.rJcFIG214AriISLbB6B5aw`
+                        }}
+                        style={styles.mapThumbnailImage}
+                        onError={(error) => {
+                          console.warn('Mapbox thumbnail failed, using placeholder');
+                        }}
+                      />
+                      <View style={[styles.mapThumbnailOverlay, { backgroundColor: colors.primary + '20' }]}>
+                        <View style={[styles.mapThumbnailBadge, { backgroundColor: colors.primary }]}>
+                          <Ionicons name="location" size={16} color={colors.white} />
+                        </View>
+                      </View>
+                    </TouchableOpacity>
+                  ) : (
+                    <View style={styles.mapPreview}>
+                      <View style={styles.mapPreviewContent}>
+                        <Ionicons name="location-outline" size={48} color={colors.textSecondary} />
+                        <Text style={[styles.mapPreviewText, { color: colors.textSecondary }]}>
+                          No location selected
+                        </Text>
+                        <Text style={[styles.mapPreviewHint, { color: colors.textSecondary }]}>
+                          Tap "Open Fullscreen Map" to select
+                        </Text>
+                      </View>
+                    </View>
+                  )}
+                  
+                  {/* Fullscreen Map Button */}
+                  <TouchableOpacity
+                    style={[styles.fullscreenMapButton, { backgroundColor: colors.primary }]}
+                    onPress={() => setFilterFullscreenMapVisible(true)}
+                    hitSlop={8}
+                  >
+                    <Ionicons name="expand" size={20} color={colors.white} />
+                    <Text style={[styles.fullscreenMapButtonText, { color: colors.white }]}>
+                      Open Fullscreen Map
                     </Text>
+                  </TouchableOpacity>
+                </View>
+
+                {/* Location Info Card */}
+                {filterLocation && filterLocation.latitude && filterLocation.longitude && (
+                  <View style={[styles.locationInfoCard, { backgroundColor: colors.background, borderColor: colors.border }]}>
+                    <View style={styles.locationInfoRow}>
+                      <Ionicons name="checkmark-circle" size={18} color={colors.success} />
+                      <View style={styles.locationInfoTextContainer}>
+                        <Text style={[styles.locationInfoAddress, { color: colors.text }]} numberOfLines={2}>
+                          {filterLocation.address}
+                        </Text>
+                        {filterLocation.city && (
+                          <Text style={[styles.locationInfoCity, { color: colors.textSecondary }]}>
+                            {filterLocation.city}
+                          </Text>
+                        )}
+                        <Text style={[styles.locationInfoCoords, { color: colors.textSecondary }]}>
+                          {filterLocation.latitude.toFixed(6)}, {filterLocation.longitude.toFixed(6)}
+                        </Text>
+                      </View>
+                    </View>
                   </View>
                 )}
               </View>
@@ -2130,7 +2326,7 @@ export default function SearchScreen() {
                     <View style={styles.selectedSitterDetails}>
                       {selected.hourlyRate && (
                         <Text style={[styles.selectedSitterRate, { color: colors.textSecondary }]}>
-                          ${selected.hourlyRate}/hr
+                          Rs. {selected.hourlyRate}/hr
                         </Text>
                       )}
                       {selected.isVerified && (
@@ -2211,7 +2407,7 @@ export default function SearchScreen() {
             </ScrollView>
 
             {/* Booking Mode Toggle */}
-            <View style={[styles.bookingModeContainer, { backgroundColor: colors.backgroundSecondary, borderColor: colors.border }]}>
+            <View style={[styles.bookingModeContainer, { backgroundColor: colors.background, borderColor: colors.border }]}>
               <Text style={[styles.bookingModeLabel, { color: colors.text }]}>Booking Mode</Text>
               <View style={styles.bookingModeToggle}>
                 <TouchableOpacity
@@ -2365,7 +2561,7 @@ export default function SearchScreen() {
             {!useTimeSlotMode ? (
               // Continuous Mode: Show simple date range
               <View style={[styles.durationDisplay, { 
-                backgroundColor: calculatedHours > 0 ? colors.backgroundSecondary : colors.warning + '20', 
+                backgroundColor: calculatedHours > 0 ? colors.background : colors.warning + '20', 
                 borderColor: calculatedHours > 0 ? colors.border : colors.warning 
               }]}>
                 <Ionicons 
@@ -2397,7 +2593,7 @@ export default function SearchScreen() {
               // Time Slots Mode: Show date range and per-day time configuration
               <>
                 <View style={[styles.durationDisplay, { 
-                  backgroundColor: calculatedHours > 0 ? colors.backgroundSecondary : colors.warning + '20', 
+                  backgroundColor: calculatedHours > 0 ? colors.background : colors.warning + '20', 
                   borderColor: calculatedHours > 0 ? colors.border : colors.warning 
                 }]}>
                   <Ionicons 
@@ -2460,7 +2656,7 @@ export default function SearchScreen() {
 
                 {/* Time Slots Configuration - Per Day Time Selection */}
                 {daysBreakdown.length > 0 && (
-                  <View style={[styles.timeSlotsContainer, { backgroundColor: colors.backgroundSecondary, borderColor: colors.border }]}>
+                  <View style={[styles.timeSlotsContainer, { backgroundColor: colors.background, borderColor: colors.border }]}>
                     <Text style={[styles.timeSlotsTitle, { color: colors.text }]}>
                       Configure Time Per Day
                     </Text>
@@ -2790,6 +2986,288 @@ export default function SearchScreen() {
           });
         }}
       />
+
+      {/* Fullscreen Map Modal for Filters */}
+      <FullscreenMapModal
+        visible={filterFullscreenMapVisible}
+        onClose={() => setFilterFullscreenMapVisible(false)}
+        initialLocation={filterLocation ? {
+          latitude: filterLocation.latitude!,
+          longitude: filterLocation.longitude!,
+          address: filterLocation.address,
+        } : undefined}
+        onLocationSelect={(location) => {
+          setLocation(location.address);
+          setFilterLocation({
+            address: location.address,
+            latitude: location.latitude,
+            longitude: location.longitude,
+            city: location.city,
+          });
+          setFilterMapRegion({
+            latitude: location.latitude,
+            longitude: location.longitude,
+            latitudeDelta: 0.01,
+            longitudeDelta: 0.01,
+          });
+        }}
+      />
+
+      {/* Sitter Profile Modal */}
+      <Modal
+        visible={profileModalVisible}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setProfileModalVisible(false)}
+      >
+        <View style={[styles.modalContainer, { backgroundColor: colors.background }]}>
+          <View style={styles.modalHeaderContainer}>
+            <Header 
+              title="Sitter Profile" 
+              showBack={false}
+            />
+            <TouchableOpacity
+              style={styles.modalCloseButton}
+              onPress={() => {
+                setProfileModalVisible(false);
+                setSitterVerification(null);
+                setSitterReviews([]);
+                setSitterRating(null);
+              }}
+            >
+              <Ionicons name="close" size={24} color={colors.text} />
+            </TouchableOpacity>
+          </View>
+          
+          {selectedSitterProfile && (
+            <ScrollView contentContainerStyle={styles.profileModalContent}>
+              {/* Profile Header */}
+              <View style={styles.profileHeader}>
+                {selectedSitterProfile.profileImageUrl ? (
+                  <Image 
+                    source={{ uri: selectedSitterProfile.profileImageUrl }} 
+                    style={styles.profileAvatar}
+                    defaultSource={require('@/assets/images/adult.webp')}
+                  />
+                ) : (
+                  <View style={[styles.profileAvatar, styles.profileAvatarPlaceholder, { backgroundColor: colors.border }]}>
+                    <Ionicons name="person" size={60} color={colors.textSecondary} />
+                  </View>
+                )}
+                <View style={styles.profileHeaderInfo}>
+                  <View style={styles.profileHeaderNameRow}>
+                    <Text style={[styles.profileName, { color: colors.text }]} numberOfLines={1}>
+                      {selectedSitterProfile.displayName || 'Sitter'}
+                    </Text>
+                  </View>
+                  <View style={styles.profileVerifiedRow}>
+                    <View style={[styles.verifiedBadgeLarge, { backgroundColor: (colors.success || '#10b981') + '15', borderColor: colors.success || '#10b981' }]}>
+                      <Ionicons name="checkmark-circle" size={16} color={colors.success || '#10b981'} />
+                      <Text style={[styles.verifiedBadgeLargeText, { color: colors.success || '#10b981' }]}>
+                        Verified
+                      </Text>
+                    </View>
+                  </View>
+                  
+                  {/* Rating and Location */}
+                  <View style={styles.profileRatingSection}>
+                    <View style={styles.profileRatingRow}>
+                      <Ionicons name="star" size={18} color="#FFB800" />
+                      <Text style={[styles.profileRatingValue, { color: colors.text }]}>
+                        {sitterRating ? sitterRating.average.toFixed(1) : 'N/A'}
+                      </Text>
+                      <Text style={[styles.profileRatingCount, { color: colors.textSecondary }]}>
+                        ({sitterRating ? sitterRating.count : 0} {sitterRating?.count === 1 ? 'review' : 'reviews'})
+                      </Text>
+                    </View>
+                    {selectedSitterProfile.city && (
+                      <View style={styles.profileLocationRow}>
+                        <Ionicons name="location" size={16} color={colors.textSecondary} />
+                        <Text style={[styles.profileLocationText, { color: colors.textSecondary }]}>
+                          {selectedSitterProfile.city}{selectedSitterProfile.country ? `, ${selectedSitterProfile.country}` : ''}
+                        </Text>
+                      </View>
+                    )}
+                    {selectedSitterProfile.hourlyRate && (
+                      <View style={styles.profilePriceRow}>
+                        <Ionicons name="cash" size={16} color={colors.primary} />
+                        <Text style={[styles.profilePriceText, { color: colors.text }]}>
+                          Rs. {selectedSitterProfile.hourlyRate.toFixed(0)}/hour
+                        </Text>
+                      </View>
+                    )}
+                  </View>
+                </View>
+              </View>
+
+              {/* Bio Section */}
+              {selectedSitterProfile.bio && (
+                <Card style={styles.profileSectionCard}>
+                  <Text style={[styles.profileSectionTitle, { color: colors.text }]}>About</Text>
+                  <Text style={[styles.profileBioText, { color: colors.textSecondary }]}>
+                    {selectedSitterProfile.bio}
+                  </Text>
+                </Card>
+              )}
+
+              {/* Qualifications/Experience Section */}
+              <Card style={styles.profileSectionCard}>
+                <Text style={[styles.profileSectionTitle, { color: colors.text }]}>Experience & Qualifications</Text>
+                {loadingProfileData ? (
+                  <View style={styles.profileLoadingContainer}>
+                    <ActivityIndicator size="small" color={colors.primary} />
+                    <Text style={[styles.profileLoadingText, { color: colors.textSecondary }]}>
+                      Loading qualifications...
+                    </Text>
+                  </View>
+                ) : (() => {
+                  // Check for qualifications (can be array or string)
+                  const qualifications = sitterVerification?.qualifications;
+                  const certifications = sitterVerification?.certifications;
+                  
+                  // Handle qualifications - can be array or string
+                  let qualsArray: string[] = [];
+                  if (qualifications) {
+                    if (Array.isArray(qualifications)) {
+                      qualsArray = qualifications;
+                    } else if (typeof qualifications === 'string') {
+                      // Split by semicolon or comma
+                      qualsArray = qualifications.split(/[;,]/).map(q => q.trim()).filter(q => q.length > 0);
+                    }
+                  }
+                  
+                  // Handle certifications
+                  const certsArray = Array.isArray(certifications) ? certifications : [];
+                  
+                  // Show qualifications first, then certifications
+                  if (qualsArray.length > 0) {
+                    return (
+                      <>
+                        {qualsArray.map((qual: string, index: number) => (
+                          <View key={`qual-${index}`} style={styles.profileInfoItem}>
+                            <Ionicons name="checkmark-circle" size={18} color={colors.primary} />
+                            <Text style={[styles.profileInfoText, { color: colors.textSecondary }]}>
+                              {qual}
+                            </Text>
+                          </View>
+                        ))}
+                        {certsArray.length > 0 && certsArray.map((cert: any, index: number) => (
+                          <View key={`cert-${index}`} style={styles.profileInfoItem}>
+                            <Ionicons name="ribbon" size={18} color={colors.primary} />
+                            <Text style={[styles.profileInfoText, { color: colors.textSecondary }]}>
+                              {cert.name || cert}
+                              {cert.issuedDate && ` (${format(new Date(cert.issuedDate), 'MMM yyyy')})`}
+                            </Text>
+                          </View>
+                        ))}
+                      </>
+                    );
+                  } else if (certsArray.length > 0) {
+                    return certsArray.map((cert: any, index: number) => (
+                      <View key={`cert-${index}`} style={styles.profileInfoItem}>
+                        <Ionicons name="ribbon" size={18} color={colors.primary} />
+                        <Text style={[styles.profileInfoText, { color: colors.textSecondary }]}>
+                          {cert.name || cert}
+                          {cert.issuedDate && ` (${format(new Date(cert.issuedDate), 'MMM yyyy')})`}
+                        </Text>
+                      </View>
+                    ));
+                  } else {
+                    return (
+                      <Text style={[styles.profileInfoText, { color: colors.textSecondary, fontStyle: 'italic' }]}>
+                        No qualifications listed yet
+                      </Text>
+                    );
+                  }
+                })()}
+              </Card>
+
+              {/* Reviews Section */}
+              <Card style={styles.profileSectionCard}>
+                <View style={styles.profileSectionHeader}>
+                  <Text style={[styles.profileSectionTitle, { color: colors.text }]}>Reviews</Text>
+                  <Text style={[styles.reviewsCount, { color: colors.textSecondary }]}>
+                    {sitterRating ? `${sitterRating.count} ${sitterRating.count === 1 ? 'review' : 'reviews'}` : 'No reviews yet'}
+                  </Text>
+                </View>
+                
+                {loadingProfileData ? (
+                  <View style={styles.profileLoadingContainer}>
+                    <ActivityIndicator size="small" color={colors.primary} />
+                    <Text style={[styles.profileLoadingText, { color: colors.textSecondary }]}>
+                      Loading reviews...
+                    </Text>
+                  </View>
+                ) : sitterReviews.length > 0 ? (
+                  <>
+                    {sitterReviews.slice(0, 3).map((review: any, index: number) => (
+                      <View key={review.id || index} style={[styles.reviewItem, { borderBottomColor: colors.border }]}>
+                        <View style={styles.reviewHeader}>
+                          <Text style={[styles.reviewerName, { color: colors.text }]}>
+                            {review.reviewer_name || 'Anonymous'}
+                          </Text>
+                          <View style={styles.reviewRating}>
+                            {[1, 2, 3, 4, 5].map((star) => (
+                              <Ionicons 
+                                key={star} 
+                                name="star" 
+                                size={14} 
+                                color={star <= (review.rating || 0) ? "#FFB800" : colors.border} 
+                              />
+                            ))}
+                          </View>
+                        </View>
+                        {review.comment && (
+                          <Text style={[styles.reviewText, { color: colors.textSecondary }]}>
+                            {review.comment}
+                          </Text>
+                        )}
+                        {review.created_at && (
+                          <Text style={[styles.reviewDate, { color: colors.textSecondary }]}>
+                            {format(new Date(review.created_at), 'MMM dd, yyyy')}
+                          </Text>
+                        )}
+                      </View>
+                    ))}
+                    {sitterReviews.length > 3 && (
+                      <TouchableOpacity style={styles.viewAllReviewsButton}>
+                        <Text style={[styles.viewAllReviewsText, { color: colors.primary }]}>
+                          View All {sitterReviews.length} Reviews
+                        </Text>
+                        <Ionicons name="chevron-forward" size={16} color={colors.primary} />
+                      </TouchableOpacity>
+                    )}
+                  </>
+                ) : (
+                  <View style={styles.noReviewsContainer}>
+                    <Ionicons name="star-outline" size={32} color={colors.textSecondary} />
+                    <Text style={[styles.noReviewsText, { color: colors.textSecondary }]}>
+                      No reviews yet
+                    </Text>
+                    <Text style={[styles.noReviewsSubtext, { color: colors.textSecondary }]}>
+                      Be the first to review this sitter
+                    </Text>
+                  </View>
+                )}
+              </Card>
+
+              {/* Action Buttons */}
+              <View style={styles.profileActions}>
+                <TouchableOpacity
+                  style={[styles.profileBookButton, { backgroundColor: colors.primary }]}
+                  onPress={() => {
+                    setProfileModalVisible(false);
+                    handleBookSitter(selectedSitterProfile);
+                  }}
+                >
+                  <Ionicons name="calendar" size={20} color={colors.white} />
+                  <Text style={styles.profileBookButtonText}>Book This Sitter</Text>
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
+          )}
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -2822,9 +3300,145 @@ const styles = StyleSheet.create({
     flex: 1,
     marginLeft: 10,
   },
+  sitterCardWrapper: {
+    marginBottom: 12,
+  },
   sitterCard: {
+    padding: 0,
+  },
+  sitterCardHeader: {
+    flexDirection: 'row',
+    padding: 16,
+    paddingBottom: 12,
+  },
+  sitterAvatarContainer: {
+    position: 'relative',
+    marginRight: 12,
+  },
+  sitterAvatar: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+  },
+  sitterAvatarPlaceholder: {
+    justifyContent: 'center',
     alignItems: 'center',
   },
+  verifiedBadgeAvatar: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#fff',
+  },
+  sitterInfoContainer: {
+    flex: 1,
+  },
+  sitterNameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 6,
+    gap: 8,
+  },
+  sitterName: {
+    fontSize: 16,
+    fontWeight: '600',
+    flex: 1,
+  },
+  verifiedBadgeInline: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 8,
+    gap: 4,
+  },
+  verifiedBadgeInlineText: {
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  sitterRatingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 6,
+    gap: 12,
+  },
+  ratingContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  ratingValue: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  ratingCount: {
+    fontSize: 12,
+  },
+  locationContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  locationText: {
+    fontSize: 12,
+    maxWidth: 120,
+  },
+  sitterPriceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 6,
+    gap: 6,
+  },
+  priceText: {
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  bioPreview: {
+    fontSize: 12,
+    lineHeight: 16,
+    marginTop: 4,
+  },
+  sitterCardActions: {
+    flexDirection: 'row',
+    paddingHorizontal: 16,
+    paddingBottom: 16,
+    gap: 8,
+  },
+  viewProfileButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    borderWidth: 1,
+    gap: 6,
+  },
+  viewProfileText: {
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  bookButtonCompact: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+  },
+  bookButtonText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  // Legacy styles (keep for compatibility)
   avatar: {
     width: 100,
     height: 100,
@@ -3036,10 +3650,12 @@ const styles = StyleSheet.create({
   },
   modalCloseButton: {
     position: 'absolute',
-    top: 80,
+    top: Platform.OS === 'ios' ? 50 : 16,
     right: 16,
     zIndex: 1000,
     padding: 8,
+    backgroundColor: 'rgba(255, 255, 255, 0.9)',
+    borderRadius: 20,
   },
   createSessionButton: {
     flexDirection: 'row',
@@ -3118,6 +3734,21 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
+  },
+  verifiedBadgeContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    borderWidth: 1,
+    alignSelf: 'flex-start',
+    marginTop: 8,
+  },
+  verifiedBadgeText: {
+    fontSize: 12,
+    fontWeight: '600',
   },
   // New Professional UI Styles
   searchContainer: {
@@ -3375,6 +4006,11 @@ const styles = StyleSheet.create({
   filterSectionTitle: {
     fontSize: 16,
     fontWeight: '600',
+  },
+  filterSectionSubtitle: {
+    fontSize: 12,
+    marginTop: 4,
+    marginBottom: 12,
   },
   filterInputContainer: {
     flexDirection: 'row',
@@ -3811,5 +4447,195 @@ const styles = StyleSheet.create({
     right: 4,
     backgroundColor: 'rgba(0,0,0,0.3)',
     borderRadius: 10,
+  },
+  // Profile Modal Styles
+  profileModalContent: {
+    padding: 20,
+    paddingBottom: 40,
+  },
+  profileHeader: {
+    flexDirection: 'row',
+    marginBottom: 24,
+  },
+  profileAvatar: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    marginRight: 16,
+  },
+  profileAvatarPlaceholder: {
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  profileHeaderInfo: {
+    flex: 1,
+  },
+  profileHeaderNameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+    gap: 8,
+  },
+  profileName: {
+    fontSize: 22,
+    fontWeight: '700',
+    flex: 1,
+  },
+  verifiedBadgeLarge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+    borderWidth: 1,
+    gap: 6,
+  },
+  verifiedBadgeLargeText: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  profileRatingSection: {
+    gap: 8,
+  },
+  profileRatingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  profileRatingValue: {
+    fontSize: 18,
+    fontWeight: '700',
+  },
+  profileRatingCount: {
+    fontSize: 14,
+  },
+  profileLocationRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  profileLocationText: {
+    fontSize: 14,
+  },
+  profilePriceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  profilePriceText: {
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  profileSectionCard: {
+    marginBottom: 16,
+  },
+  profileSectionTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    marginBottom: 12,
+  },
+  profileSectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  profileBioText: {
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  profileInfoItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+    gap: 10,
+  },
+  profileInfoText: {
+    fontSize: 14,
+    flex: 1,
+  },
+  reviewsCount: {
+    fontSize: 14,
+  },
+  reviewItem: {
+    paddingBottom: 16,
+    marginBottom: 16,
+    borderBottomWidth: 1,
+  },
+  reviewHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  reviewerName: {
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  reviewRating: {
+    flexDirection: 'row',
+    gap: 2,
+  },
+  reviewText: {
+    fontSize: 14,
+    lineHeight: 20,
+    marginBottom: 6,
+  },
+  reviewDate: {
+    fontSize: 12,
+  },
+  viewAllReviewsButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    marginTop: 8,
+    gap: 6,
+  },
+  viewAllReviewsText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  profileActions: {
+    marginTop: 8,
+    marginBottom: 20,
+  },
+  profileBookButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 16,
+    borderRadius: 12,
+    gap: 8,
+  },
+  profileBookButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  profileVerifiedRow: {
+    marginBottom: 8,
+  },
+  profileLoadingContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 20,
+    gap: 8,
+  },
+  profileLoadingText: {
+    fontSize: 14,
+  },
+  noReviewsContainer: {
+    alignItems: 'center',
+    paddingVertical: 32,
+    gap: 8,
+  },
+  noReviewsText: {
+    fontSize: 16,
+    fontWeight: '500',
+  },
+  noReviewsSubtext: {
+    fontSize: 14,
   },
 });

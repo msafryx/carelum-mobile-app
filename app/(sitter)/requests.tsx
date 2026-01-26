@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { View, StyleSheet, ScrollView, Text, TouchableOpacity, ActivityIndicator, RefreshControl, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/src/components/ui/ThemeProvider';
@@ -9,30 +9,39 @@ import SitterHamburgerMenu from '@/src/components/ui/SitterHamburgerMenu';
 import Badge from '@/src/components/ui/Badge';
 import { useRouter } from 'expo-router';
 import { useAuth } from '@/src/hooks/useAuth';
-import { getUserSessions, acceptSessionRequest, declineSessionRequest } from '@/src/services/session.service';
+import { discoverAvailableSessions, acceptSessionRequest, cancelSession, subscribeToUserSessions } from '@/src/services/session.service';
 import { getChildById } from '@/src/services/child.service';
 import { getUserById } from '@/src/services/admin.service';
-import { Session } from '@/src/types/session.types';
-import { format } from 'date-fns';
-import { SESSION_STATUS } from '@/src/config/constants';
+import { Session, getRequestMode, getRequestStatus, RequestMode, RequestStatus } from '@/src/types/session.types';
+import { format, differenceInHours, differenceInMinutes, isAfter } from 'date-fns';
+import { Child } from '@/src/types/child.types';
+import { User } from '@/src/types/user.types';
+import { formatExpectedDuration } from '@/src/utils/sessionSearchUtils';
 
 interface SessionWithDetails extends Session {
   childName?: string;
+  childAge?: number;
   parentName?: string;
+  parentCity?: string;
+  requestMode?: RequestMode;
+  requestStatus?: RequestStatus;
+  children?: Array<{ id: string; name: string; age?: number; photoUrl?: string }>;
 }
 
 export default function SitterRequestsScreen() {
   const { colors, spacing } = useTheme();
   const router = useRouter();
-  const { user } = useAuth();
+  const { user, userProfile } = useAuth();
   const [menuVisible, setMenuVisible] = useState(false);
   const [requests, setRequests] = useState<SessionWithDetails[]>([]);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [processingId, setProcessingId] = useState<string | null>(null);
+  const [ignoredIds, setIgnoredIds] = useState<Set<string>>(new Set());
+  const subscriptionRef = useRef<(() => void) | null>(null);
 
   const loadRequests = useCallback(async (isRefresh = false) => {
-    if (!user) return;
+    if (!user || !userProfile) return;
 
     if (isRefresh) {
       setRefreshing(true);
@@ -41,28 +50,74 @@ export default function SitterRequestsScreen() {
     }
 
     try {
-      // Load sessions with status 'requested' for this sitter
-      const result = await getUserSessions(user.id, 'sitter', 'requested');
+      // Discover all available sessions (invite, nearby, city, nationwide)
+      const result = await discoverAvailableSessions(
+        undefined, // scope - undefined means get all
+        undefined, // maxDistance
+        userProfile.city || undefined // sitterCity for city filtering
+      );
 
       if (result.success && result.data) {
-        // Fetch child and parent names for each request
+        // Filter out ignored requests
+        const filteredSessions = result.data.filter(s => !ignoredIds.has(s.id));
+        
+        // Fetch child and parent details for each request
         const requestsWithDetails = await Promise.all(
-          result.data.map(async (session) => {
-            const details: SessionWithDetails = { ...session };
+          filteredSessions.map(async (session) => {
+            const details: SessionWithDetails = { 
+              ...session,
+              requestMode: getRequestMode(session.searchScope),
+              requestStatus: getRequestStatus(session),
+            };
             
-            // Get child name
+            // Get all children in the session
+            const children: Array<{ id: string; name: string; age?: number; photoUrl?: string }> = [];
+            
+            // Load primary child
             if (session.childId) {
               const childResult = await getChildById(session.childId);
               if (childResult.success && childResult.data) {
-                details.childName = childResult.data.name;
+                const child = childResult.data;
+                children.push({
+                  id: child.id,
+                  name: child.name,
+                  age: child.age,
+                  photoUrl: child.photoUrl,
+                });
+                details.childName = child.name;
+                details.childAge = child.age;
               }
             }
-
-            // Get parent name
+            
+            // Load additional children if childIds exists
+            if (session.childIds && session.childIds.length > 1) {
+              const additionalChildren = await Promise.all(
+                session.childIds
+                  .filter(id => id !== session.childId)
+                  .map(async (childId) => {
+                    const childResult = await getChildById(childId);
+                    if (childResult.success && childResult.data) {
+                      return {
+                        id: childResult.data.id,
+                        name: childResult.data.name,
+                        age: childResult.data.age,
+                        photoUrl: childResult.data.photoUrl,
+                      };
+                    }
+                    return null;
+                  })
+              );
+              children.push(...additionalChildren.filter(c => c !== null) as any[]);
+            }
+            
+            details.children = children;
+            
+            // Get parent name and city
             if (session.parentId) {
               const parentResult = await getUserById(session.parentId);
               if (parentResult.success && parentResult.data) {
                 details.parentName = parentResult.data.displayName || 'Parent';
+                details.parentCity = parentResult.data.city || undefined;
               }
             }
 
@@ -70,7 +125,23 @@ export default function SitterRequestsScreen() {
           })
         );
 
-        setRequests(requestsWithDetails);
+        // Sort: Invite requests first (pinned), then by start time
+        const sortedRequests = requestsWithDetails.sort((a, b) => {
+          // Invite requests go first
+          if (a.requestMode === 'INVITE' && b.requestMode !== 'INVITE') return -1;
+          if (a.requestMode !== 'INVITE' && b.requestMode === 'INVITE') return 1;
+          // Then by start time (soonest first)
+          return a.startTime.getTime() - b.startTime.getTime();
+        });
+
+        // Filter out expired, cancelled, and accepted by others
+        const activeRequests = sortedRequests.filter(req => {
+          if (req.requestStatus === 'EXPIRED' || req.requestStatus === 'CANCELLED') return false;
+          if (req.requestStatus === 'ACCEPTED' && req.sitterId && req.sitterId !== user.id) return false;
+          return true;
+        });
+
+        setRequests(activeRequests);
       } else {
         setRequests([]);
       }
@@ -81,11 +152,29 @@ export default function SitterRequestsScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [user]);
+  }, [user, userProfile, ignoredIds]);
 
   useEffect(() => {
     loadRequests();
-  }, [loadRequests]);
+    
+    // Subscribe to real-time updates
+    if (user) {
+      subscriptionRef.current = subscribeToUserSessions(
+        user.id,
+        'sitter',
+        () => {
+          // Reload requests when sessions change
+          loadRequests();
+        }
+      );
+    }
+    
+    return () => {
+      if (subscriptionRef.current) {
+        subscriptionRef.current();
+      }
+    };
+  }, [loadRequests, user]);
 
   const handleAccept = async (sessionId: string) => {
     setProcessingId(sessionId);
@@ -118,7 +207,7 @@ export default function SitterRequestsScreen() {
           onPress: async () => {
             setProcessingId(sessionId);
             try {
-              const result = await declineSessionRequest(sessionId);
+              const result = await cancelSession(sessionId, 'Declined by sitter');
               if (result.success) {
                 Alert.alert('Request Declined', 'You have declined this session request.', [
                   { text: 'OK', onPress: () => loadRequests() },
@@ -138,9 +227,90 @@ export default function SitterRequestsScreen() {
     );
   };
 
+  const handleIgnore = (sessionId: string) => {
+    setIgnoredIds(prev => new Set([...prev, sessionId]));
+    // Remove from requests immediately
+    setRequests(prev => prev.filter(r => r.id !== sessionId));
+  };
+
   const handleViewDetails = (sessionId: string) => {
     router.push(`/(sitter)/session/${sessionId}` as any);
   };
+
+  const getModeBadgeColor = (mode: RequestMode) => {
+    switch (mode) {
+      case 'INVITE':
+        return colors.primary || '#3b82f6';
+      case 'NEARBY':
+        return colors.success || '#10b981';
+      case 'CITY':
+        return colors.warning || '#f59e0b';
+      case 'NATIONWIDE':
+        return colors.info || '#6366f1';
+      default:
+        return colors.textSecondary || '#6b7280';
+    }
+  };
+
+  const getModeLabel = (mode: RequestMode) => {
+    switch (mode) {
+      case 'INVITE':
+        return 'Invite';
+      case 'NEARBY':
+        return 'Nearby';
+      case 'CITY':
+        return 'City';
+      case 'NATIONWIDE':
+        return 'Nationwide';
+      default:
+        return 'Request';
+    }
+  };
+
+  const formatDuration = (session: SessionWithDetails): string => {
+    if (session.timeSlots && session.timeSlots.length > 0) {
+      return formatExpectedDuration(session);
+    }
+    if (session.endTime) {
+      const hours = differenceInHours(session.endTime, session.startTime);
+      const minutes = differenceInMinutes(session.endTime, session.startTime) % 60;
+      if (hours > 0 && minutes > 0) {
+        return `${hours}h ${minutes}m`;
+      } else if (hours > 0) {
+        return `${hours}h`;
+      } else {
+        return `${minutes}m`;
+      }
+    }
+    return 'Ongoing';
+  };
+
+  const getLocationDisplay = (session: SessionWithDetails): string => {
+    if (session.requestMode === 'INVITE') {
+      // For invite mode, show full address
+      if (typeof session.location === 'string') {
+        return session.location;
+      }
+      if (session.location?.address) {
+        return session.location.address;
+      }
+      return 'Location not specified';
+    } else {
+      // For other modes, show city-level only
+      if (session.location?.city) {
+        return session.location.city;
+      }
+      if (typeof session.location === 'string') {
+        // Try to extract city from address string
+        const parts = session.location.split(',');
+        return parts[parts.length - 1]?.trim() || session.location;
+      }
+      return 'Location not specified';
+    }
+  };
+
+  const inviteRequests = requests.filter(r => r.requestMode === 'INVITE');
+  const otherRequests = requests.filter(r => r.requestMode !== 'INVITE');
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
@@ -180,92 +350,65 @@ export default function SitterRequestsScreen() {
             <RefreshControl refreshing={refreshing} onRefresh={() => loadRequests(true)} />
           }
         >
-          {requests.map((request) => (
-            <Card key={request.id} style={styles.requestCard}>
-              <View style={styles.requestHeader}>
-                <View style={styles.requestInfo}>
-                  <Text style={[styles.requestTitle, { color: colors.text }]}>
-                    {request.childName || 'Child'}
-                  </Text>
-                  {request.parentName && (
-                    <Text style={[styles.parentName, { color: colors.textSecondary }]}>
-                      from {request.parentName}
-                    </Text>
-                  )}
-                </View>
-                <Badge
-                  label="Requested"
-                  color={colors.warning || '#f59e0b'}
+          {/* Invite Requests Section (Pinned) */}
+          {inviteRequests.length > 0 && (
+            <View style={styles.section}>
+              <View style={styles.sectionHeader}>
+                <Ionicons name="mail" size={20} color={colors.primary} />
+                <Text style={[styles.sectionTitle, { color: colors.text }]}>
+                  Direct Invitations ({inviteRequests.length})
+                </Text>
+              </View>
+              {inviteRequests.map((request) => (
+                <RequestCard
+                  key={request.id}
+                  request={request}
+                  colors={colors}
+                  processingId={processingId}
+                  onAccept={handleAccept}
+                  onDecline={handleDecline}
+                  onIgnore={handleIgnore}
+                  onViewDetails={handleViewDetails}
+                  getModeBadgeColor={getModeBadgeColor}
+                  getModeLabel={getModeLabel}
+                  formatDuration={formatDuration}
+                  getLocationDisplay={getLocationDisplay}
+                  isInvite={true}
                 />
-              </View>
+              ))}
+            </View>
+          )}
 
-              <View style={styles.requestDetails}>
-                <View style={styles.detailRow}>
-                  <Ionicons name="calendar-outline" size={16} color={colors.textSecondary} />
-                  <Text style={[styles.detailText, { color: colors.textSecondary }]}>
-                    {format(request.startTime, 'MMM dd, yyyy • h:mm a')}
+          {/* Other Requests Section */}
+          {otherRequests.length > 0 && (
+            <View style={styles.section}>
+              {inviteRequests.length > 0 && (
+                <View style={styles.sectionHeader}>
+                  <Ionicons name="search" size={20} color={colors.textSecondary} />
+                  <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>
+                    Available Requests ({otherRequests.length})
                   </Text>
                 </View>
-                {request.location?.address && (
-                  <View style={styles.detailRow}>
-                    <Ionicons name="location-outline" size={16} color={colors.textSecondary} />
-                    <Text style={[styles.detailText, { color: colors.textSecondary }]} numberOfLines={1}>
-                      {request.location.address}
-                    </Text>
-                  </View>
-                )}
-                <View style={styles.detailRow}>
-                  <Ionicons name="cash-outline" size={16} color={colors.textSecondary} />
-                  <Text style={[styles.detailText, { color: colors.textSecondary }]}>
-                    ${request.hourlyRate}/hr
-                  </Text>
-                </View>
-                {request.notes && (
-                  <View style={styles.detailRow}>
-                    <Ionicons name="document-text-outline" size={16} color={colors.textSecondary} />
-                    <Text style={[styles.detailText, { color: colors.textSecondary }]} numberOfLines={2}>
-                      {request.notes}
-                    </Text>
-                  </View>
-                )}
-              </View>
-
-              <View style={styles.requestActions}>
-                <TouchableOpacity
-                  style={[styles.actionButton, styles.declineButton, { borderColor: colors.error || '#ef4444' }]}
-                  onPress={() => handleDecline(request.id)}
-                  disabled={processingId === request.id}
-                >
-                  {processingId === request.id ? (
-                    <ActivityIndicator size="small" color={colors.error || '#ef4444'} />
-                  ) : (
-                    <>
-                      <Ionicons name="close-circle" size={18} color={colors.error || '#ef4444'} />
-                      <Text style={[styles.actionButtonText, { color: colors.error || '#ef4444' }]}>
-                        Decline
-                      </Text>
-                    </>
-                  )}
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.actionButton, styles.acceptButton, { backgroundColor: colors.primary }]}
-                  onPress={() => handleAccept(request.id)}
-                  disabled={processingId === request.id}
-                >
-                  {processingId === request.id ? (
-                    <ActivityIndicator size="small" color={colors.white} />
-                  ) : (
-                    <>
-                      <Ionicons name="checkmark-circle" size={18} color={colors.white} />
-                      <Text style={[styles.actionButtonText, { color: colors.white }]}>
-                        Accept
-                      </Text>
-                    </>
-                  )}
-                </TouchableOpacity>
-              </View>
-            </Card>
-          ))}
+              )}
+              {otherRequests.map((request) => (
+                <RequestCard
+                  key={request.id}
+                  request={request}
+                  colors={colors}
+                  processingId={processingId}
+                  onAccept={handleAccept}
+                  onDecline={handleDecline}
+                  onIgnore={handleIgnore}
+                  onViewDetails={handleViewDetails}
+                  getModeBadgeColor={getModeBadgeColor}
+                  getModeLabel={getModeLabel}
+                  formatDuration={formatDuration}
+                  getLocationDisplay={getLocationDisplay}
+                  isInvite={false}
+                />
+              ))}
+            </View>
+          )}
         </ScrollView>
       )}
       
@@ -274,6 +417,176 @@ export default function SitterRequestsScreen() {
         onClose={() => setMenuVisible(false)}
       />
     </View>
+  );
+}
+
+interface RequestCardProps {
+  request: SessionWithDetails;
+  colors: any;
+  processingId: string | null;
+  onAccept: (id: string) => void;
+  onDecline: (id: string) => void;
+  onIgnore: (id: string) => void;
+  onViewDetails: (id: string) => void;
+  getModeBadgeColor: (mode: RequestMode) => string;
+  getModeLabel: (mode: RequestMode) => string;
+  formatDuration: (session: SessionWithDetails) => string;
+  getLocationDisplay: (session: SessionWithDetails) => string;
+  isInvite: boolean;
+}
+
+function RequestCard({
+  request,
+  colors,
+  processingId,
+  onAccept,
+  onDecline,
+  onIgnore,
+  onViewDetails,
+  getModeBadgeColor,
+  getModeLabel,
+  formatDuration,
+  getLocationDisplay,
+  isInvite,
+}: RequestCardProps) {
+  const children = request.children || [];
+  const primaryChild = children[0] || { name: request.childName || 'Child', age: request.childAge };
+
+  return (
+    <Card 
+      style={[
+        styles.requestCard,
+        isInvite && { borderLeftWidth: 4, borderLeftColor: colors.primary },
+      ]}
+    >
+      <View style={styles.requestHeader}>
+        <View style={styles.requestInfo}>
+          <View style={styles.childInfo}>
+            <Text style={[styles.requestTitle, { color: colors.text }]}>
+              {primaryChild.name}
+              {primaryChild.age && `, ${primaryChild.age} ${primaryChild.age === 1 ? 'year' : 'years'} old`}
+            </Text>
+            {children.length > 1 && (
+              <Text style={[styles.multipleChildren, { color: colors.textSecondary }]}>
+                +{children.length - 1} more {children.length === 2 ? 'child' : 'children'}
+              </Text>
+            )}
+          </View>
+          {request.parentName && (
+            <Text style={[styles.parentName, { color: colors.textSecondary }]}>
+              from {request.parentName}
+            </Text>
+          )}
+        </View>
+        <Badge
+          label={getModeLabel(request.requestMode || 'INVITE')}
+          color={getModeBadgeColor(request.requestMode || 'INVITE')}
+        />
+      </View>
+
+      <View style={styles.requestDetails}>
+        <View style={styles.detailRow}>
+          <Ionicons name="calendar-outline" size={16} color={colors.textSecondary} />
+          <Text style={[styles.detailText, { color: colors.textSecondary }]}>
+            {format(request.startTime, 'MMM dd, yyyy • h:mm a')}
+          </Text>
+        </View>
+        <View style={styles.detailRow}>
+          <Ionicons name="time-outline" size={16} color={colors.textSecondary} />
+          <Text style={[styles.detailText, { color: colors.textSecondary }]}>
+            {formatDuration(request)}
+          </Text>
+        </View>
+        <View style={styles.detailRow}>
+          <Ionicons name="location-outline" size={16} color={colors.textSecondary} />
+          <Text style={[styles.detailText, { color: colors.textSecondary }]} numberOfLines={1}>
+            {getLocationDisplay(request)}
+          </Text>
+        </View>
+        <View style={styles.detailRow}>
+          <Ionicons name="cash-outline" size={16} color={colors.textSecondary} />
+          <Text style={[styles.detailText, { color: colors.textSecondary }]}>
+            ${request.hourlyRate}/hr
+          </Text>
+        </View>
+        {request.notes && (
+          <View style={styles.detailRow}>
+            <Ionicons name="document-text-outline" size={16} color={colors.textSecondary} />
+            <Text style={[styles.detailText, { color: colors.textSecondary }]} numberOfLines={2}>
+              {request.notes}
+            </Text>
+          </View>
+        )}
+      </View>
+
+      <View style={styles.requestActions}>
+        {isInvite ? (
+          <>
+            <TouchableOpacity
+              style={[styles.actionButton, styles.declineButton, { borderColor: colors.error || '#ef4444' }]}
+              onPress={() => onDecline(request.id)}
+              disabled={processingId === request.id}
+            >
+              {processingId === request.id ? (
+                <ActivityIndicator size="small" color={colors.error || '#ef4444'} />
+              ) : (
+                <>
+                  <Ionicons name="close-circle" size={18} color={colors.error || '#ef4444'} />
+                  <Text style={[styles.actionButtonText, { color: colors.error || '#ef4444' }]}>
+                    Decline
+                  </Text>
+                </>
+              )}
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.actionButton, styles.acceptButton, { backgroundColor: colors.primary }]}
+              onPress={() => onAccept(request.id)}
+              disabled={processingId === request.id}
+            >
+              {processingId === request.id ? (
+                <ActivityIndicator size="small" color="#ffffff" />
+              ) : (
+                <>
+                  <Ionicons name="checkmark-circle" size={18} color="#ffffff" />
+                  <Text style={[styles.actionButtonText, { color: '#ffffff' }]}>
+                    Accept
+                  </Text>
+                </>
+              )}
+            </TouchableOpacity>
+          </>
+        ) : (
+          <>
+            <TouchableOpacity
+              style={[styles.actionButton, styles.ignoreButton, { borderColor: colors.textSecondary || '#6b7280' }]}
+              onPress={() => onIgnore(request.id)}
+              disabled={processingId === request.id}
+            >
+              <Ionicons name="eye-off-outline" size={18} color={colors.textSecondary || '#6b7280'} />
+              <Text style={[styles.actionButtonText, { color: colors.textSecondary || '#6b7280' }]}>
+                Ignore
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.actionButton, styles.acceptButton, { backgroundColor: colors.primary }]}
+              onPress={() => onAccept(request.id)}
+              disabled={processingId === request.id}
+            >
+              {processingId === request.id ? (
+                <ActivityIndicator size="small" color="#ffffff" />
+              ) : (
+                <>
+                  <Ionicons name="checkmark-circle" size={18} color="#ffffff" />
+                  <Text style={[styles.actionButtonText, { color: '#ffffff' }]}>
+                    Accept
+                  </Text>
+                </>
+              )}
+            </TouchableOpacity>
+          </>
+        )}
+      </View>
+    </Card>
   );
 }
 
@@ -297,6 +610,20 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  section: {
+    marginBottom: 24,
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 12,
+    paddingHorizontal: 4,
+  },
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+  },
   requestCard: {
     marginBottom: 12,
   },
@@ -309,10 +636,16 @@ const styles = StyleSheet.create({
   requestInfo: {
     flex: 1,
   },
+  childInfo: {
+    marginBottom: 4,
+  },
   requestTitle: {
     fontSize: 18,
     fontWeight: '600',
-    marginBottom: 4,
+  },
+  multipleChildren: {
+    fontSize: 12,
+    marginTop: 2,
   },
   parentName: {
     fontSize: 14,
@@ -350,6 +683,11 @@ const styles = StyleSheet.create({
     // backgroundColor set inline
   },
   declineButton: {
+    borderWidth: 2,
+    backgroundColor: 'transparent',
+    // borderColor set inline
+  },
+  ignoreButton: {
     borderWidth: 2,
     backgroundColor: 'transparent',
     // borderColor set inline

@@ -130,6 +130,23 @@ export async function getCurrentUserProfileFromAPI(): Promise<ServiceResult<User
 }
 
 /**
+ * Get verified sitters (for parents to browse and select)
+ */
+export async function getVerifiedSitters(limit: number = 100): Promise<ServiceResult<User[]>> {
+  const result = await apiRequest<any[]>(`/api/users/sitters/verified?limit=${limit}`);
+  
+  if (!result.success) {
+    return result;
+  }
+
+  const sitters = (result.data || []).map(apiResponseToUser);
+  return {
+    success: true,
+    data: sitters,
+  };
+}
+
+/**
  * Update auth user metadata (for display_name sync)
  */
 async function updateAuthMetadata(displayName?: string): Promise<void> {

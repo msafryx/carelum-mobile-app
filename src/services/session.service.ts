@@ -521,8 +521,9 @@ export async function cancelSession(
  * Discover available sessions for sitters (Uber-like discovery)
  */
 export async function discoverAvailableSessions(
-  scope?: 'nearby' | 'city' | 'nationwide',
-  maxDistance?: number
+  scope?: 'invite' | 'nearby' | 'city' | 'nationwide',
+  maxDistance?: number,
+  sitterCity?: string
 ): Promise<ServiceResult<Session[]>> {
   try {
     let endpoint = `${API_ENDPOINTS.SESSIONS}/discover/available`;
@@ -533,6 +534,9 @@ export async function discoverAvailableSessions(
     }
     if (maxDistance) {
       params.append('max_distance', maxDistance.toString());
+    }
+    if (sitterCity) {
+      params.append('sitter_city', sitterCity);
     }
     
     if (params.toString()) {
@@ -561,6 +565,7 @@ export async function discoverAvailableSessions(
       searchScope: apiSession.searchScope || apiSession.search_scope,
       maxDistanceKm: apiSession.maxDistanceKm || apiSession.max_distance_km,
       timeSlots: parseTimeSlots(apiSession),
+      expiresAt: apiSession.expiresAt ? new Date(apiSession.expiresAt) : undefined,
       cancelledAt: apiSession.cancelledAt ? new Date(apiSession.cancelledAt) : undefined,
       cancelledBy: apiSession.cancelledBy,
       cancellationReason: apiSession.cancellationReason,

@@ -3,7 +3,7 @@ User and profile management endpoints
 """
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, EmailStr
-from typing import Optional
+from typing import Optional, List
 from decimal import Decimal
 
 from app.utils.auth import verify_token, CurrentUser, security
@@ -361,3 +361,108 @@ async def update_current_user_profile(
         raise
     except Exception as e:
         raise handle_error(e, "Failed to update user profile")
+
+
+@router.get("/sitters/verified", response_model=List[UserProfileResponse])
+async def get_verified_sitters(
+    current_user: CurrentUser = Depends(verify_token),
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    limit: int = 100
+):
+    """
+    Get list of verified sitters (for parents to browse and select)
+    Only verified sitters with is_verified = true are returned
+    """
+    try:
+        # Use authenticated Supabase client for RLS
+        auth_token = credentials.credentials
+        supabase = get_supabase_with_auth(auth_token)
+        
+        if not supabase:
+            raise AppError(
+                code="AUTH_ERROR",
+                message="Failed to authenticate with database",
+                status_code=500
+            )
+        
+        # Query for verified sitters only
+        # Note: RLS policies should allow parents to read verified sitter profiles for browsing
+        # If RLS blocks, parents won't be able to see sitters - need to update RLS policy
+        # Use lowercase 'true' for boolean comparison (PostgreSQL standard)
+        query = supabase.table("users").select("*").eq("role", "sitter").eq("is_verified", True)
+        
+        # Alternative: Try with explicit boolean true if the above doesn't work
+        # Some Supabase versions might need explicit boolean handling
+        
+        # Order by created_at (newest first) or you could order by rating/reviews if available
+        query = query.order("created_at", desc=True).limit(limit)
+        
+        print(f"🔍 Querying verified sitters for user {current_user.id} (role: {current_user.role})")
+        
+        try:
+            response = query.execute()
+            
+            # Check for errors in response
+            if hasattr(response, 'error') and response.error:
+                error_str = str(response.error)
+                print(f"❌ Supabase query error: {error_str}")
+                if "permission" in error_str.lower() or "policy" in error_str.lower() or "RLS" in error_str or "PGRST" in error_str:
+                    raise AppError(
+                        code="PERMISSION_DENIED",
+                        message="Cannot access verified sitters. RLS policy may be blocking access. Please run UPDATE_RLS_FOR_VERIFIED_SITTERS.sql in Supabase SQL Editor.",
+                        status_code=403
+                    )
+            
+            print(f"📥 Raw response: {response.data if hasattr(response, 'data') else 'NO DATA'}")
+            print(f"📥 Found {len(response.data or [])} verified sitters")
+            
+            if not response.data:
+                print(f"⚠️ No verified sitters found. Possible reasons:")
+                print(f"   1. No sitters with is_verified = true and role = 'sitter'")
+                print(f"   2. RLS policies blocking access (run UPDATE_RLS_FOR_VERIFIED_SITTERS.sql)")
+                print(f"   3. Database connection issue")
+                return []
+        except AppError:
+            raise
+        except Exception as query_error:
+            error_str = str(query_error)
+            print(f"❌ Query execution error: {error_str}")
+            if "permission" in error_str.lower() or "policy" in error_str.lower() or "RLS" in error_str or "PGRST" in error_str or "406" in error_str:
+                raise AppError(
+                    code="PERMISSION_DENIED",
+                    message="Cannot access verified sitters. RLS policy may be blocking access. Please run UPDATE_RLS_FOR_VERIFIED_SITTERS.sql in Supabase SQL Editor to allow parents to read verified sitter profiles.",
+                    status_code=403
+                )
+            raise
+        
+        # Convert to response format
+        sitters = []
+        for user_data in (response.data or []):
+            sitters.append(UserProfileResponse(
+                id=user_data["id"],
+                email=user_data["email"],
+                displayName=user_data.get("display_name", ""),
+                role=user_data.get("role", "sitter"),
+                preferredLanguage=user_data.get("preferred_language", "en"),
+                userNumber=user_data.get("user_number"),
+                phoneNumber=user_data.get("phone_number"),
+                profileImageUrl=user_data.get("photo_url"),
+                theme=user_data.get("theme", "auto"),
+                isVerified=user_data.get("is_verified", False),
+                verificationStatus=user_data.get("verification_status"),
+                hourlyRate=float(user_data["hourly_rate"]) if user_data.get("hourly_rate") else None,
+                bio=user_data.get("bio"),
+                address=user_data.get("address"),
+                city=user_data.get("city"),
+                country=user_data.get("country"),
+                createdAt=user_data["created_at"],
+                updatedAt=user_data.get("updated_at", user_data["created_at"])
+            ))
+        
+        print(f"✅ Found {len(sitters)} verified sitters")
+        return sitters
+        
+    except AppError:
+        raise
+    except Exception as e:
+        raise handle_error(e, "Failed to fetch verified sitters")

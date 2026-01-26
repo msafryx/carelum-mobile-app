@@ -235,6 +235,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   cancellation_reason TEXT,
   -- Completion tracking
   completed_at TIMESTAMPTZ,
+  -- Request expiration (for OPEN status requests)
+  expires_at TIMESTAMPTZ, -- When the request expires (for OPEN status requests). Used to filter out expired requests in the babysitter requests feed.
   -- Timestamps
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
@@ -338,6 +340,11 @@ CREATE INDEX IF NOT EXISTS idx_sessions_cancelled_at ON sessions(cancelled_at) W
 CREATE INDEX IF NOT EXISTS idx_sessions_completed_at ON sessions(completed_at) WHERE completed_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_sessions_cancelled_by ON sessions(cancelled_by) WHERE cancelled_by IS NOT NULL;
 
+-- Indexes for request expiration (for babysitter requests feed)
+CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at) WHERE expires_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_sessions_not_expired ON sessions(expires_at) 
+WHERE status = 'requested' AND (expires_at IS NULL OR expires_at > NOW());
+
 -- ============================================
 -- MIGRATION SCRIPTS FOR EXISTING DATABASES
 -- ============================================
@@ -351,6 +358,18 @@ CREATE INDEX IF NOT EXISTS idx_sessions_cancelled_by ON sessions(cancelled_by) W
 -- 2. ADD_SESSION_TRACKING_COLUMNS.sql
 --    - Adds cancellation tracking columns (cancelled_at, cancelled_by, cancellation_reason)
 --    - Adds completion tracking column (completed_at)
+--
+-- 3. ADD_EXPIRES_AT_COLUMN.sql
+--    - Adds expires_at column for request expiration tracking
+--    - Adds indexes for efficient filtering of expired requests
+--
+-- 4. UPDATE_RLS_FOR_VERIFIED_SITTERS.sql
+--    - Updates RLS policy to allow parents to read verified sitter profiles
+--    - Enables parents to browse and select verified sitters for session requests
+--
+-- 5. UPDATE_VERIFICATION_RLS_FOR_PARENTS.sql
+--    - Updates RLS policy to allow parents to read verification requests for verified sitters
+--    - Enables parents to view sitter qualifications and certifications when browsing verified sitters
 --    - Creates indexes for cancellation/completion queries
 --    - Adds column comments for documentation
 --
@@ -405,12 +424,41 @@ ALTER TABLE reviews ENABLE ROW LEVEL SECURITY;
 -- Basic RLS policies (users can read/write their own data)
 -- Note: The create_user_profile function uses SECURITY DEFINER to bypass RLS during sign-up
 
--- Users: Users can read their own profile, admins can read all
+-- Helper function to get user role (avoids infinite recursion in RLS policies)
+CREATE OR REPLACE FUNCTION get_user_role(user_id UUID)
+RETURNS TEXT
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+STABLE
+AS $$
+DECLARE
+  user_role TEXT;
+BEGIN
+  SELECT role INTO user_role
+  FROM users
+  WHERE id = user_id;
+  
+  RETURN COALESCE(user_role, 'parent');
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION get_user_role(UUID) TO authenticated;
+GRANT EXECUTE ON FUNCTION get_user_role(UUID) TO anon;
+
+-- Users: Users can read their own profile, admins can read all, parents can read verified sitters
 DROP POLICY IF EXISTS "Users can read own profile" ON users;
 CREATE POLICY "Users can read own profile" ON users
-  FOR SELECT USING (auth.uid() = id OR EXISTS (
-    SELECT 1 FROM users WHERE id = auth.uid() AND role = 'admin'
-  ));
+  FOR SELECT USING (
+    auth.uid() = id 
+    OR get_user_role(auth.uid()) = 'admin'
+    OR (
+      -- Parents can read verified sitter profiles (for browsing and selecting)
+      get_user_role(auth.uid()) = 'parent'
+      AND users.role = 'sitter'
+      AND users.is_verified = true
+    )
+  );
 
 -- Users can insert their own profile (for sign-up)
 -- Note: Most inserts are handled by create_user_profile function and handle_auth_user_created trigger
@@ -522,11 +570,21 @@ CREATE POLICY "Users can create GPS tracking" ON gps_tracking
     )
   );
 
--- Verification Requests: Sitters can read their own, admins can read all
+-- Verification Requests: Sitters can read their own, admins can read all, parents can read for verified sitters
 CREATE POLICY "Sitters can read own verification requests" ON verification_requests
   FOR SELECT USING (
     sitter_id = auth.uid() OR
-    EXISTS (SELECT 1 FROM users WHERE id = auth.uid() AND role = 'admin')
+    EXISTS (SELECT 1 FROM users WHERE id = auth.uid() AND role = 'admin') OR
+    (
+      -- Parents can read verification requests for verified sitters (for viewing qualifications)
+      get_user_role(auth.uid()) = 'parent'
+      AND EXISTS (
+        SELECT 1 FROM users 
+        WHERE users.id = verification_requests.sitter_id 
+        AND users.role = 'sitter'
+        AND users.is_verified = true
+      )
+    )
   );
 
 CREATE POLICY "Sitters can create verification requests" ON verification_requests

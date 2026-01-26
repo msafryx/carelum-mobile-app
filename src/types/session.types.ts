@@ -81,6 +81,54 @@ export interface Session {
   cancelledBy?: 'parent' | 'sitter';
   cancellationReason?: string;
   
+  // Request expiration
+  expiresAt?: Date; // When the request expires (for OPEN status requests)
+  
   createdAt: Date;
   updatedAt: Date;
+}
+
+/**
+ * Request mode mapping (for UI display)
+ * Maps searchScope to requestMode for better UX
+ */
+export type RequestMode = 'INVITE' | 'NEARBY' | 'CITY' | 'NATIONWIDE';
+
+/**
+ * Request status mapping (for UI display)
+ * Maps session status to request status
+ */
+export type RequestStatus = 'INVITED' | 'OPEN' | 'ACCEPTED' | 'CANCELLED' | 'EXPIRED';
+
+/**
+ * Helper function to get request mode from search scope
+ */
+export function getRequestMode(searchScope?: SessionSearchScope): RequestMode {
+  if (!searchScope) return 'INVITE';
+  const upper = searchScope.toUpperCase();
+  if (upper === 'INVITE') return 'INVITE';
+  if (upper === 'NEARBY') return 'NEARBY';
+  if (upper === 'CITY') return 'CITY';
+  if (upper === 'NATIONWIDE') return 'NATIONWIDE';
+  return 'INVITE'; // Default
+}
+
+/**
+ * Helper function to get request status from session status
+ */
+export function getRequestStatus(session: Session): RequestStatus {
+  if (session.status === 'requested') {
+    // Check if expired
+    if (session.expiresAt && new Date() > session.expiresAt) {
+      return 'EXPIRED';
+    }
+    // Check if invite mode
+    if (session.searchScope === 'invite' && session.sitterId) {
+      return 'INVITED';
+    }
+    return 'OPEN';
+  }
+  if (session.status === 'accepted') return 'ACCEPTED';
+  if (session.status === 'cancelled') return 'CANCELLED';
+  return 'OPEN'; // Default
 }

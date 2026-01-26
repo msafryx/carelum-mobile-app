@@ -304,6 +304,46 @@ Update current user's profile.
 - Role cannot be changed via this endpoint (admin only)
 - Uses authenticated Supabase client for RLS
 
+#### GET `/api/users/sitters/verified`
+Get list of verified sitters (for parents to browse and select).
+
+**Authentication:** Required
+
+**Query Parameters:**
+- `limit` (optional): Maximum number of sitters to return (default: 100, max: 1000)
+
+**Response:**
+```json
+[
+  {
+    "id": "uuid",
+    "email": "sitter@example.com",
+    "displayName": "Jane Smith",
+    "role": "sitter",
+    "preferredLanguage": "en",
+    "userNumber": "s1",
+    "phoneNumber": "+1234567890",
+    "profileImageUrl": "https://...",
+    "theme": "auto",
+    "isVerified": true,
+    "verificationStatus": "APPROVED",
+    "hourlyRate": 25.50,
+    "bio": "Experienced babysitter with 5 years of experience...",
+    "address": "123 Main St",
+    "city": "New York",
+    "country": "USA",
+    "createdAt": "2024-01-01T00:00:00Z",
+    "updatedAt": "2024-01-01T00:00:00Z"
+  }
+]
+```
+
+**Note:**
+- Only returns sitters with `is_verified = true`
+- Used by parents to browse and select sitters for invite mode sessions
+- Ordered by creation date (newest first)
+- All sitters in the response are verified
+
 ### Admin Endpoints
 
 All admin endpoints require the user to have `role: "admin"`.
@@ -409,6 +449,8 @@ cancelled   cancelled  cancelled
 - Cancellation tracking (who, when, why)
 - Session discovery for sitters
 - Multiple search scopes (invite, nearby, city, nationwide)
+- Multiple children per session (via `childIds` array)
+- Time slots for multi-day sessions (via `timeSlots` array)
 
 #### GET `/api/sessions`
 Get current user's sessions.
@@ -426,6 +468,7 @@ Get current user's sessions.
     "parentId": "uuid",
     "sitterId": "uuid",
     "childId": "uuid",
+    "childIds": ["uuid1", "uuid2"],  // Array of child IDs (for sessions with multiple children)
     "status": "active",
     "startTime": "2024-01-01T10:00:00Z",
     "endTime": null,
@@ -435,6 +478,20 @@ Get current user's sessions.
     "notes": null,
     "searchScope": "invite",
     "maxDistanceKm": null,
+    "timeSlots": [  // Array of time slots (for Time Slots booking mode)
+      {
+        "date": "2024-01-01",
+        "startTime": "10:00:00",
+        "endTime": "14:00:00",
+        "hours": 4.0
+      },
+      {
+        "date": "2024-01-02",
+        "startTime": "10:00:00",
+        "endTime": "14:00:00",
+        "hours": 4.0
+      }
+    ],
     "cancelledAt": null,
     "cancelledBy": null,
     "cancellationReason": null,
@@ -444,6 +501,17 @@ Get current user's sessions.
   }
 ]
 ```
+
+**Field Notes:**
+- `childId`: Primary child ID (for backward compatibility)
+- `childIds`: Array of child IDs when multiple children are in the session. If not provided, defaults to `[childId]`
+- `timeSlots`: Array of time slots for "Time Slots" booking mode. Each slot contains:
+  - `date`: Date string (format: "YYYY-MM-DD" or "MMM dd, yyyy")
+  - `startTime`: Start time string (format: "HH:mm" or ISO string)
+  - `endTime`: End time string (format: "HH:mm" or ISO string)
+  - `hours`: Duration in hours (float)
+- For "Continuous" booking mode: `timeSlots` is `null`, use `startTime` and `endTime` instead
+- For "Time Slots" booking mode: `timeSlots` contains all daily slots, `startTime` and `endTime` represent the overall session range
 
 #### GET `/api/sessions/{session_id}`
 Get session by ID.
@@ -462,14 +530,29 @@ Create a new session request.
 {
   "parentId": "uuid",
   "sitterId": "uuid",  // Required if searchScope = 'invite'
-  "childId": "uuid",
-  "startTime": "2024-01-01T10:00:00Z",
-  "endTime": "2024-01-01T14:00:00Z",  // Optional
+  "childId": "uuid",  // Primary child ID (required)
+  "childIds": ["uuid1", "uuid2"],  // Optional: Array of child IDs (for multiple children)
+  "startTime": "2024-01-01T10:00:00Z",  // Overall session start time
+  "endTime": "2024-01-01T14:00:00Z",  // Optional: Overall session end time (for Continuous mode)
   "location": "123 Main St",
   "hourlyRate": 25.50,
   "notes": "Please arrive 10 minutes early",
   "searchScope": "invite",  // 'invite' | 'nearby' | 'city' | 'nationwide'
-  "maxDistanceKm": 10  // Required if searchScope = 'nearby' (5, 10, or 25)
+  "maxDistanceKm": 10,  // Required if searchScope = 'nearby' (5, 10, or 25)
+  "timeSlots": [  // Optional: Array of time slots (for Time Slots booking mode)
+    {
+      "date": "2024-01-01",
+      "startTime": "10:00:00",
+      "endTime": "14:00:00",
+      "hours": 4.0
+    },
+    {
+      "date": "2024-01-02",
+      "startTime": "10:00:00",
+      "endTime": "14:00:00",
+      "hours": 4.0
+    }
+  ]
 }
 ```
 
@@ -480,6 +563,14 @@ Create a new session request.
 - If `searchScope = 'invite'`: `sitterId` is required
 - If `searchScope = 'nearby'`: `maxDistanceKm` is required (must be 5, 10, or 25)
 - Status always starts as `requested`
+- `childId` is required (primary child)
+- `childIds` is optional; if provided, should include `childId` in the array
+- `timeSlots` is optional; if provided, creates a "Time Slots" booking mode session
+- If `timeSlots` is not provided, creates a "Continuous" booking mode session (uses `startTime` and `endTime`)
+
+**Booking Modes:**
+- **Continuous Mode**: Single session with `startTime` and `endTime`. `timeSlots` is `null`.
+- **Time Slots Mode**: Single session with multiple daily time slots stored in `timeSlots` array. `startTime` and `endTime` represent the overall session range.
 
 #### PUT `/api/sessions/{session_id}`
 Update session (status, notes, etc.) with state machine validation.
@@ -1231,6 +1322,7 @@ All services return `{ success: boolean, data?: T, error?: AppError }` format fo
 **User Management:**
 - `GET /api/users/me` - Get current user profile
 - `PUT /api/users/me` - Update current user profile
+- `GET /api/users/sitters/verified` - Get verified sitters (for parents to browse)
 
 **Admin Operations:**
 - `GET /api/admin/users` - List all users (admin only)
@@ -1301,10 +1393,14 @@ All services return `{ success: boolean, data?: T, error?: AppError }` format fo
 - ✅ Completion tracking (`completed_at`)
 - ✅ Session discovery for sitters with multiple search scopes
 - ✅ Automatic field updates based on status changes
+- ✅ Multiple children per session (`childIds` array support)
+- ✅ Time slots booking mode (`timeSlots` array for multi-day sessions)
+- ✅ Graceful handling of missing database columns (`child_ids`, `time_slots`)
 
 **User Profile:**
 - ✅ Address, city, country fields added
 - ✅ RLS-aware authentication for database access
+- ✅ Verified sitters endpoint for parents to browse and select
 
 **Error Handling:**
 - ✅ Comprehensive error codes

@@ -25,6 +25,17 @@ export default class ErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
     console.error('ErrorBoundary caught an error:', error, errorInfo);
+    
+    // Special handling for codegenNativeCommands errors (react-native-maps in Expo Go)
+    const errorMessage = error?.message || String(error) || '';
+    if (errorMessage.includes('codegenNativeCommands') || 
+        errorMessage.includes('is not a function')) {
+      console.warn('⚠️ ErrorBoundary: Caught codegenNativeCommands error (react-native-maps)');
+      console.warn('💡 This is expected in Expo Go - the app will continue with WebView maps');
+      // Don't set hasError for codegenNativeCommands - let the app continue
+      // The maps module will handle this gracefully
+      return;
+    }
   }
 
   handleReset = () => {
