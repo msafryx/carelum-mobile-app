@@ -362,14 +362,17 @@ WHERE status = 'requested' AND (expires_at IS NULL OR expires_at > NOW());
 -- 3. ADD_EXPIRES_AT_COLUMN.sql
 --    - Adds expires_at column for request expiration tracking
 --    - Adds indexes for efficient filtering of expired requests
+--    - NOTE: Already integrated above in sessions table definition
 --
--- 4. UPDATE_RLS_FOR_VERIFIED_SITTERS.sql
+-- 4. UPDATE_RLS_FOR_VERIFIED_SITTERS.sql (INTEGRATED)
 --    - Updates RLS policy to allow parents to read verified sitter profiles
 --    - Enables parents to browse and select verified sitters for session requests
+--    - NOTE: Already integrated above in users table RLS policies (see line ~449)
 --
--- 5. UPDATE_VERIFICATION_RLS_FOR_PARENTS.sql
+-- 5. UPDATE_VERIFICATION_RLS_FOR_PARENTS.sql (INTEGRATED)
 --    - Updates RLS policy to allow parents to read verification requests for verified sitters
 --    - Enables parents to view sitter qualifications and certifications when browsing verified sitters
+--    - NOTE: Already integrated above in verification_requests table RLS policies (see line ~573)
 --    - Creates indexes for cancellation/completion queries
 --    - Adds column comments for documentation
 --

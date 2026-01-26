@@ -5,8 +5,10 @@ This guide helps you test the complete babysitter requests feed implementation.
 ## Prerequisites
 
 1. **Database Setup**
-   - Run migration: `scripts/ADD_EXPIRES_AT_COLUMN.sql` in Supabase SQL Editor
+   - For new databases: Run `scripts/create-supabase-schema.sql` (includes all migrations)
+   - For existing databases: Run `scripts/ADD_EXPIRES_AT_COLUMN.sql` if `expires_at` column doesn't exist
    - Verify `expires_at` column exists in `sessions` table
+   - Verify RLS policies allow parents to read verified sitter profiles and verification requests
 
 2. **Backend Running**
    - Start backend: `cd backend && ./start.sh`
@@ -418,7 +420,8 @@ AND indexname LIKE '%expires%';
 
 ### Issue: Expired requests still showing
 **Solution:**
-- Run migration: `scripts/ADD_EXPIRES_AT_COLUMN.sql`
+- For new databases: Run `scripts/create-supabase-schema.sql` (includes all migrations)
+- For existing databases: Run `scripts/ADD_EXPIRES_AT_COLUMN.sql` if `expires_at` column doesn't exist
 - Verify `expires_at` column exists
 - Check `expires_at` value is in the past
 
