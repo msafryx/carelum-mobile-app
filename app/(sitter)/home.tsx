@@ -450,8 +450,8 @@ export default function SitterHomeScreen() {
                       {session.childName ? `${session.childName}${session.childAge != null ? `, ${session.childAge}y` : ''}` : '1 child'}
                     </Text>
                   </View>
-                  <View style={[styles.locationIconContainer, { backgroundColor: colors.primary + '15' }]}>
-                    <Ionicons name="location" size={18} color={colors.primary} />
+                  <View style={[styles.personIconContainer, { backgroundColor: colors.primary + '15' }]}>
+                    <Ionicons name="person-circle-outline" size={22} color={colors.primary} />
                   </View>
                 </View>
                 <View style={styles.availableSessionDetails}>
@@ -625,7 +625,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     marginTop: 2,
   },
-  locationIconContainer: {
+  personIconContainer: {
     width: 36,
     height: 36,
     borderRadius: 18,
