@@ -369,10 +369,7 @@ WHERE status = 'requested' AND (expires_at IS NULL OR expires_at > NOW());
 --    - Adds cancellation tracking columns (cancelled_at, cancelled_by, cancellation_reason)
 --    - Adds completion tracking column (completed_at)
 --
--- 3. ADD_EXPIRES_AT_COLUMN.sql
---    - Adds expires_at column for request expiration tracking
---    - Adds indexes for efficient filtering of expired requests
---    - NOTE: Already integrated above in sessions table definition
+-- 3. expires_at and indexes: Already in sessions table and indexes section above (no separate script).
 --
 -- 4. UPDATE_RLS_FOR_VERIFIED_SITTERS.sql (INTEGRATED)
 --    - Updates RLS policy to allow parents to read verified sitter profiles
@@ -386,6 +383,8 @@ WHERE status = 'requested' AND (expires_at IS NULL OR expires_at > NOW());
 --    - Creates indexes for cancellation/completion queries
 --    - Adds column comments for documentation
 --
+-- Sitter availability (is_active, last_active_at, latitude, longitude) and expires_at are already
+-- in the users and sessions table definitions above; no separate migration scripts are used.
 -- These migrations are already included in this schema file for new installations.
 CREATE INDEX IF NOT EXISTS idx_alerts_parent_id ON alerts(parent_id);
 CREATE INDEX IF NOT EXISTS idx_alerts_status ON alerts(status);

@@ -1,6 +1,7 @@
 #!/bin/bash
 
-# Quick test script for Babysitter Requests Feed
+# Quick test script for Babysitter Requests Feed (API only).
+# Full testing steps (UI + API) are in TESTING_GUIDE.md at project root.
 # Usage: ./test_requests_feed.sh [SITTER_TOKEN]
 
 API_URL="${API_URL:-http://localhost:8000}"
