@@ -410,6 +410,12 @@ class SessionManager {
       (profile as any).verificationStatus = userData.verification_status;
       (profile as any).hourlyRate = userData.hourly_rate;
       (profile as any).bio = userData.bio;
+      // Add sitter availability and location fields
+      (profile as any).isActive = userData.is_active ?? false;
+      (profile as any).lastActiveAt = userData.last_active_at ? new Date(userData.last_active_at) : undefined;
+      (profile as any).latitude = userData.latitude;
+      (profile as any).longitude = userData.longitude;
+      (profile as any).bio = userData.bio;
 
       return { success: true, data: profile };
     } catch (error: any) {

@@ -387,7 +387,7 @@ For admin-related issues:
 - Check Supabase Dashboard for user roles
 - Verify Security Rules are configured
 - Review `src/services/admin.service.ts` for available functions
-- See `DATABASE_GUIDE.md` for database structure
+- See `README_SUPABASE.md` and `DB_VERIFICATION_PLAN.md` for database and schema
 
 ---
 

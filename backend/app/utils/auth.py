@@ -152,19 +152,40 @@ async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(secur
             print(f"⚠️ Supabase auth verification failed, using decoded token: {auth_error}")
         
         # Step 3: Check if user exists in public.users table
+        # Use authenticated Supabase client to bypass RLS
         role = None
         user_exists = False
         
         try:
-            response = supabase.table("users").select("role").eq("id", user_id).single().execute()
-            if response.data:
-                role = response.data.get("role")
-                user_exists = True
-                print(f"✅ User {user_id} found in database with role: {role}")
+            # Try with authenticated client first (bypasses RLS)
+            from app.utils.database import get_supabase_with_auth
+            auth_supabase = get_supabase_with_auth(token)
+            if auth_supabase:
+                try:
+                    response = auth_supabase.table("users").select("role").eq("id", user_id).single().execute()
+                    if response.data:
+                        role = response.data.get("role")
+                        user_exists = True
+                        print(f"✅ User {user_id} found in database with role: {role}")
+                except Exception as auth_query_error:
+                    # If authenticated client also fails, try unauthenticated
+                    print(f"⚠️ Authenticated query failed, trying unauthenticated: {auth_query_error}")
+                    response = supabase.table("users").select("role").eq("id", user_id).single().execute()
+                    if response.data:
+                        role = response.data.get("role")
+                        user_exists = True
+                        print(f"✅ User {user_id} found in database with role: {role}")
+            else:
+                # Fallback to unauthenticated client
+                response = supabase.table("users").select("role").eq("id", user_id).single().execute()
+                if response.data:
+                    role = response.data.get("role")
+                    user_exists = True
+                    print(f"✅ User {user_id} found in database with role: {role}")
         except Exception as query_error:
             error_str = str(query_error)
             # RLS blocking or user not found - both are OK, we'll auto-create
-            if "0 rows" in error_str or "PGRST116" in error_str or "permission" in error_str.lower():
+            if "0 rows" in error_str or "PGRST116" in error_str or "permission" in error_str.lower() or "406" in error_str:
                 print(f"⚠️ User {user_id} not found in public.users or RLS blocked, will auto-create")
                 user_exists = False
             else:
@@ -175,27 +196,62 @@ async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(secur
         if not user_exists:
             try:
                 print(f"🔄 Auto-creating user profile for {user_id} ({email})")
+                
+                # Try to get role from JWT token metadata
+                user_role = None
+                try:
+                    decoded = jwt.decode(token, options={"verify_signature": False})
+                    user_metadata = decoded.get("user_metadata", {})
+                    app_metadata = decoded.get("app_metadata", {})
+                    user_role = user_metadata.get("role") or app_metadata.get("role")
+                    if user_role:
+                        # Normalize: 'babysitter' -> 'sitter'
+                        if user_role == "babysitter":
+                            user_role = "sitter"
+                        print(f"✅ Role found in JWT metadata: {user_role}")
+                except Exception as metadata_error:
+                    print(f"⚠️ Could not extract role from JWT metadata: {metadata_error}")
+                
                 # Only pass parameters that exist in the create_user_profile function
                 # Note: address, city, country are not in the function signature - they must be updated separately
                 rpc_data = {
                     "p_id": user_id,
                     "p_email": email,
                     "p_display_name": None,  # Will be set by frontend later
+                    "p_role": user_role,  # Pass role from JWT metadata if available
                     "p_phone_number": None,
                     # p_address, p_city, p_country are NOT in the function signature - removed
                 }
                 supabase.rpc("create_user_profile", rpc_data).execute()
-                print(f"✅ User profile created successfully for {user_id}")
+                print(f"✅ User profile created successfully for {user_id} with role: {user_role or 'parent (default)'}")
                 
-                # Try to read the role after creation
+                # Try to read the role after creation using authenticated client
                 try:
-                    response = supabase.table("users").select("role").eq("id", user_id).single().execute()
-                    if response.data:
-                        role = response.data.get("role")
-                except Exception:
-                    # If RLS still blocks, use default role
-                    role = "parent"  # Default role
-                    print(f"⚠️ RLS blocked read after creation, using default role: {role}")
+                    from app.utils.database import get_supabase_with_auth
+                    auth_supabase = get_supabase_with_auth(token)
+                    if auth_supabase:
+                        response = auth_supabase.table("users").select("role").eq("id", user_id).single().execute()
+                        if response.data:
+                            role = response.data.get("role")
+                            print(f"✅ Role read after creation: {role}")
+                        else:
+                            # Try unauthenticated as fallback
+                            response = supabase.table("users").select("role").eq("id", user_id).single().execute()
+                            if response.data:
+                                role = response.data.get("role")
+                    else:
+                        # Fallback to unauthenticated
+                        response = supabase.table("users").select("role").eq("id", user_id).single().execute()
+                        if response.data:
+                            role = response.data.get("role")
+                except Exception as read_error:
+                    # If RLS still blocks, use the role we passed to create_user_profile
+                    if user_role:
+                        role = user_role
+                        print(f"✅ Using role from JWT metadata (RLS blocked read): {role}")
+                    else:
+                        role = "parent"  # Default role
+                        print(f"⚠️ RLS blocked read after creation, using default role: {role}")
             except Exception as create_error:
                 print(f"⚠️ Auto-create failed (non-fatal): {create_error}")
                 # Continue anyway with default role

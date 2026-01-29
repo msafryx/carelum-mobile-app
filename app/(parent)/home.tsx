@@ -16,7 +16,7 @@ import { useRouter } from 'expo-router';
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View, RefreshControl, ActivityIndicator, Alert, Image, Animated } from 'react-native';
 import { format } from 'date-fns';
-import { formatSearchDuration, getSearchingMessage } from '@/src/utils/sessionSearchUtils';
+import { formatSearchDuration, getSearchingMessage, isDirectInvite } from '@/src/utils/sessionSearchUtils';
 
 interface SessionWithDetails extends Session {
   childName?: string;
@@ -450,7 +450,11 @@ export default function ParentHomeScreen() {
                     </Text>
                     <View style={styles.searchingContainer}>
                       <View style={styles.searchingIndicator}>
-                        <SearchingAnimation />
+                        {isDirectInvite(session) ? (
+                          <Ionicons name="mail" size={16} color={colors.primary} style={styles.inviteIcon} />
+                        ) : (
+                          <SearchingAnimation />
+                        )}
                         <Text style={[styles.searchingText, { color: colors.primary }]}>
                           {getSearchingMessage(session)}
                         </Text>
@@ -484,7 +488,9 @@ export default function ParentHomeScreen() {
                   {session.createdAt && searchDurations[session.id] && (
                     <View style={styles.searchingTimeContainer}>
                       <Text style={[styles.searchingTimeText, { color: colors.textSecondary }]}>
-                        Searching for {searchDurations[session.id]}
+                        {isDirectInvite(session)
+                          ? `Waiting for ${searchDurations[session.id]}`
+                          : `Searching for ${searchDurations[session.id]}`}
                       </Text>
                     </View>
                   )}
@@ -815,6 +821,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+  },
+  inviteIcon: {
+    marginRight: 0,
   },
   searchingText: {
     fontSize: 14,

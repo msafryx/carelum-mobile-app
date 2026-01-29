@@ -25,15 +25,30 @@ const isExpoGo = (): boolean => {
   try {
     // Use expo-constants to detect Expo Go
     const Constants = require('expo-constants');
-    isExpoGoResult = (
-      Constants.executionEnvironment === 'storeClient' ||
-      Constants.executionEnvironment === 'standalone' && Constants.appOwnership === 'expo' ||
-      (Constants.executionEnvironment === undefined && Constants.appOwnership === 'expo')
-    );
+    
+    // More comprehensive Expo Go detection
+    const isStoreClient = Constants.executionEnvironment === 'storeClient';
+    const isExpoOwned = Constants.appOwnership === 'expo';
+    const isStandaloneExpo = Constants.executionEnvironment === 'standalone' && isExpoOwned;
+    const isUndefinedExpo = Constants.executionEnvironment === undefined && isExpoOwned;
+    
+    // Also check if we're in a development environment that might not support native modules
+    const isDev = __DEV__ === true;
+    
+    // If any of these conditions are true, we're likely in Expo Go
+    isExpoGoResult = isStoreClient || isStandaloneExpo || isUndefinedExpo || (isDev && isExpoOwned);
+    
     expoGoCheckDone = true;
+    
+    if (isExpoGoResult) {
+      console.log('🔍 Expo Go detected - native maps will be disabled');
+    }
+    
     return isExpoGoResult;
-  } catch {
+  } catch (error: any) {
     // If expo-constants is not available, assume we're in Expo Go to be safe
+    // This prevents trying to load native modules that might not be available
+    console.warn('⚠️ Could not check Expo Go status, assuming Expo Go (safe fallback):', error?.message);
     isExpoGoResult = true;
     expoGoCheckDone = true;
     return true;
@@ -52,20 +67,26 @@ const loadMapsModule = () => {
   }
 
   // CRITICAL: Skip require entirely if in Expo Go to prevent codegenNativeCommands error
-  // Check BEFORE any require() calls
-  const inExpoGo = isExpoGo();
-  if (inExpoGo) {
+  // Check BEFORE any require() calls - do this FIRST
+  try {
+    const inExpoGo = isExpoGo();
+    if (inExpoGo) {
+      mapsLoadFailed = true;
+      mapsLoaded = true;
+      console.warn('⚠️ Skipping react-native-maps: Expo Go detected (native modules not supported)');
+      console.warn('💡 Use a development build (expo run:android/ios) to enable native maps');
+      return { MapView: null, Marker: null, Polyline: null, Circle: null };
+    }
+  } catch (expoCheckError: any) {
+    // If Expo Go check fails, assume we're in Expo Go to be safe
     mapsLoadFailed = true;
     mapsLoaded = true;
-    console.warn('⚠️ Skipping react-native-maps: Expo Go detected (native modules not supported)');
-    console.warn('💡 Use a development build (expo run:android/ios) to enable native maps');
+    console.warn('⚠️ Expo Go check failed, assuming Expo Go (safe fallback):', expoCheckError?.message);
     return { MapView: null, Marker: null, Polyline: null, Circle: null };
   }
 
-  // Try to load the module
+  // Try to load the module - but be VERY defensive
   try {
-    // Only require when explicitly called, not at module load
-    // This will throw codegenNativeCommands error in Expo Go - we catch it below
     // Double-check before requiring (defensive programming)
     const expoGoCheck = isExpoGo();
     if (expoGoCheck) {
@@ -75,17 +96,48 @@ const loadMapsModule = () => {
       return { MapView: null, Marker: null, Polyline: null, Circle: null };
     }
     
-    // Additional safety: wrap require in try-catch to catch codegenNativeCommands error
-    let mapsModule: any;
+    // CRITICAL: Use a function that can catch errors during require() evaluation
+    // The require() call itself can throw during module evaluation, so we need
+    // to wrap it in a way that catches errors at the evaluation level
+    let mapsModule: any = null;
+    
+    // Use a separate function to isolate the require() call
+    const safeRequireMaps = (): any => {
+      try {
+        // This is where the error happens - require() throws during evaluation
+        // We need to catch it here before it propagates
+        const module = require('react-native-maps');
+        return module;
+      } catch (requireError: any) {
+        // Catch any error during require() - including codegenNativeCommands
+        const errorMsg = requireError?.message || String(requireError) || 'Unknown error';
+        const errorName = requireError?.name || '';
+        
+        // Check for codegenNativeCommands errors
+        if (errorMsg.includes('codegenNativeCommands') || 
+            errorMsg.includes('is not a function') ||
+            errorMsg.includes('undefined') ||
+            errorName === 'TypeError') {
+          // This is expected in Expo Go - don't throw, just return null
+          throw new Error(`codegenNativeCommands: ${errorMsg}`);
+        }
+        // Re-throw other errors
+        throw requireError;
+      }
+    };
+    
+    // Call the safe require function
     try {
-      mapsModule = require('react-native-maps');
+      mapsModule = safeRequireMaps();
     } catch (requireError: any) {
       // If require itself fails (codegenNativeCommands), mark as failed
-      if (requireError?.message?.includes('codegenNativeCommands') || 
-          requireError?.message?.includes('is not a function')) {
+      const errorMsg = requireError?.message || String(requireError);
+      if (errorMsg.includes('codegenNativeCommands') || 
+          errorMsg.includes('is not a function') ||
+          errorMsg.includes('undefined')) {
         mapsLoadFailed = true;
         mapsLoaded = true;
-        console.warn('⚠️ react-native-maps require failed (codegenNativeCommands):', requireError?.message);
+        console.warn('⚠️ react-native-maps require failed (codegenNativeCommands):', errorMsg);
         console.warn('💡 This is expected in Expo Go - use a development build for native maps');
         return { MapView: null, Marker: null, Polyline: null, Circle: null };
       }
@@ -99,21 +151,50 @@ const loadMapsModule = () => {
     
     // Try to access the components - this might throw codegenNativeCommands error
     try {
+      // Access components with additional error checking
+      if (typeof mapsModule === 'undefined' || mapsModule === null) {
+        throw new Error('react-native-maps module is null or undefined');
+      }
+      
       MapViewDefault = mapsModule.default || mapsModule;
       Marker = mapsModule.Marker;
       Polyline = mapsModule.Polyline;
       Circle = mapsModule.Circle;
       
-      // Validate that we got valid components
-      if (!MapViewDefault) {
-        throw new Error('MapView component not found in react-native-maps');
+      // Check if codegenNativeCommands error occurred during component access
+      if (typeof MapViewDefault === 'undefined' || MapViewDefault === null) {
+        throw new Error('MapView component is undefined - codegenNativeCommands may have failed');
+      }
+      
+      // Try to access a property to trigger any codegenNativeCommands errors early
+      if (typeof MapViewDefault === 'function') {
+        // Check if it's actually a valid component (not just a function stub)
+        try {
+          const componentName = MapViewDefault.name || MapViewDefault.displayName || 'Unknown';
+          if (componentName === 'Unknown' && typeof MapViewDefault !== 'function') {
+            throw new Error('MapView is not a valid component');
+          }
+        } catch (checkError: any) {
+          // If checking the component fails, it's likely a codegenNativeCommands issue
+          throw new Error(`codegenNativeCommands error: ${checkError?.message || 'Component validation failed'}`);
+        }
       }
       
       mapsLoaded = true;
       return { MapView: MapViewDefault, Marker, Polyline, Circle };
     } catch (componentError: any) {
       // Error accessing components (codegenNativeCommands)
-      throw new Error(`Failed to access map components: ${componentError?.message || componentError}`);
+      const errorMsg = componentError?.message || String(componentError);
+      if (errorMsg.includes('codegenNativeCommands') || 
+          errorMsg.includes('is not a function') ||
+          errorMsg.includes('undefined')) {
+        mapsLoadFailed = true;
+        mapsLoaded = true;
+        console.warn('⚠️ react-native-maps component access failed (codegenNativeCommands):', errorMsg);
+        console.warn('💡 This is expected in Expo Go - use a development build for native maps');
+        return { MapView: null, Marker: null, Polyline: null, Circle: null };
+      }
+      throw new Error(`Failed to access map components: ${errorMsg}`);
     }
   } catch (error: any) {
     // Mark as failed to prevent repeated attempts
@@ -135,36 +216,52 @@ const loadMapsModule = () => {
 // Export getters that lazy-load with error handling
 export const getMapView = () => {
   try {
-    return loadMapsModule().MapView;
+    const result = loadMapsModule();
+    return result?.MapView || null;
   } catch (error: any) {
-    console.warn('⚠️ getMapView failed:', error?.message || error);
+    const errorMsg = error?.message || String(error);
+    if (!errorMsg.includes('codegenNativeCommands')) {
+      console.warn('⚠️ getMapView failed:', errorMsg);
+    }
     return null;
   }
 };
 
 export const getMarker = () => {
   try {
-    return loadMapsModule().Marker;
+    const result = loadMapsModule();
+    return result?.Marker || null;
   } catch (error: any) {
-    console.warn('⚠️ getMarker failed:', error?.message || error);
+    const errorMsg = error?.message || String(error);
+    if (!errorMsg.includes('codegenNativeCommands')) {
+      console.warn('⚠️ getMarker failed:', errorMsg);
+    }
     return null;
   }
 };
 
 export const getPolyline = () => {
   try {
-    return loadMapsModule().Polyline;
+    const result = loadMapsModule();
+    return result?.Polyline || null;
   } catch (error: any) {
-    console.warn('⚠️ getPolyline failed:', error?.message || error);
+    const errorMsg = error?.message || String(error);
+    if (!errorMsg.includes('codegenNativeCommands')) {
+      console.warn('⚠️ getPolyline failed:', errorMsg);
+    }
     return null;
   }
 };
 
 export const getCircle = () => {
   try {
-    return loadMapsModule().Circle;
+    const result = loadMapsModule();
+    return result?.Circle || null;
   } catch (error: any) {
-    console.warn('⚠️ getCircle failed:', error?.message || error);
+    const errorMsg = error?.message || String(error);
+    if (!errorMsg.includes('codegenNativeCommands')) {
+      console.warn('⚠️ getCircle failed:', errorMsg);
+    }
     return null;
   }
 };

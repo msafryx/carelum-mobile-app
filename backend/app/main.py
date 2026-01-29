@@ -53,9 +53,26 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Global exception handler
+# Exception handler for AppError
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
+    from app.utils.error_handler import AppError, handle_error
+    from fastapi import HTTPException
+    
+    # Let FastAPI handle HTTPException (from handle_error conversions)
+    if isinstance(exc, HTTPException):
+        raise exc
+    
+    # Handle AppError by converting to HTTPException
+    if isinstance(exc, AppError):
+        http_exc = handle_error(exc)
+        # HTTPException.detail is already a dict with the error structure
+        return JSONResponse(
+            status_code=http_exc.status_code,
+            content=http_exc.detail
+        )
+    
+    # Log and handle other exceptions
     logger.error(f"Unhandled exception: {exc}", exc_info=True)
     return JSONResponse(
         status_code=500,

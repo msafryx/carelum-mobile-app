@@ -108,28 +108,64 @@ export function calculateTimeDifference(startDate: Date, endDate: Date): string 
 }
 
 /**
- * Get searching message based on duration
+ * Check if session is a direct invite to a specific sitter (not open search)
  */
-export function getSearchingMessage(session: Session): string {
+export function isDirectInvite(session: Session): boolean {
+  return session.searchScope === 'invite' && !!session.sitterId;
+}
+
+/**
+ * Get status message for requested session.
+ * For direct invite: "Invite sent", "Waiting for [sitter] to respond", etc.
+ * For open search: "Searching for sitters...", "Finding available sitters...", etc.
+ */
+export function getSearchingMessage(session: Session & { sitterName?: string }): string {
+  const isInvite = isDirectInvite(session);
+  const sitterName = (session as { sitterName?: string }).sitterName;
+
+  if (isInvite) {
+    // Direct invite to a specific sitter – we're waiting for their response, not searching
+    if (!session.createdAt) {
+      return sitterName ? `Invite sent to ${sitterName}` : 'Invite sent';
+    }
+    const now = new Date();
+    const created = new Date(session.createdAt);
+    const minutes = differenceInMinutes(now, created);
+    if (minutes < 1) {
+      return sitterName ? `Invite sent to ${sitterName}` : 'Invite sent';
+    }
+    if (minutes < 3) {
+      return sitterName ? `Waiting for ${sitterName} to respond` : 'Waiting for response...';
+    }
+    if (minutes < 5) {
+      return sitterName ? `Still waiting for ${sitterName}` : 'Still waiting for response...';
+    }
+    if (minutes < 10) {
+      return sitterName ? `Awaiting ${sitterName}'s response` : 'Awaiting response...';
+    }
+    return sitterName ? `Invite pending – ${sitterName}` : 'Invite pending...';
+  }
+
+  // Open search (nearby / city / nationwide) – show searching messages
   if (!session.createdAt) {
     return 'Searching for sitters...';
   }
-  
   const now = new Date();
   const created = new Date(session.createdAt);
   const minutes = differenceInMinutes(now, created);
-  
   if (minutes < 1) {
     return 'Searching for sitters...';
-  } else if (minutes < 3) {
-    return 'Finding available sitters...';
-  } else if (minutes < 5) {
-    return 'Still searching...';
-  } else if (minutes < 10) {
-    return 'Taking a bit longer than usual...';
-  } else {
-    return 'Searching may take longer. Please wait...';
   }
+  if (minutes < 3) {
+    return 'Finding available sitters...';
+  }
+  if (minutes < 5) {
+    return 'Still searching...';
+  }
+  if (minutes < 10) {
+    return 'Taking a bit longer than usual...';
+  }
+  return 'Searching may take longer. Please wait...';
 }
 
 /**

@@ -142,14 +142,14 @@ export default function CancelSessionModal({
         <View style={[styles.modal, { backgroundColor: colors.background }]}>
           <View style={styles.header}>
             <Text style={[styles.title, { color: colors.text }]}>Cancel Session</Text>
-            <TouchableOpacity onPress={handleClose} disabled={loading}>
-              <Ionicons name="close" size={24} color={colors.text} />
+            <TouchableOpacity onPress={handleClose} disabled={loading} style={[styles.closeButton, { backgroundColor: colors.border }]}>
+              <Ionicons name="close" size={24} color={colors.primary} />
             </TouchableOpacity>
           </View>
 
           {session && (
-            <View style={styles.sessionInfo}>
-              <Text style={[styles.sessionInfoText, { color: colors.textSecondary }]}>
+            <View style={[styles.sessionInfo, { backgroundColor: colors.border }]}>
+              <Text style={[styles.sessionInfoText, { color: colors.text }]}>
                 {session.childId ? 'Session for your child' : 'Session'}
               </Text>
               <Text style={[styles.sessionInfoText, { color: colors.textSecondary }]}>
@@ -300,7 +300,11 @@ const styles = StyleSheet.create({
     marginBottom: 16,
     padding: 12,
     borderRadius: 8,
-    backgroundColor: '#f5f5f5',
+    // backgroundColor set inline per theme (colors.border) for dark/light visibility
+  },
+  closeButton: {
+    padding: 8,
+    borderRadius: 20,
   },
   sessionInfoText: {
     fontSize: 14,

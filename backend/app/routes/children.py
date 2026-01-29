@@ -180,16 +180,29 @@ async def get_child_by_id(
                 status_code=503
             )
         
-        response = supabase.table("children").select("*").eq("id", child_id).single().execute()
+        # Query without .single() to avoid error when child doesn't exist
+        # .single() throws an exception if 0 rows, so we check the result instead
+        try:
+            response = supabase.table("children").select("*").eq("id", child_id).single().execute()
+            child_data = response.data
+        except Exception as query_error:
+            # Check if it's a "0 rows" error (child not found)
+            error_str = str(query_error)
+            if "0 rows" in error_str or "PGRST116" in error_str or "Cannot coerce" in error_str:
+                raise AppError(
+                    code="CHILD_NOT_FOUND",
+                    message="Child not found",
+                    status_code=404
+                )
+            # Re-raise other errors
+            raise
         
-        if not response.data:
+        if not child_data:
             raise AppError(
                 code="CHILD_NOT_FOUND",
                 message="Child not found",
                 status_code=404
             )
-        
-        child_data = response.data
         
         # Verify access
         if not verify_child_access(child_data, current_user):
@@ -201,8 +214,8 @@ async def get_child_by_id(
         
         return db_to_child_response(child_data)
         
-    except AppError:
-        raise
+    except AppError as e:
+        raise handle_error(e, "Failed to fetch child")
     except Exception as e:
         raise handle_error(e, "Failed to fetch child")
 

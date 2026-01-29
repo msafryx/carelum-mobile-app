@@ -19,6 +19,11 @@ export interface User {
   verificationStatus?: string | null;
   hourlyRate?: number | null;
   bio?: string | null;
+  // Sitter availability and location
+  isActive?: boolean; // Whether sitter is currently available/online
+  lastActiveAt?: Date; // Last time sitter was active
+  latitude?: number | null; // Current location latitude
+  longitude?: number | null; // Current location longitude
 }
 
 export interface UserProfile extends User {

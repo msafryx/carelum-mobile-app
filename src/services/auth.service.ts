@@ -128,6 +128,13 @@ export async function signUp(data: SignUpData): Promise<ServiceResult<any>> {
     // Create profile in Supabase in BACKGROUND (IIFE - runs async, never blocks)
     (async () => {
       try {
+        // Check supabase is available and store in const for type narrowing
+        if (!isSupabaseConfigured() || !supabase) {
+          console.warn('⚠️ Supabase not configured, skipping background profile sync');
+          return;
+        }
+        const supabaseClient = supabase; // TypeScript now knows this is non-null
+
         // Always call create_user_profile to ensure display_name and all fields are set
         // Even if profile exists (from trigger), we need to update it with the actual display_name
         const rpcParams = {
@@ -153,7 +160,10 @@ export async function signUp(data: SignUpData): Promise<ServiceResult<any>> {
           p_phone_number: rpcParams.p_phone_number,
         });
         
-        const rpcRes = await executeWrite(() => supabase.rpc('create_user_profile', rpcParams), 'create_user_profile');
+        const rpcRes = await executeWrite(async () => {
+          const result = await supabaseClient.rpc('create_user_profile', rpcParams);
+          return result;
+        }, 'create_user_profile');
         const rpcData = rpcRes.data;
         const rpcError = rpcRes.error;
 
@@ -188,9 +198,12 @@ export async function signUp(data: SignUpData): Promise<ServiceResult<any>> {
             phone_number: upsertData.phone_number,
           });
           
-          const upsertRes = await executeWrite(() => supabase
-            .from('users')
-            .upsert(upsertData, { onConflict: 'id' }), 'users_upsert');
+          const upsertRes = await executeWrite(async () => {
+            const result = await supabaseClient
+              .from('users')
+              .upsert(upsertData, { onConflict: 'id' });
+            return result;
+          }, 'users_upsert');
 
           const upsertError = upsertRes.error;
           if (upsertError) {
@@ -308,6 +321,10 @@ export async function signIn(
  */
 export async function signOut(): Promise<ServiceResult<void>> {
   try {
+    // Note: We do NOT set isActive to false on logout
+    // Sitters remain active/online until they manually toggle the switch
+    // This allows them to stay available even when not actively using the app
+
     // Clear session manager FIRST
     try {
       sessionManager.clearSession();
@@ -442,23 +459,30 @@ async function syncProfileFromSupabase(userId: string): Promise<void> {
  */
 async function createProfileInSupabase(profile: User): Promise<void> {
   try {
-    if (!supabase) return;
+    if (!isSupabaseConfigured() || !supabase) {
+      console.warn('⚠️ Supabase not configured, skipping profile creation');
+      return;
+    }
+    const supabaseClient = supabase; // TypeScript now knows this is non-null
     const dbRole = profile.role === 'babysitter' ? 'sitter' : profile.role;
-    await executeWrite(() => supabase.from('users').upsert({
-      id: profile.id,
-      email: profile.email,
-      display_name: profile.displayName,
-      role: dbRole,
-      preferred_language: profile.preferredLanguage,
-      user_number: profile.userNumber,
-      phone_number: profile.phoneNumber ?? null,
-      photo_url: profile.profileImageUrl ?? null,
-      theme: profile.theme ?? 'auto',
-      is_verified: profile.isVerified ?? false,
-      verification_status: profile.verificationStatus ?? null,
-      hourly_rate: profile.hourlyRate ?? null,
-      bio: profile.bio ?? null,
-    }), 'create_profile_upsert');
+    await executeWrite(async () => {
+      const result = await supabaseClient.from('users').upsert({
+        id: profile.id,
+        email: profile.email,
+        display_name: profile.displayName,
+        role: dbRole,
+        preferred_language: profile.preferredLanguage,
+        user_number: profile.userNumber,
+        phone_number: profile.phoneNumber ?? null,
+        photo_url: profile.profileImageUrl ?? null,
+        theme: profile.theme ?? 'auto',
+        is_verified: profile.isVerified ?? false,
+        verification_status: profile.verificationStatus ?? null,
+        hourly_rate: profile.hourlyRate ?? null,
+        bio: profile.bio ?? null,
+      });
+      return result;
+    }, 'create_profile_upsert');
     console.log('✅ Profile created in Supabase');
   } catch (error) {
     console.warn('⚠️ Failed to create profile in Supabase:', error);

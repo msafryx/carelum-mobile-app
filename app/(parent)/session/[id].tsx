@@ -34,7 +34,7 @@ import {
 } from '@/src/services/session.service';
 import { Child } from '@/src/types/child.types';
 import { LocationUpdate, Session } from '@/src/types/session.types';
-import { formatExpectedDuration, formatSearchDuration, getAcceptedDuration, getSearchingMessage } from '@/src/utils/sessionSearchUtils';
+import { formatExpectedDuration, formatSearchDuration, getAcceptedDuration, getSearchingMessage, isDirectInvite } from '@/src/utils/sessionSearchUtils';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
@@ -542,7 +542,11 @@ export default function SessionDetailScreen() {
             {session.status === 'requested' && (
               <View style={styles.searchingSection}>
                 <View style={styles.searchingIndicator}>
-                  <SearchingAnimation />
+                  {isDirectInvite(session) ? (
+                    <Ionicons name="mail" size={16} color={colors.primary} />
+                  ) : (
+                    <SearchingAnimation />
+                  )}
                   <Text style={[styles.searchingText, { color: colors.primary }]}>
                     {getSearchingMessage(session)}
                   </Text>
@@ -551,7 +555,7 @@ export default function SessionDetailScreen() {
                   <View style={styles.searchingTimeRow}>
                     <Ionicons name="time-outline" size={16} color={colors.textSecondary} />
                     <Text style={[styles.searchingTimeText, { color: colors.textSecondary }]}>
-                      Searching for {searchDuration || (() => {
+                      {isDirectInvite(session) ? 'Waiting for ' : 'Searching for '}{searchDuration || (() => {
                         // Fallback: calculate directly if searchDuration is not set yet
                         try {
                           const createdDate = session.createdAt instanceof Date 

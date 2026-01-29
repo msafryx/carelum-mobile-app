@@ -41,6 +41,7 @@ class SessionResponse(BaseModel):
     searchScope: Optional[str] = None
     maxDistanceKm: Optional[float] = None
     timeSlots: Optional[List[TimeSlot]] = None  # Array of time slots for multi-day sessions
+    expiresAt: Optional[str] = None  # When the request expires (for OPEN status requests)
     cancelledAt: Optional[str] = None
     cancelledBy: Optional[str] = None
     cancellationReason: Optional[str] = None
@@ -116,6 +117,7 @@ def db_to_session_response(session_data: dict) -> SessionResponse:
         searchScope=session_data.get("search_scope"),
         maxDistanceKm=float(session_data["max_distance_km"]) if session_data.get("max_distance_km") else None,
         timeSlots=time_slots,  # Array of time slots
+        expiresAt=session_data.get("expires_at"),  # Request expiration time
         cancelledAt=session_data.get("cancelled_at"),
         cancelledBy=session_data.get("cancelled_by"),
         cancellationReason=session_data.get("cancellation_reason"),
@@ -754,12 +756,19 @@ async def cancel_session(
 async def discover_available_sessions(
     current_user: CurrentUser = Depends(verify_token),
     credentials: HTTPAuthorizationCredentials = Depends(security),
-    scope: Optional[str] = Query(None, description="Filter by search scope: nearby, city, nationwide"),
-    max_distance: Optional[float] = Query(None, description="Maximum distance in km (for nearby scope)")
+    scope: Optional[str] = Query(None, description="Filter by search scope: invite, nearby, city, nationwide"),
+    max_distance: Optional[float] = Query(None, description="Maximum distance in km (for nearby scope)"),
+    sitter_city: Optional[str] = Query(None, description="Sitter's city (for city scope filtering)")
 ):
     """
     Discover available session requests for sitters (Uber-like discovery)
     Returns sessions that match the sitter's location and preferences
+    
+    Request visibility rules:
+    - INVITE mode: Show requests where searchScope = 'invite' AND sitterId = current sitter id (pinned at top)
+    - NEARBY mode: Show requests where searchScope = 'nearby', status = 'requested', and within radius
+    - CITY mode: Show requests where searchScope = 'city', status = 'requested', and city matches
+    - NATIONWIDE mode: Show requests where searchScope = 'nationwide' and status = 'requested'
     """
     try:
         # Only sitters can discover sessions
@@ -781,16 +790,27 @@ async def discover_available_sessions(
                 status_code=503
             )
         
+        # Get sitter's profile to check city
+        sitter_profile = None
+        if sitter_city or scope == 'city':
+            try:
+                profile_response = supabase.table("users").select("city").eq("id", current_user.id).single().execute()
+                if profile_response.data:
+                    sitter_profile = profile_response.data
+                    sitter_city = sitter_city or profile_response.data.get("city")
+            except:
+                pass  # Continue without city filter if profile fetch fails
+        
         # Query for available sessions (status = 'requested')
-        # Show: non-invite scopes OR invite scopes where sitter is invited
+        # Note: expires_at column may not exist yet - we'll filter expired sessions in Python
         query = supabase.table("sessions").select("*").eq("status", "requested")
         
         # Filter by scope if provided
         if scope:
-            if scope not in ['nearby', 'city', 'nationwide']:
+            if scope not in ['invite', 'nearby', 'city', 'nationwide']:
                 raise AppError(
                     code="INVALID_SCOPE",
-                    message="Scope must be one of: nearby, city, nationwide",
+                    message="Scope must be one of: invite, nearby, city, nationwide",
                     status_code=400
                 )
             query = query.eq("search_scope", scope)
@@ -799,26 +819,69 @@ async def discover_available_sessions(
         if scope == 'nearby' and max_distance:
             query = query.lte("max_distance_km", max_distance)
         
-        # Order by start_time (soonest first)
-        query = query.order("start_time", desc=False).limit(100)
+        # Order by: invite requests first (if sitter is invited), then by start_time
+        # Note: We'll sort in Python to prioritize invite requests
+        query = query.order("start_time", desc=False).limit(200)  # Get more to sort properly
         
         response = query.execute()
         
         sessions = []
+        invite_sessions = []
+        other_sessions = []
+        
+        # Filter out expired sessions in Python (if expires_at exists in data)
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        
         for session_data in (response.data or []):
-            # Filter: show non-invite scopes OR invite scopes where sitter is invited
+            # Check if session is expired (if expires_at column exists)
+            expires_at = session_data.get("expires_at")
+            if expires_at:
+                try:
+                    expires_date = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
+                    if expires_date < now:
+                        continue  # Skip expired sessions
+                except:
+                    pass  # If parsing fails, include the session anyway
+            
             search_scope = session_data.get("search_scope")
             sitter_id = session_data.get("sitter_id")
             
+            # INVITE mode: Only show if this sitter is invited
             if search_scope == "invite":
-                # Only show if this sitter is invited
-                if sitter_id != current_user.id:
-                    continue  # Skip if not invited to this session
+                if sitter_id == current_user.id:
+                    invite_sessions.append(db_to_session_response(session_data))
+                continue  # Skip other invite requests
             
-            # For other scopes (nearby, city, nationwide), show all
-            sessions.append(db_to_session_response(session_data))
+            # CITY mode: Filter by city match
+            if search_scope == "city" and sitter_city:
+                location = session_data.get("location")
+                session_city = None
+                if location:
+                    if isinstance(location, str):
+                        try:
+                            import json
+                            location_obj = json.loads(location)
+                            session_city = location_obj.get("city") if isinstance(location_obj, dict) else None
+                        except:
+                            pass
+                    elif isinstance(location, dict):
+                        session_city = location.get("city")
+                
+                # If city doesn't match, skip
+                if session_city and session_city.lower() != sitter_city.lower():
+                    continue
+            
+            # NEARBY and NATIONWIDE: Show all (already filtered by status and scope)
+            other_sessions.append(db_to_session_response(session_data))
         
-        print(f"🔍 Discovered {len(sessions)} available sessions for sitter {current_user.id}")
+        # Combine: invite sessions first (pinned), then others
+        sessions = invite_sessions + other_sessions
+        
+        # Limit to 100 total
+        sessions = sessions[:100]
+        
+        print(f"🔍 Discovered {len(sessions)} available sessions for sitter {current_user.id} (invites: {len(invite_sessions)})")
         return sessions
         
     except AppError:
