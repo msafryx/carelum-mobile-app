@@ -1,7 +1,7 @@
 """
 User and profile management endpoints
 """
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Query
 from pydantic import BaseModel, EmailStr
 from typing import Optional, List
 from decimal import Decimal
@@ -32,6 +32,10 @@ class UserProfileResponse(BaseModel):
     address: Optional[str] = None
     city: Optional[str] = None
     country: Optional[str] = None
+    isActive: Optional[bool] = None  # Sitter availability status
+    lastActiveAt: Optional[str] = None  # Last active timestamp
+    latitude: Optional[float] = None  # Current location latitude
+    longitude: Optional[float] = None  # Current location longitude
     createdAt: str
     updatedAt: str
 
@@ -48,6 +52,9 @@ class UpdateProfileRequest(BaseModel):
     address: Optional[str] = None
     city: Optional[str] = None
     country: Optional[str] = None
+    isActive: Optional[bool] = None  # For sitters: toggle online/offline status
+    latitude: Optional[float] = None  # Current location latitude
+    longitude: Optional[float] = None  # Current location longitude
 
 
 @router.get("/me", response_model=UserProfileResponse)
@@ -164,6 +171,10 @@ async def get_current_user_profile(
             address=user_data.get("address"),
             city=user_data.get("city"),
             country=user_data.get("country"),
+            isActive=user_data.get("is_active"),
+            lastActiveAt=user_data.get("last_active_at"),
+            latitude=float(user_data["latitude"]) if user_data.get("latitude") else None,
+            longitude=float(user_data["longitude"]) if user_data.get("longitude") else None,
             createdAt=user_data["created_at"],
             updatedAt=user_data.get("updated_at", user_data["created_at"])
         )
@@ -236,6 +247,25 @@ async def update_current_user_profile(
             update_data["country"] = updates.country
             print(f"✅ Including country in update: {updates.country}")
         
+        # Handle sitter availability and location (for active status)
+        if 'isActive' in updates_dict:
+            update_data["is_active"] = updates.isActive
+            # Update last_active_at when toggling to active
+            if updates.isActive:
+                from datetime import datetime
+                update_data["last_active_at"] = datetime.utcnow().isoformat()
+            print(f"✅ Including isActive in update: {updates.isActive}")
+        
+        if 'latitude' in updates_dict:
+            # Convert to float for JSON serialization (Supabase will handle Decimal conversion)
+            update_data["latitude"] = float(updates.latitude) if updates.latitude is not None else None
+            print(f"✅ Including latitude in update: {updates.latitude}")
+        
+        if 'longitude' in updates_dict:
+            # Convert to float for JSON serialization (Supabase will handle Decimal conversion)
+            update_data["longitude"] = float(updates.longitude) if updates.longitude is not None else None
+            print(f"✅ Including longitude in update: {updates.longitude}")
+        
         print(f"📤 Final update_data: {update_data}")
         
         # Add updated_at timestamp
@@ -266,38 +296,27 @@ async def update_current_user_profile(
                 updatedAt=now
             )
         
-        # Update user profile with select to get updated row back
+        # Update user profile - update first, then read back
         user_data = None
         update_successful = False
         try:
             print(f"🔄 Attempting to update user {current_user.id} with data: {update_data}")
-            # Use .select("*") to get the updated row back
-            response = supabase.table("users").update(update_data).eq("id", current_user.id).select("*").execute()
+            # Update the user (without select - some Supabase client versions don't support select after eq)
+            update_response = supabase.table("users").update(update_data).eq("id", current_user.id).execute()
             
-            print(f"📥 Update response: {response.data if response.data else 'EMPTY'}")
+            print(f"📥 Update response: {update_response}")
             
-            # If we got data back, use it
-            if response.data and len(response.data) > 0:
-                user_data = response.data[0] if isinstance(response.data, list) else response.data
+            # Read the updated user back separately
+            print(f"📖 Reading updated user data...")
+            read_response = supabase.table("users").select("*").eq("id", current_user.id).single().execute()
+            
+            if read_response.data:
+                user_data = read_response.data
                 update_successful = True
                 print(f"✅ Update successful, got updated row from database")
             else:
-                # Empty response - RLS might be blocking SELECT after UPDATE
-                print(f"⚠️ Empty response from update, verifying by reading user...")
-                # Try to read the user separately to verify update worked
-                try:
-                    read_response = supabase.table("users").select("*").eq("id", current_user.id).execute()
-                    if read_response.data and len(read_response.data) > 0:
-                        user_data = read_response.data[0]
-                        # Verify the update actually happened by checking if fields changed
-                        update_successful = True
-                        print(f"✅ Verified update by reading user back from database")
-                    else:
-                        print(f"❌ Cannot read user after update - update may have failed")
-                        update_successful = False
-                except Exception as read_error:
-                    print(f"❌ Failed to read user after update: {read_error}")
-                    update_successful = False
+                print(f"❌ Cannot read user after update - update may have failed")
+                update_successful = False
                     
         except Exception as update_error:
             # Update query itself failed
@@ -345,6 +364,10 @@ async def update_current_user_profile(
                 address=user_data.get("address"),
                 city=user_data.get("city"),
                 country=user_data.get("country"),
+                isActive=user_data.get("is_active"),
+                lastActiveAt=user_data.get("last_active_at"),
+                latitude=float(user_data["latitude"]) if user_data.get("latitude") else None,
+                longitude=float(user_data["longitude"]) if user_data.get("longitude") else None,
                 createdAt=user_data["created_at"],
                 updatedAt=user_data.get("updated_at", user_data["created_at"])
             )
@@ -367,11 +390,24 @@ async def update_current_user_profile(
 async def get_verified_sitters(
     current_user: CurrentUser = Depends(verify_token),
     credentials: HTTPAuthorizationCredentials = Depends(security),
-    limit: int = 100
+    limit: int = 100,
+    request_mode: Optional[str] = Query(None, description="Filter by request mode: invite, nearby, city, nationwide"),
+    parent_latitude: Optional[float] = Query(None, description="Parent's latitude (for nearby search)"),
+    parent_longitude: Optional[float] = Query(None, description="Parent's longitude (for nearby search)"),
+    parent_city: Optional[str] = Query(None, description="Parent's city (for city search)"),
+    max_distance_km: Optional[float] = Query(None, description="Maximum distance in km (for nearby search)"),
+    sitter_id: Optional[str] = Query(None, description="Specific sitter ID (for invite mode)")
 ):
     """
     Get list of verified sitters (for parents to browse and select)
-    Only verified sitters with is_verified = true are returned
+    Only verified and active sitters are returned (except for invite mode)
+    
+    Filtering rules:
+    - invite: Returns only the specified sitter (if sitter_id provided)
+    - nearby: Returns active sitters within max_distance_km radius of parent location
+    - city: Returns active sitters in the same city as parent
+    - nationwide: Returns all active sitters
+    - Default (no mode): Returns all active sitters (for backward compatibility)
     """
     try:
         # Use authenticated Supabase client for RLS
@@ -385,19 +421,45 @@ async def get_verified_sitters(
                 status_code=500
             )
         
-        # Query for verified sitters only
-        # Note: RLS policies should allow parents to read verified sitter profiles for browsing
-        # If RLS blocks, parents won't be able to see sitters - need to update RLS policy
-        # Use lowercase 'true' for boolean comparison (PostgreSQL standard)
+        # Base query: verified sitters only
         query = supabase.table("users").select("*").eq("role", "sitter").eq("is_verified", True)
         
-        # Alternative: Try with explicit boolean true if the above doesn't work
-        # Some Supabase versions might need explicit boolean handling
+        # Filter by request mode
+        if request_mode == "invite":
+            # Invite mode: show all verified sitters for browsing (regardless of active status)
+            # If specific sitter_id provided, filter to that sitter only
+            if sitter_id:
+                query = query.eq("id", sitter_id)
+            # Otherwise, show all verified sitters so parent can browse and select
+            # Note: Active status not required for invite mode - parent can invite any verified sitter
+        else:
+            # For all other modes (nearby, city, nationwide), only show active sitters
+            query = query.eq("is_active", True)
+            
+            if request_mode == "nearby":
+                # Nearby mode: filter by distance (will be done in Python after fetching)
+                if not parent_latitude or not parent_longitude:
+                    print(f"⚠️ Nearby mode requires parent location, returning empty list")
+                    return []
+                if not max_distance_km:
+                    max_distance_km = 10.0  # Default 10km radius
+                print(f"📍 Nearby search: parent at ({parent_latitude}, {parent_longitude}), radius: {max_distance_km}km")
+            elif request_mode == "city":
+                # City mode: filter by city match
+                if parent_city:
+                    query = query.eq("city", parent_city)
+                    print(f"📍 City search: filtering by city '{parent_city}'")
+                else:
+                    print(f"⚠️ City mode requires parent_city, returning empty list")
+                    return []
+            # nationwide mode: no additional filters, just active sitters
+            print(f"🔍 Filtering for active sitters (is_active = True)")
         
         # Order by created_at (newest first) or you could order by rating/reviews if available
-        query = query.order("created_at", desc=True).limit(limit)
+        query = query.order("created_at", desc=True).limit(limit * 2)  # Fetch more for distance filtering
         
-        print(f"🔍 Querying verified sitters for user {current_user.id} (role: {current_user.role})")
+        print(f"🔍 Querying verified sitters for user {current_user.id} (role: {current_user.role}, mode: {request_mode})")
+        print(f"📋 Query filters: role=sitter, is_verified=True" + (f", is_active=True" if request_mode != "invite" else ""))
         
         try:
             response = query.execute()
@@ -413,12 +475,11 @@ async def get_verified_sitters(
                         status_code=403
                     )
             
-            print(f"📥 Raw response: {response.data if hasattr(response, 'data') else 'NO DATA'}")
-            print(f"📥 Found {len(response.data or [])} verified sitters")
+            print(f"📥 Found {len(response.data or [])} verified sitters (before distance/location filtering)")
             
             if not response.data:
                 print(f"⚠️ No verified sitters found. Possible reasons:")
-                print(f"   1. No sitters with is_verified = true and role = 'sitter'")
+                print(f"   1. No sitters with is_verified = true and is_active = true")
                 print(f"   2. RLS policies blocking access (run UPDATE_RLS_FOR_VERIFIED_SITTERS.sql)")
                 print(f"   3. Database connection issue")
                 return []
@@ -435,9 +496,42 @@ async def get_verified_sitters(
                 )
             raise
         
-        # Convert to response format
+        # Convert to response format and apply distance filtering for nearby mode
         sitters = []
         for user_data in (response.data or []):
+            # For nearby mode, calculate distance and filter
+            if request_mode == "nearby" and parent_latitude and parent_longitude:
+                sitter_lat = user_data.get("latitude")
+                sitter_lng = user_data.get("longitude")
+                
+                if sitter_lat is None or sitter_lng is None:
+                    # Skip sitters without location data
+                    continue
+                
+                # Calculate distance using Haversine formula
+                from math import radians, cos, sin, asin, sqrt
+                
+                def haversine_distance(lat1, lon1, lat2, lon2):
+                    """Calculate distance between two points on Earth in km"""
+                    R = 6371  # Earth radius in km
+                    lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
+                    dlat = lat2 - lat1
+                    dlon = lon2 - lon1
+                    a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
+                    c = 2 * asin(sqrt(a))
+                    return R * c
+                
+                distance = haversine_distance(
+                    float(parent_latitude),
+                    float(parent_longitude),
+                    float(sitter_lat),
+                    float(sitter_lng)
+                )
+                
+                if distance > max_distance_km:
+                    # Skip sitters outside the radius
+                    continue
+            
             sitters.append(UserProfileResponse(
                 id=user_data["id"],
                 email=user_data["email"],
@@ -455,11 +549,18 @@ async def get_verified_sitters(
                 address=user_data.get("address"),
                 city=user_data.get("city"),
                 country=user_data.get("country"),
+                isActive=user_data.get("is_active"),
+                lastActiveAt=user_data.get("last_active_at"),
+                latitude=float(user_data["latitude"]) if user_data.get("latitude") else None,
+                longitude=float(user_data["longitude"]) if user_data.get("longitude") else None,
                 createdAt=user_data["created_at"],
                 updatedAt=user_data.get("updated_at", user_data["created_at"])
             ))
         
-        print(f"✅ Found {len(sitters)} verified sitters")
+        # Limit results after filtering
+        sitters = sitters[:limit]
+        
+        print(f"✅ Found {len(sitters)} verified sitters (after filtering)")
         return sitters
         
     except AppError:

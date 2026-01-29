@@ -167,6 +167,11 @@ CREATE TABLE IF NOT EXISTS users (
   verification_status TEXT,
   hourly_rate DECIMAL(10, 2),
   bio TEXT,
+  -- Sitter availability and location tracking (for parent search filtering)
+  is_active BOOLEAN DEFAULT FALSE, -- Whether sitter is currently available/online (like Uber drivers)
+  last_active_at TIMESTAMPTZ, -- Last time sitter was active/online
+  latitude DECIMAL(10, 8), -- Current location latitude (for nearby search)
+  longitude DECIMAL(11, 8), -- Current location longitude (for nearby search)
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -241,6 +246,11 @@ CREATE TABLE IF NOT EXISTS sessions (
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Indexes for users table (sitter availability and location)
+CREATE INDEX IF NOT EXISTS idx_users_is_active ON users(is_active) WHERE role = 'sitter' AND is_active = TRUE;
+CREATE INDEX IF NOT EXISTS idx_users_city ON users(city) WHERE role = 'sitter';
+CREATE INDEX IF NOT EXISTS idx_users_location ON users(latitude, longitude) WHERE role = 'sitter' AND latitude IS NOT NULL AND longitude IS NOT NULL;
 
 -- Index for sessions search_scope
 CREATE INDEX IF NOT EXISTS idx_sessions_search_scope ON sessions(search_scope) WHERE search_scope != 'invite';

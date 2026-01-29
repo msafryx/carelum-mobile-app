@@ -299,9 +299,25 @@ Update current user's profile.
 
 **Response:** Updated user profile (same format as GET `/api/users/me`)
 
+**Request Body Fields:**
+- `displayName` (optional): User's display name
+- `phoneNumber` (optional): Phone number
+- `profileImageUrl` (optional): Profile image URL
+- `preferredLanguage` (optional): Preferred language code
+- `theme` (optional): UI theme preference
+- `bio` (optional): User biography
+- `hourlyRate` (optional): Hourly rate (for sitters)
+- `address` (optional): Street address
+- `city` (optional): City name
+- `country` (optional): Country name
+- `isActive` (optional, sitters only): Toggle online/offline availability. When `true`, automatically updates `last_active_at` timestamp.
+- `latitude` (optional, sitters only): Current location latitude (for nearby search)
+- `longitude` (optional, sitters only): Current location longitude (for nearby search)
+
 **Note:** 
 - All fields are optional
 - Role cannot be changed via this endpoint (admin only)
+- `isActive`, `latitude`, `longitude` are for sitters only - used to control visibility in parent search
 - Uses authenticated Supabase client for RLS
 
 #### GET `/api/users/sitters/verified`
@@ -311,6 +327,17 @@ Get list of verified sitters (for parents to browse and select).
 
 **Query Parameters:**
 - `limit` (optional): Maximum number of sitters to return (default: 100, max: 1000)
+- `request_mode` (optional): Filter by request mode - `invite`, `nearby`, `city`, `nationwide`
+  - `invite`: Returns only the specified sitter (requires `sitter_id`)
+  - `nearby`: Returns active sitters within `max_distance_km` radius of parent location (requires `parent_latitude`, `parent_longitude`)
+  - `city`: Returns active sitters in the same city as parent (requires `parent_city`)
+  - `nationwide`: Returns all active sitters (no location filter)
+  - Default (no mode): Returns all active sitters (for backward compatibility)
+- `parent_latitude` (optional): Parent's latitude for nearby search (required for `nearby` mode)
+- `parent_longitude` (optional): Parent's longitude for nearby search (required for `nearby` mode)
+- `parent_city` (optional): Parent's city for city search (required for `city` mode)
+- `max_distance_km` (optional): Maximum distance in km for nearby search (default: 10km if not provided)
+- `sitter_id` (optional): Specific sitter ID for invite mode (required for `invite` mode)
 
 **Response:**
 ```json
@@ -340,7 +367,10 @@ Get list of verified sitters (for parents to browse and select).
 
 **Note:**
 - Only returns sitters with `is_verified = true`
-- Used by parents to browse and select sitters for invite mode sessions
+- For non-invite modes (`nearby`, `city`, `nationwide`), only returns sitters with `is_active = true` (sitters who are online/available)
+- For `invite` mode, returns the specified sitter regardless of active status
+- Location-based filtering uses Haversine formula for distance calculation
+- Used by parents to browse and select sitters based on search scope
 - Ordered by creation date (newest first)
 - All sitters in the response are verified
 
@@ -1401,6 +1431,9 @@ All services return `{ success: boolean, data?: T, error?: AppError }` format fo
 - ✅ Address, city, country fields added
 - ✅ RLS-aware authentication for database access
 - ✅ Verified sitters endpoint for parents to browse and select
+- ✅ Sitter active status (`is_active`, `last_active_at`) for online/offline availability
+- ✅ Location-based filtering (latitude, longitude) for nearby search
+- ✅ Location-based sitter filtering by request mode (invite, nearby, city, nationwide)
 
 **Error Handling:**
 - ✅ Comprehensive error codes

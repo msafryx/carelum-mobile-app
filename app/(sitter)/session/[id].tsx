@@ -52,6 +52,7 @@ import { LocationUpdate } from '@/src/types/session.types';
 import { Alert as AlertType } from '@/src/services/alert.service';
 import { Ionicons } from '@expo/vector-icons';
 import * as Audio from 'expo-av';
+import { format } from 'date-fns';
 
 // Helper function to format duration
 function formatDuration(startTime: Date): string {
@@ -473,7 +474,7 @@ export default function SitterSessionDetailScreen() {
           <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />
         }
       >
-        {/* Session Info Card */}
+        {/* Session Info Card - Professional Design */}
         <Card style={styles.infoCard}>
           <View style={styles.sessionHeader}>
             <View style={[styles.statusBadge, { backgroundColor: getStatusColor(session.status, colors) }]}>
@@ -481,36 +482,72 @@ export default function SitterSessionDetailScreen() {
                 {session.status.toUpperCase()}
               </Text>
             </View>
-            {session.location && (
-              <View style={styles.locationInfo}>
-                <Ionicons name="location-outline" size={16} color={colors.textSecondary} />
-                <Text style={[styles.locationText, { color: colors.textSecondary }]}>
-                  {session.location.address || 'Location set'}
-                </Text>
-              </View>
-            )}
+            {session.location && (() => {
+              // Helper to extract readable address
+              const getReadableLocation = (location: any): string => {
+                if (!location) return 'Location set';
+                
+                // If it's a string, check if it's JSON
+                if (typeof location === 'string') {
+                  try {
+                    const parsed = JSON.parse(location);
+                    if (parsed && typeof parsed === 'object') {
+                      return parsed.address || parsed.city || location;
+                    }
+                  } catch {
+                    // Not JSON, return as-is
+                    return location;
+                  }
+                  return location;
+                }
+                
+                // If it's an object
+                if (typeof location === 'object') {
+                  if (location.address) return location.address;
+                  if (location.city) return location.city;
+                  if (location.coordinates) return 'Location set';
+                }
+                
+                return 'Location set';
+              };
+              
+              return (
+                <View style={[styles.locationInfo, { backgroundColor: colors.primary + '10' }]}>
+                  <Ionicons name="location" size={14} color={colors.primary} />
+                  <Text style={[styles.locationText, { color: colors.text }]} numberOfLines={2}>
+                    {getReadableLocation(session.location)}
+                  </Text>
+                </View>
+              );
+            })()}
           </View>
 
           <View style={styles.sessionInfo}>
             <View style={styles.infoRow}>
-              <Ionicons name="time-outline" size={16} color={colors.textSecondary} />
-              <Text style={[styles.infoText, { color: colors.textSecondary }]}>
-                Started: {session.startTime.toLocaleString()}
+              <View style={[styles.infoIconContainer, { backgroundColor: colors.primary + '10' }]}>
+                <Ionicons name="time" size={14} color={colors.primary} />
+              </View>
+              <Text style={[styles.infoText, { color: colors.text }]}>
+                Started: {format(session.startTime, 'MMM dd, yyyy • h:mm a')}
               </Text>
             </View>
             {isActive && (
               <View style={styles.infoRow}>
-                <Ionicons name="hourglass-outline" size={16} color={colors.textSecondary} />
-                <Text style={[styles.infoText, { color: colors.textSecondary }]}>
+                <View style={[styles.infoIconContainer, { backgroundColor: colors.success + '10' }]}>
+                  <Ionicons name="hourglass" size={14} color={colors.success || '#10b981'} />
+                </View>
+                <Text style={[styles.infoText, { color: colors.text }]}>
                   Duration: {formatDuration(session.startTime)}
                 </Text>
               </View>
             )}
             {session.hourlyRate && (
               <View style={styles.infoRow}>
-                <Ionicons name="cash-outline" size={16} color={colors.textSecondary} />
-                <Text style={[styles.infoText, { color: colors.textSecondary }]}>
-                  Rate: ${session.hourlyRate}/hour
+                <View style={[styles.infoIconContainer, { backgroundColor: colors.warning + '10' }]}>
+                  <Ionicons name="cash" size={14} color={colors.warning || '#f59e0b'} />
+                </View>
+                <Text style={[styles.infoText, { color: colors.text }]}>
+                  Rate: Rs. {session.hourlyRate.toFixed(0)}/hour
                 </Text>
               </View>
             )}
@@ -697,10 +734,32 @@ const styles = StyleSheet.create({
   infoRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 10,
+    marginBottom: 10,
+  },
+  infoIconContainer: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   infoText: {
     fontSize: 14,
+    flex: 1,
+  },
+  locationInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 16,
+    maxWidth: '60%',
+  },
+  locationText: {
+    fontSize: 12,
+    flex: 1,
   },
   actionCard: {
     marginBottom: 16,

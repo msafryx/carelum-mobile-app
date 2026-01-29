@@ -285,27 +285,49 @@ export default function SitterRequestsScreen() {
     return 'Ongoing';
   };
 
+  // Helper function to extract readable address from location
+  const getReadableLocation = (location: any): string | null => {
+    if (!location) return null;
+    
+    // If it's already a plain string, check if it's JSON
+    if (typeof location === 'string') {
+      try {
+        const parsed = JSON.parse(location);
+        if (parsed && typeof parsed === 'object') {
+          return parsed.address || parsed.city || location;
+        }
+      } catch {
+        // Not JSON, return as-is
+        return location;
+      }
+      return location;
+    }
+    
+    // If it's an object
+    if (typeof location === 'object') {
+      if (location.address) return location.address;
+      if (location.city) return location.city;
+      if (location.coordinates) return 'Location set';
+    }
+    
+    return null;
+  };
+
   const getLocationDisplay = (session: SessionWithDetails): string => {
+    const readableLocation = getReadableLocation(session.location);
+    
+    if (!readableLocation) {
+      return 'Location not specified';
+    }
+    
     if (session.requestMode === 'INVITE') {
       // For invite mode, show full address
-      if (typeof session.location === 'string') {
-        return session.location;
-      }
-      if (session.location?.address) {
-        return session.location.address;
-      }
-      return 'Location not specified';
+      return readableLocation;
     } else {
       // For other modes, show city-level only
-      if (session.location?.city) {
-        return session.location.city;
-      }
-      if (typeof session.location === 'string') {
-        // Try to extract city from address string
-        const parts = session.location.split(',');
-        return parts[parts.length - 1]?.trim() || session.location;
-      }
-      return 'Location not specified';
+      // Try to extract city from address string
+      const parts = readableLocation.split(',');
+      return parts[parts.length - 1]?.trim() || readableLocation;
     }
   };
 
@@ -458,6 +480,7 @@ function RequestCard({
         styles.requestCard,
         isInvite && { borderLeftWidth: 4, borderLeftColor: colors.primary },
       ]}
+      // Remove any onPress from Card - only buttons should be clickable
     >
       <View style={styles.requestHeader}>
         <View style={styles.requestInfo}>
@@ -486,33 +509,43 @@ function RequestCard({
 
       <View style={styles.requestDetails}>
         <View style={styles.detailRow}>
-          <Ionicons name="calendar-outline" size={16} color={colors.textSecondary} />
-          <Text style={[styles.detailText, { color: colors.textSecondary }]}>
+          <View style={[styles.detailIconContainer, { backgroundColor: colors.primary + '10' }]}>
+            <Ionicons name="calendar" size={14} color={colors.primary} />
+          </View>
+          <Text style={[styles.detailText, { color: colors.text }]}>
             {format(request.startTime, 'MMM dd, yyyy • h:mm a')}
           </Text>
         </View>
         <View style={styles.detailRow}>
-          <Ionicons name="time-outline" size={16} color={colors.textSecondary} />
-          <Text style={[styles.detailText, { color: colors.textSecondary }]}>
+          <View style={[styles.detailIconContainer, { backgroundColor: colors.success + '10' }]}>
+            <Ionicons name="time" size={14} color={colors.success || '#10b981'} />
+          </View>
+          <Text style={[styles.detailText, { color: colors.text }]}>
             {formatDuration(request)}
           </Text>
         </View>
         <View style={styles.detailRow}>
-          <Ionicons name="location-outline" size={16} color={colors.textSecondary} />
-          <Text style={[styles.detailText, { color: colors.textSecondary }]} numberOfLines={1}>
+          <View style={[styles.detailIconContainer, { backgroundColor: colors.warning + '10' }]}>
+            <Ionicons name="location" size={14} color={colors.warning || '#f59e0b'} />
+          </View>
+          <Text style={[styles.detailText, { color: colors.text }]} numberOfLines={1}>
             {getLocationDisplay(request)}
           </Text>
         </View>
         <View style={styles.detailRow}>
-          <Ionicons name="cash-outline" size={16} color={colors.textSecondary} />
-          <Text style={[styles.detailText, { color: colors.textSecondary }]}>
-            ${request.hourlyRate}/hr
+          <View style={[styles.detailIconContainer, { backgroundColor: colors.info + '10' || colors.primary + '10' }]}>
+            <Ionicons name="cash" size={14} color={colors.info || colors.primary} />
+          </View>
+          <Text style={[styles.detailText, { color: colors.text, fontWeight: '600' }]}>
+            Rs. {request.hourlyRate?.toFixed(0) || '0'}/hr
           </Text>
         </View>
         {request.notes && (
           <View style={styles.detailRow}>
-            <Ionicons name="document-text-outline" size={16} color={colors.textSecondary} />
-            <Text style={[styles.detailText, { color: colors.textSecondary }]} numberOfLines={2}>
+            <View style={[styles.detailIconContainer, { backgroundColor: colors.textSecondary + '10' }]}>
+              <Ionicons name="document-text" size={14} color={colors.textSecondary} />
+            </View>
+            <Text style={[styles.detailText, { color: colors.text }]} numberOfLines={2}>
               {request.notes}
             </Text>
           </View>
@@ -625,62 +658,90 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   requestCard: {
-    marginBottom: 12,
+    marginBottom: 16,
+    padding: 16,
+    borderRadius: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
   },
   requestHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
-    marginBottom: 12,
+    marginBottom: 14,
   },
   requestInfo: {
     flex: 1,
+    marginRight: 12,
   },
   childInfo: {
-    marginBottom: 4,
+    marginBottom: 6,
   },
   requestTitle: {
-    fontSize: 18,
-    fontWeight: '600',
+    fontSize: 19,
+    fontWeight: '700',
+    letterSpacing: 0.2,
   },
   multipleChildren: {
     fontSize: 12,
-    marginTop: 2,
+    marginTop: 4,
+    fontStyle: 'italic',
   },
   parentName: {
     fontSize: 14,
+    marginTop: 2,
   },
   requestDetails: {
-    gap: 8,
-    marginBottom: 12,
+    gap: 10,
+    marginBottom: 16,
+    paddingVertical: 12,
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+    borderTopColor: '#f0f0f0',
+    borderBottomColor: '#f0f0f0',
   },
   detailRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 10,
+  },
+  detailIconContainer: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   detailText: {
     fontSize: 14,
     flex: 1,
+    lineHeight: 20,
   },
   requestActions: {
     flexDirection: 'row',
     gap: 12,
-    paddingTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: '#f0f0f0',
+    paddingTop: 4,
   },
   actionButton: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 12,
+    paddingVertical: 14,
     borderRadius: 12,
     gap: 6,
+    minHeight: 48,
   },
   acceptButton: {
     // backgroundColor set inline
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    elevation: 3,
   },
   declineButton: {
     borderWidth: 2,
@@ -693,7 +754,8 @@ const styles = StyleSheet.create({
     // borderColor set inline
   },
   actionButtonText: {
-    fontSize: 14,
+    fontSize: 15,
     fontWeight: '600',
+    letterSpacing: 0.3,
   },
 });

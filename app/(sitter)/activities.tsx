@@ -242,8 +242,8 @@ export default function SitterActivitiesScreen() {
                   <View style={styles.detailRow}>
                     <Ionicons name="cash-outline" size={16} color={colors.textSecondary} />
                     <Text style={[styles.detailText, { color: colors.textSecondary }]}>
-                      ${session.hourlyRate}/hr
-                      {session.totalAmount && ` • Total: $${session.totalAmount.toFixed(2)}`}
+                      Rs. {session.hourlyRate?.toFixed(0) || '0'}/hr
+                      {session.totalAmount && ` • Total: Rs. ${session.totalAmount.toFixed(2)}`}
                     </Text>
                   </View>
                 </View>

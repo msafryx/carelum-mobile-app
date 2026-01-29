@@ -11,30 +11,137 @@ import { useAuth } from '@/src/hooks/useAuth';
 import { getUserSessions, discoverAvailableSessions } from '@/src/services/session.service';
 import { getChildById } from '@/src/services/child.service';
 import { getUserById } from '@/src/services/admin.service';
+import { updateUserProfileViaAPI } from '@/src/services/user-api.service';
 import { Session } from '@/src/types/session.types';
 import { format } from 'date-fns';
 import { SESSION_STATUS } from '@/src/config/constants';
+import * as Location from 'expo-location';
+import { Switch, Alert } from 'react-native';
 
 interface SessionWithDetails extends Session {
   childName?: string;
   parentName?: string;
 }
 
+// Helper function to extract readable address from location
+const getReadableLocation = (location: any): string | null => {
+  if (!location) return null;
+  
+  // If it's already a plain string, return it
+  if (typeof location === 'string') {
+    // Check if it's a JSON string
+    try {
+      const parsed = JSON.parse(location);
+      if (parsed && typeof parsed === 'object') {
+        return parsed.address || parsed.city || location;
+      }
+    } catch {
+      // Not JSON, return as-is
+      return location;
+    }
+    return location;
+  }
+  
+  // If it's an object
+  if (typeof location === 'object') {
+    if (location.address) return location.address;
+    if (location.city) return location.city;
+    // If it has coordinates but no address, return a generic message
+    if (location.coordinates) return 'Location set';
+  }
+  
+  return null;
+};
+
 export default function SitterHomeScreen() {
   const { colors, spacing } = useTheme();
   const router = useRouter();
-  const { user, userProfile } = useAuth();
+  const { user, userProfile, refreshProfile } = useAuth();
   const [menuVisible, setMenuVisible] = useState(false);
   const [activeSessions, setActiveSessions] = useState<SessionWithDetails[]>([]);
   const [upcomingSessions, setUpcomingSessions] = useState<SessionWithDetails[]>([]);
   const [availableSessions, setAvailableSessions] = useState<SessionWithDetails[]>([]);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  // Initialize isActive from userProfile if available, otherwise false
+  // Will be synced when profile loads
+  const [isActive, setIsActive] = useState(userProfile?.isActive ?? false);
+  const [updatingActiveStatus, setUpdatingActiveStatus] = useState(false);
 
   const handleProfilePress = () => {
     // Always route to profile setup from homepage
     router.push('/(sitter)/profile-setup');
   };
+
+  const handleToggleActiveStatus = async (value: boolean) => {
+    if (!user) return;
+    
+    setUpdatingActiveStatus(true);
+    try {
+      // If turning on, get current location
+      let latitude: number | undefined;
+      let longitude: number | undefined;
+      
+      if (value) {
+        try {
+          const { status } = await Location.requestForegroundPermissionsAsync();
+          if (status === 'granted') {
+            const location = await Location.getCurrentPositionAsync({});
+            latitude = location.coords.latitude;
+            longitude = location.coords.longitude;
+          }
+        } catch (error) {
+          console.warn('Failed to get location:', error);
+          // Continue without location if permission denied
+        }
+      }
+      
+      const result = await updateUserProfileViaAPI({
+        isActive: value,
+        latitude,
+        longitude,
+      });
+      
+      if (result.success) {
+        setIsActive(value);
+        await refreshProfile();
+        if (value) {
+          Alert.alert('You\'re now online', 'Parents can now see you in their search results.');
+        } else {
+          Alert.alert('You\'re now offline', 'You won\'t appear in parent search results until you go online again.');
+        }
+      } else {
+        Alert.alert('Error', 'Failed to update availability status. Please try again.');
+        // Revert toggle
+        setIsActive(!value);
+      }
+    } catch (error: any) {
+      console.error('Failed to toggle active status:', error);
+      Alert.alert('Error', 'Failed to update availability status. Please try again.');
+      // Revert toggle
+      setIsActive(!value);
+    } finally {
+      setUpdatingActiveStatus(false);
+    }
+  };
+
+  // Sync isActive state with userProfile (when profile loads or updates)
+  // This ensures UI always reflects backend state
+  useEffect(() => {
+    if (userProfile) {
+      // Always sync from backend profile (source of truth)
+      const backendIsActive = userProfile.isActive ?? false;
+      if (isActive !== backendIsActive) {
+        console.log(`🔄 Syncing isActive from backend: ${isActive} -> ${backendIsActive}`);
+        setIsActive(backendIsActive);
+      }
+    } else {
+      // If profile not loaded yet, default to false
+      if (isActive !== false) {
+        setIsActive(false);
+      }
+    }
+  }, [userProfile?.isActive, userProfile?.id]); // Sync when isActive changes or profile ID changes (new login)
 
   const loadSessions = useCallback(async (isRefresh = false) => {
     if (!user || !userProfile) return;
@@ -58,19 +165,39 @@ export default function SitterHomeScreen() {
           sessions.map(async (session) => {
             const details: SessionWithDetails = { ...session };
             
-            // Get child name
+            // Get child name - handle errors gracefully
             if (session.childId) {
-              const childResult = await getChildById(session.childId);
-              if (childResult.success && childResult.data) {
-                details.childName = childResult.data.name;
+              try {
+                const childResult = await getChildById(session.childId);
+                if (childResult.success && childResult.data) {
+                  details.childName = childResult.data.name;
+                } else {
+                  // Child not found or error - use fallback
+                  console.warn(`⚠️ Could not load child ${session.childId}:`, childResult.error?.message || 'Child not found');
+                  details.childName = 'Child';
+                }
+              } catch (error: any) {
+                // Handle unexpected errors gracefully
+                console.warn(`⚠️ Error loading child ${session.childId}:`, error.message);
+                details.childName = 'Child';
               }
             }
 
-            // Get parent name
+            // Get parent name - handle errors gracefully
             if (session.parentId) {
-              const parentResult = await getUserById(session.parentId);
-              if (parentResult.success && parentResult.data) {
-                details.parentName = parentResult.data.displayName || 'Parent';
+              try {
+                const parentResult = await getUserById(session.parentId);
+                if (parentResult.success && parentResult.data) {
+                  details.parentName = parentResult.data.displayName || 'Parent';
+                } else {
+                  // Parent not found or error - use fallback
+                  console.warn(`⚠️ Could not load parent ${session.parentId}:`, parentResult.error?.message || 'Parent not found');
+                  details.parentName = 'Parent';
+                }
+              } catch (error: any) {
+                // Handle unexpected errors gracefully
+                console.warn(`⚠️ Error loading parent ${session.parentId}:`, error.message);
+                details.parentName = 'Parent';
               }
             }
 
@@ -135,6 +262,37 @@ export default function SitterHomeScreen() {
           <RefreshControl refreshing={refreshing} onRefresh={() => loadSessions(true)} />
         }
       >
+        {/* Active Status Toggle Card */}
+        <Card style={styles.activeStatusCard}>
+          <View style={styles.activeStatusRow}>
+            <View style={styles.activeStatusInfo}>
+              <Text style={[styles.activeStatusTitle, { color: colors.text }]}>
+                {isActive ? 'You\'re Online' : 'You\'re Offline'}
+              </Text>
+              <Text style={[styles.activeStatusSubtitle, { color: colors.textSecondary }]}>
+                {isActive 
+                  ? 'Parents can see you in search results' 
+                  : 'You won\'t appear in parent searches'}
+              </Text>
+            </View>
+            <Switch
+              value={isActive}
+              onValueChange={handleToggleActiveStatus}
+              disabled={updatingActiveStatus}
+              trackColor={{ false: colors.border, true: colors.primary }}
+              thumbColor={colors.white}
+            />
+          </View>
+          {updatingActiveStatus && (
+            <View style={styles.updatingIndicator}>
+              <ActivityIndicator size="small" color={colors.primary} />
+              <Text style={[styles.updatingText, { color: colors.textSecondary }]}>
+                Updating...
+              </Text>
+            </View>
+          )}
+        </Card>
+
         <View style={styles.quickRow}>
           <TouchableOpacity
             style={[styles.quickButton, { backgroundColor: colors.primary }]}
@@ -273,35 +431,55 @@ export default function SitterHomeScreen() {
               onPress={() => router.push(`/(sitter)/session/${session.id}` as any)}
               activeOpacity={0.7}
             >
-              <Card style={styles.sessionCard}>
-                <View style={styles.sessionHeader}>
-                  <View style={styles.sessionInfo}>
-                    <Text style={[styles.sessionTitle, { color: colors.text }]}>
-                      {session.childName || 'Child'}
-                    </Text>
+              <Card style={styles.availableSessionCard}>
+                <View style={styles.availableSessionHeader}>
+                  <View style={styles.availableSessionInfo}>
+                    <View style={styles.availableSessionTitleRow}>
+                      <Text style={[styles.availableSessionTitle, { color: colors.text }]}>
+                        {session.childName || 'Child'}
+                      </Text>
+                      {session.searchScope && session.searchScope !== 'invite' && (
+                        <View style={[styles.scopeBadge, { backgroundColor: colors.primary + '15' }]}>
+                          <Text style={[styles.scopeBadgeText, { color: colors.primary }]}>
+                            {session.searchScope === 'nearby' && session.maxDistanceKm
+                              ? `${session.maxDistanceKm}km`
+                              : session.searchScope.charAt(0).toUpperCase() + session.searchScope.slice(1)}
+                          </Text>
+                        </View>
+                      )}
+                    </View>
                     {session.parentName && (
-                      <Text style={[styles.parentName, { color: colors.textSecondary }]}>
+                      <Text style={[styles.availableSessionParent, { color: colors.textSecondary }]}>
                         from {session.parentName}
                       </Text>
                     )}
                   </View>
-                  <Ionicons name="location" size={20} color={colors.primary} />
+                  <View style={[styles.locationIconContainer, { backgroundColor: colors.primary + '15' }]}>
+                    <Ionicons name="location" size={18} color={colors.primary} />
+                  </View>
                 </View>
-                <View style={styles.sessionDetails}>
-                  <Text style={[styles.sessionTime, { color: colors.textSecondary }]}>
-                    {format(session.startTime, 'MMM dd, yyyy • h:mm a')}
-                  </Text>
-                  {session.hourlyRate && (
-                    <Text style={[styles.sessionRate, { color: colors.primary }]}>
-                      ${session.hourlyRate}/hr
+                <View style={styles.availableSessionDetails}>
+                  <View style={styles.availableSessionDetailRow}>
+                    <Ionicons name="calendar-outline" size={14} color={colors.textSecondary} />
+                    <Text style={[styles.availableSessionDetailText, { color: colors.textSecondary }]}>
+                      {format(session.startTime, 'MMM dd, yyyy • h:mm a')}
                     </Text>
+                  </View>
+                  {getReadableLocation(session.location) && (
+                    <View style={styles.availableSessionDetailRow}>
+                      <Ionicons name="location" size={14} color={colors.warning || '#f59e0b'} />
+                      <Text style={[styles.availableSessionDetailText, { color: colors.textSecondary }]} numberOfLines={1}>
+                        {getReadableLocation(session.location)}
+                      </Text>
+                    </View>
                   )}
-                  {session.searchScope && session.searchScope !== 'invite' && (
-                    <Text style={[styles.sessionScope, { color: colors.textSecondary }]}>
-                      {session.searchScope === 'nearby' && session.maxDistanceKm
-                        ? `Within ${session.maxDistanceKm}km`
-                        : session.searchScope.charAt(0).toUpperCase() + session.searchScope.slice(1)}
-                    </Text>
+                  {session.hourlyRate && (
+                    <View style={styles.availableSessionDetailRow}>
+                      <Ionicons name="cash" size={14} color={colors.primary} />
+                      <Text style={[styles.availableSessionRate, { color: colors.primary }]}>
+                        Rs. {session.hourlyRate.toFixed(0)}/hr
+                      </Text>
+                    </View>
                   )}
                 </View>
               </Card>
@@ -412,5 +590,95 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: 2,
     fontStyle: 'italic',
+  },
+  availableSessionCard: {
+    marginBottom: 12,
+    padding: 16,
+  },
+  availableSessionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: 12,
+  },
+  availableSessionInfo: {
+    flex: 1,
+    marginRight: 12,
+  },
+  availableSessionTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 4,
+    flexWrap: 'wrap',
+  },
+  availableSessionTitle: {
+    fontSize: 17,
+    fontWeight: '600',
+  },
+  scopeBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  scopeBadgeText: {
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  availableSessionParent: {
+    fontSize: 14,
+    marginTop: 2,
+  },
+  locationIconContainer: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  availableSessionDetails: {
+    gap: 8,
+  },
+  availableSessionDetailRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  availableSessionDetailText: {
+    fontSize: 14,
+    flex: 1,
+  },
+  availableSessionRate: {
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  activeStatusCard: {
+    marginBottom: 20,
+  },
+  activeStatusRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  activeStatusInfo: {
+    flex: 1,
+    marginRight: 16,
+  },
+  activeStatusTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  activeStatusSubtitle: {
+    fontSize: 14,
+  },
+  updatingIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 12,
+    gap: 8,
+  },
+  updatingText: {
+    fontSize: 12,
   },
 });

@@ -110,6 +110,10 @@ function apiResponseToUser(apiUser: any): User {
     address: apiUser.address,
     city: apiUser.city,
     country: apiUser.country,
+    isActive: apiUser.isActive,
+    lastActiveAt: apiUser.lastActiveAt ? new Date(apiUser.lastActiveAt) : undefined,
+    latitude: apiUser.latitude,
+    longitude: apiUser.longitude,
   };
 }
 
@@ -131,9 +135,44 @@ export async function getCurrentUserProfileFromAPI(): Promise<ServiceResult<User
 
 /**
  * Get verified sitters (for parents to browse and select)
+ * @param limit Maximum number of sitters to return
+ * @param requestMode Filter by request mode: 'invite', 'nearby', 'city', 'nationwide'
+ * @param parentLocation Parent's location for filtering (latitude, longitude, city)
+ * @param maxDistanceKm Maximum distance in km for nearby search
+ * @param sitterId Specific sitter ID for invite mode
  */
-export async function getVerifiedSitters(limit: number = 100): Promise<ServiceResult<User[]>> {
-  const result = await apiRequest<any[]>(`/api/users/sitters/verified?limit=${limit}`);
+export async function getVerifiedSitters(
+  limit: number = 100,
+  requestMode?: 'invite' | 'nearby' | 'city' | 'nationwide',
+  parentLocation?: { latitude?: number; longitude?: number; city?: string },
+  maxDistanceKm?: number,
+  sitterId?: string
+): Promise<ServiceResult<User[]>> {
+  const params = new URLSearchParams();
+  params.append('limit', limit.toString());
+  
+  if (requestMode) {
+    params.append('request_mode', requestMode);
+  }
+  
+  if (parentLocation?.latitude !== undefined && parentLocation?.longitude !== undefined) {
+    params.append('parent_latitude', parentLocation.latitude.toString());
+    params.append('parent_longitude', parentLocation.longitude.toString());
+  }
+  
+  if (parentLocation?.city) {
+    params.append('parent_city', parentLocation.city);
+  }
+  
+  if (maxDistanceKm !== undefined) {
+    params.append('max_distance_km', maxDistanceKm.toString());
+  }
+  
+  if (sitterId) {
+    params.append('sitter_id', sitterId);
+  }
+  
+  const result = await apiRequest<any[]>(`/api/users/sitters/verified?${params.toString()}`);
   
   if (!result.success) {
     return result;
@@ -411,6 +450,10 @@ export async function updateUserProfileViaAPI(
   if ('address' in updates) apiUpdates.address = updates.address;
   if ('city' in updates) apiUpdates.city = updates.city;
   if ('country' in updates) apiUpdates.country = updates.country;
+  // Include sitter availability and location
+  if ('isActive' in updates) apiUpdates.isActive = updates.isActive;
+  if ('latitude' in updates) apiUpdates.latitude = updates.latitude;
+  if ('longitude' in updates) apiUpdates.longitude = updates.longitude;
 
   console.log('📤 Sending profile update to API:', JSON.stringify(apiUpdates, null, 2));
 

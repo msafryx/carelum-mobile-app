@@ -4,12 +4,12 @@ import EmptyState from '@/src/components/ui/EmptyState';
 import HamburgerMenu from '@/src/components/ui/HamburgerMenu';
 import Header from '@/src/components/ui/Header';
 import { useTheme } from '@/src/components/ui/ThemeProvider';
+import { isSupabaseConfigured, supabase } from '@/src/config/supabase';
 import { useAuth } from '@/src/hooks/useAuth';
 import { getParentChildren } from '@/src/services/child.service';
 import { createSessionRequest } from '@/src/services/session.service';
 import { getVerifiedSitters } from '@/src/services/user-api.service';
 import { getSitterVerification } from '@/src/services/verification.service';
-import { isSupabaseConfigured, supabase } from '@/src/config/supabase';
 import { Child } from '@/src/types/child.types';
 import { SessionSearchScope } from '@/src/types/session.types';
 import { User } from '@/src/types/user.types';
@@ -20,19 +20,19 @@ import * as Location from 'expo-location';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-    ActivityIndicator,
-    Alert,
-    Image,
-    Modal,
-    Platform,
-    Pressable,
-    RefreshControl,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View
+  ActivityIndicator,
+  Alert,
+  Image,
+  Modal,
+  Platform,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View
 } from 'react-native';
 // Platform-specific map imports - DO NOT load at module level
 // Will be loaded dynamically only when needed to avoid native module errors
@@ -310,10 +310,43 @@ export default function SearchScreen() {
     }
 
     try {
-      // Load only verified sitters for parents to browse and select
-      const result = await getVerifiedSitters(100);
+      // Prepare location data based on request mode
+      let parentLocation: { latitude?: number; longitude?: number; city?: string } | undefined;
+      
+      if (requestMode === 'nearby') {
+        // For nearby mode, use filter location or session location
+        const locationToUse = filterLocation || sessionLocation;
+        if (locationToUse?.latitude && locationToUse?.longitude) {
+          parentLocation = {
+            latitude: locationToUse.latitude,
+            longitude: locationToUse.longitude,
+          };
+        }
+      } else if (requestMode === 'city') {
+        // For city mode, use city from filter location, session location, or user profile
+        const cityToUse = filterLocation?.city || sessionLocation?.city || userProfile?.city;
+        if (cityToUse) {
+          parentLocation = { city: cityToUse };
+        }
+      }
+      // For invite mode, we'll pass sitterId separately
+      // For nationwide mode, no location filter needed
+      
+      // Load verified sitters with location-based filtering
+      // For invite mode: show all verified sitters (so parent can browse and select)
+      // For other modes: only show active sitters with location filtering
+      const result = await getVerifiedSitters(
+        100,
+        requestMode,
+        parentLocation,
+        requestMode === 'nearby' ? maxDistanceKm : undefined,
+        // Only pass sitterId if a specific sitter is already selected in invite mode
+        // Otherwise, show all verified sitters for browsing
+        requestMode === 'invite' && selected ? selected.id : undefined
+      );
+      
       if (result.success && result.data) {
-        // Filter by search, location, rating, price if provided
+        // Filter by search, rating, price if provided (location filtering is done by backend)
         let filtered = result.data;
         
         if (search) {
@@ -345,7 +378,7 @@ export default function SearchScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [user, search, rating, price]);
+  }, [user, search, rating, price, requestMode, filterLocation, sessionLocation, userProfile, maxDistanceKm, selected]);
 
   const loadChildren = useCallback(async (forceRefresh: boolean = false) => {
     if (!user) return;
@@ -1500,6 +1533,11 @@ export default function SearchScreen() {
               <Text style={[styles.requestModeTitle, { color: colors.text }]}>Request Mode</Text>
             </View>
           </View>
+          <Text style={[styles.requestModeHint, { color: colors.textSecondary }]}>
+            Invite = book a specific sitter. {'\n'}
+            Nearby / City / Nationwide = post a request; any sitter in that range can accept.{'\n'}
+            In Nearby / City / Nationwide you can also book an available sitter from the list.
+          </Text>
 
           <View style={styles.requestModeGrid}>
             <TouchableOpacity
@@ -1879,8 +1917,8 @@ export default function SearchScreen() {
           <View style={styles.centerContainer}>
             <ActivityIndicator size="large" color={colors.primary} />
           </View>
-        ) : requestMode === 'invite' ? (
-          // Invite mode: Show sitter list
+        ) : (
+          // Show sitter list for all modes (invite, nearby, city, nationwide)
           filteredSitters.length === 0 ? (
             <Card>
               <EmptyState
@@ -1889,12 +1927,63 @@ export default function SearchScreen() {
                 message={
                   search
                     ? "Try adjusting your search criteria"
-                    : "No verified babysitters available at the moment. Only verified sitters are shown here."
+                    : requestMode === 'invite'
+                    ? "No verified babysitters available at the moment. Only verified sitters are shown here."
+                    : requestMode === 'nearby'
+                    ? `No active sitters found within ${maxDistanceKm}km. Only verified and active sitters are shown.`
+                    : requestMode === 'city'
+                    ? "No active sitters found in your city. Only verified and active sitters are shown."
+                    : "No active sitters found. Only verified and active sitters are shown."
                 }
               />
             </Card>
           ) : (
-            filteredSitters.map((sitter) => (
+            <>
+              {/* Show request preview info for non-invite modes */}
+              {requestMode !== 'invite' && (
+                <Card style={{ marginBottom: 12 }}>
+                  <View style={styles.requestPreviewContainer}>
+                    <View style={styles.requestPreviewHeader}>
+                      <Ionicons 
+                        name={requestMode === 'nearby' ? 'location' : requestMode === 'city' ? 'business' : 'globe'} 
+                        size={24} 
+                        color={colors.primary} 
+                      />
+                      <Text style={[styles.requestPreviewTitle, { color: colors.text }]}>
+                        {requestMode === 'nearby' 
+                          ? `Nearby Request (${maxDistanceKm}km)` 
+                          : requestMode === 'city'
+                          ? 'City Request'
+                          : 'Nationwide Request'}
+                      </Text>
+                    </View>
+                    <Text style={[styles.requestPreviewDescription, { color: colors.textSecondary }]}>
+                      {requestMode === 'nearby'
+                        ? `Found ${filteredSitters.length} active sitter${filteredSitters.length !== 1 ? 's' : ''} within ${maxDistanceKm}km. Your request will be broadcast to them.`
+                        : requestMode === 'city'
+                        ? `Found ${filteredSitters.length} active sitter${filteredSitters.length !== 1 ? 's' : ''} in your city. Your request will be broadcast to them.`
+                        : `Found ${filteredSitters.length} active sitter${filteredSitters.length !== 1 ? 's' : ''} nationwide. Your request will be broadcast to them.`}
+                    </Text>
+                    <TouchableOpacity
+                      style={[styles.createBroadcastRequestButton, { backgroundColor: colors.primary }]}
+                      onPress={handleCreateSessionRequest}
+                      activeOpacity={0.8}
+                    >
+                      <Ionicons name="megaphone" size={20} color={colors.white} />
+                      <Text style={styles.createBroadcastRequestButtonText}>
+                        {requestMode === 'nearby'
+                          ? `Create Nearby Request (${maxDistanceKm}km)`
+                          : requestMode === 'city'
+                          ? 'Create City Request'
+                          : 'Create Nationwide Request'}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                </Card>
+              )}
+              
+              {/* Show sitter list for all modes */}
+              {filteredSitters.map((sitter) => (
               <Card key={sitter.id} style={styles.sitterCardWrapper}>
                 <TouchableOpacity
                   style={styles.sitterCard}
@@ -1998,44 +2087,9 @@ export default function SearchScreen() {
                   </View>
                 </TouchableOpacity>
               </Card>
-            ))
+            ))}
+            </>
           )
-        ) : (
-          // Non-invite modes: Show Request Preview
-          <Card>
-            <View style={styles.requestPreviewContainer}>
-              <View style={styles.requestPreviewHeader}>
-                <Ionicons 
-                  name={requestMode === 'nearby' ? 'location' : requestMode === 'city' ? 'business' : 'globe'} 
-                  size={24} 
-                  color={colors.primary} 
-                />
-                <Text style={[styles.requestPreviewTitle, { color: colors.text }]}>
-                  {requestMode === 'nearby' 
-                    ? `Nearby Request (${maxDistanceKm}km)` 
-                    : requestMode === 'city'
-                    ? 'City Request'
-                    : 'Nationwide Request'}
-                </Text>
-              </View>
-              <Text style={[styles.requestPreviewDescription, { color: colors.textSecondary }]}>
-                {requestMode === 'nearby'
-                  ? `This request will be broadcast to all sitters within ${maxDistanceKm}km of your location. Sitters will be notified and can accept your request.`
-                  : requestMode === 'city'
-                  ? 'This request will be broadcast to all sitters in your city. Sitters will be notified and can accept your request.'
-                  : 'This request will be broadcast to all sitters nationwide. Sitters will be notified and can accept your request.'}
-              </Text>
-              <TouchableOpacity
-                style={[styles.createRequestButton, { backgroundColor: colors.primary, marginTop: 16 }]}
-                onPress={handleCreateSessionRequest}
-              >
-                <Ionicons name="add-circle" size={20} color={colors.white} />
-                <Text style={[styles.createRequestText, { color: colors.white }]}>
-                  Create Request
-                </Text>
-              </TouchableOpacity>
-            </View>
-          </Card>
         )}
       </ScrollView>
 
@@ -2059,7 +2113,7 @@ export default function SearchScreen() {
                 onPress={() => setFilterModalVisible(false)}
                 hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
               >
-                <Ionicons name="close" size={24} color={colors.text} />
+                <Ionicons name="close" size={24} color={colors.primary} />
               </TouchableOpacity>
             </View>
             <ScrollView contentContainerStyle={styles.filterModalBody}>
@@ -2264,10 +2318,10 @@ export default function SearchScreen() {
               showBack={false}
             />
             <TouchableOpacity
-              style={styles.modalCloseButton}
+              style={[styles.modalCloseButton, { backgroundColor: colors.border }]}
               onPress={() => setBookingVisible(false)}
             >
-              <Ionicons name="close" size={24} color={colors.text} />
+              <Ionicons name="close" size={24} color={colors.primary} />
             </TouchableOpacity>
           </View>
           <ScrollView contentContainerStyle={styles.modalContent}>
@@ -3027,7 +3081,7 @@ export default function SearchScreen() {
               showBack={false}
             />
             <TouchableOpacity
-              style={styles.modalCloseButton}
+              style={[styles.modalCloseButton, { backgroundColor: colors.border }]}
               onPress={() => {
                 setProfileModalVisible(false);
                 setSitterVerification(null);
@@ -3035,7 +3089,7 @@ export default function SearchScreen() {
                 setSitterRating(null);
               }}
             >
-              <Ionicons name="close" size={24} color={colors.text} />
+              <Ionicons name="close" size={24} color={colors.primary} />
             </TouchableOpacity>
           </View>
           
@@ -3654,8 +3708,8 @@ const styles = StyleSheet.create({
     right: 16,
     zIndex: 1000,
     padding: 8,
-    backgroundColor: 'rgba(255, 255, 255, 0.9)',
     borderRadius: 20,
+    // backgroundColor set inline per theme (colors.border) for dark/light visibility
   },
   createSessionButton: {
     flexDirection: 'row',
@@ -3719,6 +3773,21 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 20,
     marginBottom: 8,
+  },
+  createBroadcastRequestButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 12,
+    marginTop: 12,
+    gap: 8,
+  },
+  createBroadcastRequestButtonText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#fff',
   },
   selectedSitterBio: {
     fontSize: 13,
@@ -3787,6 +3856,11 @@ const styles = StyleSheet.create({
   requestModeTitle: {
     fontSize: 15,
     fontWeight: '700',
+  },
+  requestModeHint: {
+    fontSize: 12,
+    lineHeight: 16,
+    marginBottom: 12,
   },
   filterButton: {
     flexDirection: 'row',
