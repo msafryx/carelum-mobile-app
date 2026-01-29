@@ -1,6 +1,6 @@
-# Carelum - Frontend
+# Carelum
 
-A cross-platform mobile application for connecting parents with verified babysitters, built with Expo React Native and Supabase.
+A cross-platform mobile app and API for connecting parents with verified babysitters. This repo contains the **Expo React Native** app and the **FastAPI** backend, with Supabase for database, auth, and storage.
 
 ## 🚀 Quick Start
 
