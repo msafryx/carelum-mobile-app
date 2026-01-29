@@ -458,7 +458,8 @@ $$;
 GRANT EXECUTE ON FUNCTION get_user_role(UUID) TO authenticated;
 GRANT EXECUTE ON FUNCTION get_user_role(UUID) TO anon;
 
--- Users: Users can read their own profile, admins can read all, parents can read verified sitters
+-- Users: Users can read their own profile, admins can read all, parents can read verified sitters,
+--        sitters can read parent display_name/email for parents of sessions they can see
 DROP POLICY IF EXISTS "Users can read own profile" ON users;
 CREATE POLICY "Users can read own profile" ON users
   FOR SELECT USING (
@@ -469,6 +470,21 @@ CREATE POLICY "Users can read own profile" ON users
       get_user_role(auth.uid()) = 'parent'
       AND users.role = 'sitter'
       AND users.is_verified = true
+    )
+    OR (
+      -- Sitters can read parent profile (e.g. display_name) when parent has a session the sitter can see
+      get_user_role(auth.uid()) = 'sitter'
+      AND users.role = 'parent'
+      AND (
+        EXISTS (
+          SELECT 1 FROM sessions s
+          WHERE s.parent_id = users.id AND s.status = 'requested'
+        )
+        OR EXISTS (
+          SELECT 1 FROM sessions s
+          WHERE s.parent_id = users.id AND s.sitter_id = auth.uid()
+        )
+      )
     )
   );
 

@@ -183,19 +183,21 @@ export default function SitterHomeScreen() {
               }
             }
 
-            // Get parent name - handle errors gracefully
+            // Get parent name - use displayName, fallback to email prefix so we show real name
             if (session.parentId) {
               try {
                 const parentResult = await getUserById(session.parentId);
                 if (parentResult.success && parentResult.data) {
-                  details.parentName = parentResult.data.displayName || 'Parent';
+                  const p = parentResult.data;
+                  details.parentName =
+                    (p.displayName && p.displayName.trim()) ||
+                    p.email?.split('@')[0] ||
+                    'Parent';
                 } else {
-                  // Parent not found or error - use fallback
                   console.warn(`⚠️ Could not load parent ${session.parentId}:`, parentResult.error?.message || 'Parent not found');
                   details.parentName = 'Parent';
                 }
               } catch (error: any) {
-                // Handle unexpected errors gracefully
                 console.warn(`⚠️ Error loading parent ${session.parentId}:`, error.message);
                 details.parentName = 'Parent';
               }
@@ -343,13 +345,11 @@ export default function SitterHomeScreen() {
                 <View style={styles.sessionHeader}>
                   <View style={styles.sessionInfo}>
                     <Text style={[styles.sessionTitle, { color: colors.text }]}>
-                      {session.childName || 'Child'}
+                      {session.parentName || 'Parent'}
                     </Text>
-                    {session.parentName && (
-                      <Text style={[styles.parentName, { color: colors.textSecondary }]}>
-                        for {session.parentName}
-                      </Text>
-                    )}
+                    <Text style={[styles.parentName, { color: colors.textSecondary }]}>
+                      {session.childName ? `${session.childName}${session.childAge != null ? `, ${session.childAge}y` : ''}` : '1 child'}
+                    </Text>
                   </View>
                   <Ionicons name="radio" size={20} color={colors.success || '#10b981'} />
                 </View>
@@ -389,13 +389,11 @@ export default function SitterHomeScreen() {
                 <View style={styles.sessionHeader}>
                   <View style={styles.sessionInfo}>
                     <Text style={[styles.sessionTitle, { color: colors.text }]}>
-                      {session.childName || 'Child'}
+                      {session.parentName || 'Parent'}
                     </Text>
-                    {session.parentName && (
-                      <Text style={[styles.parentName, { color: colors.textSecondary }]}>
-                        for {session.parentName}
-                      </Text>
-                    )}
+                    <Text style={[styles.parentName, { color: colors.textSecondary }]}>
+                      {session.childName ? `${session.childName}${session.childAge != null ? `, ${session.childAge}y` : ''}` : '1 child'}
+                    </Text>
                   </View>
                   <Ionicons name="time" size={20} color={colors.warning || '#f59e0b'} />
                 </View>
@@ -436,7 +434,7 @@ export default function SitterHomeScreen() {
                   <View style={styles.availableSessionInfo}>
                     <View style={styles.availableSessionTitleRow}>
                       <Text style={[styles.availableSessionTitle, { color: colors.text }]}>
-                        {session.childName || 'Child'}
+                        {session.parentName || 'Parent'}
                       </Text>
                       {session.searchScope && session.searchScope !== 'invite' && (
                         <View style={[styles.scopeBadge, { backgroundColor: colors.primary + '15' }]}>
@@ -448,11 +446,9 @@ export default function SitterHomeScreen() {
                         </View>
                       )}
                     </View>
-                    {session.parentName && (
-                      <Text style={[styles.availableSessionParent, { color: colors.textSecondary }]}>
-                        from {session.parentName}
-                      </Text>
-                    )}
+                    <Text style={[styles.availableSessionParent, { color: colors.textSecondary }]}>
+                      {session.childName ? `${session.childName}${session.childAge != null ? `, ${session.childAge}y` : ''}` : '1 child'}
+                    </Text>
                   </View>
                   <View style={[styles.locationIconContainer, { backgroundColor: colors.primary + '15' }]}>
                     <Ionicons name="location" size={18} color={colors.primary} />

@@ -5,7 +5,7 @@ import Header from '@/src/components/ui/Header';
 import { useTheme } from '@/src/components/ui/ThemeProvider';
 import { useAuth } from '@/src/hooks/useAuth';
 import { getAll, save, STORAGE_KEYS } from '@/src/services/local-storage.service';
-import { getUserSessions, cancelSession } from '@/src/services/session.service';
+import { getUserSessions, cancelSession, subscribeToUserSessions } from '@/src/services/session.service';
 import CancelSessionModal from '@/src/components/session/CancelSessionModal';
 import { getChildById } from '@/src/services/child.service';
 import { getUserById } from '@/src/services/admin.service';
@@ -79,7 +79,8 @@ export default function ParentHomeScreen() {
   const [searchDurations, setSearchDurations] = useState<Record<string, string>>({});
   const searchDurationIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const [cancelling, setCancelling] = useState(false);
-  
+  const sessionSubscriptionRef = useRef<(() => void) | null>(null);
+
   const loadSessions = useCallback(async (isRefresh = false) => {
     if (!user) return;
 
@@ -200,6 +201,20 @@ export default function ParentHomeScreen() {
   useEffect(() => {
     loadSessions();
   }, [loadSessions]);
+
+  // Realtime: subscribe to parent's sessions (created, status changes, sitter accepts/declines)
+  useEffect(() => {
+    if (!user?.id) return;
+    sessionSubscriptionRef.current = subscribeToUserSessions(user.id, 'parent', () => {
+      loadSessions(true);
+    });
+    return () => {
+      if (sessionSubscriptionRef.current) {
+        sessionSubscriptionRef.current();
+        sessionSubscriptionRef.current = null;
+      }
+    };
+  }, [user?.id, loadSessions]);
 
   // Real-time search duration updates for requested sessions
   useEffect(() => {

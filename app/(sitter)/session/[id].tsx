@@ -2,7 +2,7 @@
  * Sitter Session Detail Screen
  * Shows active session controls, monitoring interface, GPS tracking, and cry detection
  */
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   StyleSheet,
@@ -21,6 +21,7 @@ import ErrorDisplay from '@/src/components/ui/ErrorDisplay';
 import SitterHamburgerMenu from '@/src/components/ui/SitterHamburgerMenu';
 import GPSMapView from '@/src/components/session/GPSMapView';
 import EnhancedGPSMap from '@/src/components/gps/EnhancedGPSMap';
+import TwoPinMap from '@/src/components/gps/TwoPinMap';
 import CryDetectionIndicator from '@/src/components/session/CryDetectionIndicator';
 import CryDetectionInterface from '@/src/components/monitoring/CryDetectionInterface';
 import MonitoringControls from '@/src/components/session/MonitoringControls';
@@ -46,7 +47,10 @@ import {
 import {
   startLocationTracking,
   getCurrentLocation,
+  haversineDistanceMeters,
+  estimateTravelTimeMinutes,
 } from '@/src/services/location.service';
+import * as Location from 'expo-location';
 import { Session } from '@/src/types/session.types';
 import { LocationUpdate } from '@/src/types/session.types';
 import { Alert as AlertType } from '@/src/services/alert.service';
@@ -67,11 +71,37 @@ function formatDuration(startTime: Date): string {
   return `${minutes}m`;
 }
 
+// Get parent location coordinates from session (object or JSON string)
+function getParentCoords(location: Session['location']): { latitude: number; longitude: number } | null {
+  if (!location) return null;
+  let obj = location;
+  if (typeof location === 'string') {
+    try {
+      obj = JSON.parse(location) as any;
+    } catch {
+      return null;
+    }
+  }
+  if (obj && typeof obj === 'object') {
+    if (obj.coordinates?.latitude != null && obj.coordinates?.longitude != null) {
+      return { latitude: obj.coordinates.latitude, longitude: obj.coordinates.longitude };
+    }
+    if (obj.latitude != null && obj.longitude != null) {
+      return { latitude: obj.latitude, longitude: obj.longitude };
+    }
+  }
+  return null;
+}
+
 export default function SitterSessionDetailScreen() {
   const { colors, spacing } = useTheme();
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
   const { user } = useAuth();
+
+  const handleBackToRequests = useCallback(() => {
+    router.replace('/(sitter)/requests');
+  }, [router]);
 
   const [session, setSession] = useState<Session | null>(null);
   const [currentLocation, setCurrentLocation] = useState<LocationUpdate | null>(null);
@@ -90,6 +120,10 @@ export default function SitterSessionDetailScreen() {
   const [locationTrackingStop, setLocationTrackingStop] = useState<(() => void) | null>(null);
   const [recording, setRecording] = useState<Audio.Recording | null>(null);
   const [isRecording, setIsRecording] = useState(false);
+  const [sitterLocationForMap, setSitterLocationForMap] = useState<LocationUpdate | null>(null);
+  const [loadingSitterLocation, setLoadingSitterLocation] = useState(false);
+  const [geocodedParentCoords, setGeocodedParentCoords] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [geocodingAddress, setGeocodingAddress] = useState(false);
 
   // Load session data
   const loadSessionData = useCallback(async () => {
@@ -182,6 +216,56 @@ export default function SitterSessionDetailScreen() {
       unsubscribeAlerts();
     };
   }, [id, loadSessionData]);
+
+  // Fetch sitter's current location once per session for map/distance (when session has parent coords)
+  const sitterLocationFetchedForSessionRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!session?.location || !id) return;
+    const parentCoords = getParentCoords(session.location);
+    if (!parentCoords) return;
+    if (sitterLocationFetchedForSessionRef.current === id) return;
+    sitterLocationFetchedForSessionRef.current = id;
+    setLoadingSitterLocation(true);
+    getCurrentLocation()
+      .then((res) => {
+        if (res.success && res.data) setSitterLocationForMap(res.data);
+      })
+      .finally(() => setLoadingSitterLocation(false));
+  }, [id, session?.location]);
+
+  // Geocode parent address when we have address but no coordinates (same as parent search when user types address)
+  const geocodedForSessionRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!session?.location || !id) return;
+    if (getParentCoords(session.location)) {
+      setGeocodedParentCoords(null);
+      return;
+    }
+    let address = '';
+    if (typeof session.location === 'string') {
+      try {
+        const parsed = JSON.parse(session.location) as any;
+        if (parsed?.address) address = String(parsed.address).trim();
+        else address = session.location.trim();
+      } catch {
+        address = session.location.trim();
+      }
+    } else if (session.location && typeof session.location === 'object' && (session.location as any).address) {
+      address = String((session.location as any).address).trim();
+    }
+    if (address.length < 4 || geocodedForSessionRef.current === id) return;
+    geocodedForSessionRef.current = id;
+    setGeocodingAddress(true);
+    Location.geocodeAsync(address)
+      .then((results) => {
+        if (results && results.length > 0) {
+          const { latitude, longitude } = results[0];
+          if (latitude != null && longitude != null) setGeocodedParentCoords({ latitude, longitude });
+        }
+      })
+      .catch(() => {})
+      .finally(() => setGeocodingAddress(false));
+  }, [id, session?.location]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -413,6 +497,7 @@ export default function SitterSessionDetailScreen() {
         <Header 
           showLogo={true} 
           title="Active Session"
+          onBack={handleBackToRequests}
           rightComponent={
             <TouchableOpacity
               onPress={() => setMenuVisible(true)}
@@ -437,6 +522,7 @@ export default function SitterSessionDetailScreen() {
         <Header 
           showLogo={true} 
           title="Active Session"
+          onBack={handleBackToRequests}
           rightComponent={
             <TouchableOpacity
               onPress={() => setMenuVisible(true)}
@@ -466,7 +552,7 @@ export default function SitterSessionDetailScreen() {
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
-      <Header showLogo={true} title="Active Session" />
+      <Header showLogo={true} title="Active Session" onBack={handleBackToRequests} />
       <ScrollView
         style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}
@@ -553,6 +639,124 @@ export default function SitterSessionDetailScreen() {
             )}
           </View>
         </Card>
+
+        {/* Location & map: parent + sitter locations, distance, estimated travel time */}
+        {session.location && (
+          <Card style={styles.infoCard}>
+            <View style={styles.locationMapHeader}>
+              <Ionicons name="map" size={20} color={colors.primary} />
+              <Text style={[styles.locationMapTitle, { color: colors.text }]}>
+                Location & map
+              </Text>
+            </View>
+            {(() => {
+              const getReadableLocation = (location: any): string => {
+                if (!location) return 'Location set';
+                if (typeof location === 'string') {
+                  try {
+                    const parsed = JSON.parse(location);
+                    if (parsed && typeof parsed === 'object') return parsed.address || parsed.city || location;
+                  } catch { return location; }
+                  return location;
+                }
+                if (typeof location === 'object') {
+                  if (location.address) return location.address;
+                  if (location.city) return location.city;
+                  if (location.coordinates) return 'Location set';
+                }
+                return 'Location set';
+              };
+              const parentCoords = getParentCoords(session.location) || geocodedParentCoords;
+              const sitterLoc = isActive && currentLocation ? currentLocation : sitterLocationForMap;
+              const distanceMeters = parentCoords && sitterLoc
+                ? haversineDistanceMeters(
+                    sitterLoc.latitude,
+                    sitterLoc.longitude,
+                    parentCoords.latitude,
+                    parentCoords.longitude
+                  )
+                : null;
+              const distanceKm = distanceMeters != null ? distanceMeters / 1000 : null;
+              const travelMin = distanceKm != null ? estimateTravelTimeMinutes(distanceKm) : null;
+
+              return (
+                <>
+                  <View style={[styles.locationInfo, { backgroundColor: colors.primary + '10' }]}>
+                    <Ionicons name="location" size={14} color={colors.primary} />
+                    <Text style={[styles.locationText, { color: colors.text }]} numberOfLines={2}>
+                      Parent: {getReadableLocation(session.location)}
+                    </Text>
+                  </View>
+                  {parentCoords && (
+                    <>
+                      {sitterLoc ? (
+                        <>
+                          <TwoPinMap
+                            parentCoords={parentCoords}
+                            sitterCoords={{ latitude: sitterLoc.latitude, longitude: sitterLoc.longitude }}
+                            distanceKm={distanceKm ?? 0}
+                            travelMin={travelMin ?? 0}
+                          />
+                        </>
+                      ) : (
+                        <View style={styles.locationPromptCard}>
+                          <Text style={[styles.locationPromptTitle, { color: colors.text }]}>
+                            Enable location to see map & distance
+                          </Text>
+                          <Text style={[styles.locationPromptHint, { color: colors.textSecondary }]}>
+                            Allow location access to show your position and the parent on the map, and to calculate distance and travel time.
+                          </Text>
+                          {loadingSitterLocation ? (
+                            <View style={styles.locationPromptLoading}>
+                              <ActivityIndicator size="small" color={colors.primary} />
+                              <Text style={[styles.locationPromptLoadingText, { color: colors.textSecondary }]}>
+                                Getting your location…
+                              </Text>
+                            </View>
+                          ) : (
+                            <TouchableOpacity
+                              style={[styles.useMyLocationButton, { backgroundColor: colors.primary }]}
+                              onPress={() => {
+                                setLoadingSitterLocation(true);
+                                getCurrentLocation()
+                                  .then((res) => {
+                                    if (res.success && res.data) setSitterLocationForMap(res.data);
+                                    else Alert.alert('Location', 'Could not get location. Please enable location access in device settings.');
+                                  })
+                                  .finally(() => setLoadingSitterLocation(false));
+                              }}
+                            >
+                              <Ionicons name="locate" size={22} color={colors.white} />
+                              <Text style={[styles.useMyLocationButtonText, { color: colors.white }]}>
+                                Use my location
+                              </Text>
+                            </TouchableOpacity>
+                          )}
+                        </View>
+                      )}
+                    </>
+                  )}
+                  {!parentCoords && (
+                    <>
+                      {geocodingAddress ? (
+                        <View style={styles.locationPromptCard}>
+                          <ActivityIndicator size="small" color={colors.primary} />
+                          <Text style={[styles.locationPromptHint, { color: colors.textSecondary }]}>
+                            Looking up address for map…
+                          </Text>
+                        </View>
+                      ) : (
+                        <Text style={[styles.locationHint, { color: colors.textSecondary }]}>
+                          Address only — no coordinates for map or distance.
+                        </Text>
+                      )}
+                    </>
+                  )}
+                </>
+              );
+            })()}
+          </Card>
+        )}
 
         {/* Start Session Button (if accepted) */}
         {canStartSession && (
@@ -760,6 +964,75 @@ const styles = StyleSheet.create({
   locationText: {
     fontSize: 12,
     flex: 1,
+  },
+  locationMapHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 10,
+  },
+  locationMapTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  distanceTimeRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    marginTop: 10,
+  },
+  distanceTimeChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 12,
+  },
+  distanceTimeText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  locationHint: {
+    fontSize: 12,
+    marginTop: 8,
+    fontStyle: 'italic',
+  },
+  locationPromptCard: {
+    paddingVertical: 16,
+    paddingHorizontal: 12,
+    gap: 12,
+  },
+  locationPromptTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  locationPromptHint: {
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  locationPromptLoading: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 8,
+  },
+  locationPromptLoadingText: {
+    fontSize: 14,
+  },
+  useMyLocationButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+    borderRadius: 12,
+    marginTop: 4,
+  },
+  useMyLocationButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
   },
   actionCard: {
     marginBottom: 16,

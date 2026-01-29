@@ -9,6 +9,8 @@ interface HeaderProps {
   showBack?: boolean;
   rightComponent?: React.ReactNode;
   showLogo?: boolean;
+  /** When set, back button calls this instead of default behavior (e.g. go to Requests from session) */
+  onBack?: () => void;
 }
 
 export default function Header({
@@ -16,6 +18,7 @@ export default function Header({
   showBack = true,
   rightComponent,
   showLogo = false,
+  onBack: onBackProp,
 }: HeaderProps) {
   const theme = useTheme();
   const { colors, spacing, isDark } = theme;
@@ -33,6 +36,10 @@ export default function Header({
   };
 
   const handleBack = () => {
+    if (onBackProp) {
+      onBackProp();
+      return;
+    }
     try {
       const currentSegment = segments[0];
       const currentRoute = segments[1];
@@ -54,6 +61,11 @@ export default function Header({
 
       // For sitter screens
       if (currentSegment === '(sitter)') {
+        // From Active Session detail, go back to Requests (not home)
+        if (currentRoute === 'session') {
+          router.replace('/(sitter)/requests' as any);
+          return;
+        }
         if (router.canGoBack()) {
           router.back();
         } else {

@@ -664,3 +664,36 @@ export function subscribeToUserSessions(
     supabase.removeChannel(channel);
   };
 }
+
+/**
+ * Subscribe to available session requests (status = 'requested') for sitter feed.
+ * Do NOT filter by distance/city at DB level; filter client-side after refetch.
+ * Callback is called on INSERT/UPDATE/DELETE so the feed can refetch and filter
+ * (INVITED → sitter_id match, NEARBY/CITY/NATIONWIDE filtered client-side).
+ */
+export function subscribeToAvailableRequests(callback: () => void): () => void {
+  if (!isSupabaseConfigured() || !supabase) {
+    console.warn('⚠️ Supabase not configured, cannot subscribe to available requests');
+    return () => {};
+  }
+
+  const channel = supabase
+    .channel('available-requests-changes')
+    .on(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        table: 'sessions',
+        filter: 'status=eq.requested',
+      },
+      () => {
+        callback();
+      }
+    )
+    .subscribe();
+
+  return () => {
+    supabase.removeChannel(channel);
+  };
+}
