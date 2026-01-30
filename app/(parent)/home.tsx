@@ -7,9 +7,10 @@ import { useAuth } from '@/src/hooks/useAuth';
 import { getAll, save, STORAGE_KEYS } from '@/src/services/local-storage.service';
 import { getUserSessions, cancelSession, subscribeToUserSessions } from '@/src/services/session.service';
 import CancelSessionModal from '@/src/components/session/CancelSessionModal';
-import { getChildById } from '@/src/services/child.service';
+import { getParentChildren, getChildById } from '@/src/services/child.service';
 import { getUserById } from '@/src/services/admin.service';
 import { Session } from '@/src/types/session.types';
+import { Child } from '@/src/types/child.types';
 import { SESSION_STATUS } from '@/src/config/constants';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -91,6 +92,12 @@ export default function ParentHomeScreen() {
     }
 
     try {
+      // Preload parent's children once (avoids 404s from getChildById and shows names/photos reliably)
+      const childrenResult = await getParentChildren(user.id, isRefresh);
+      const childrenList: Child[] = childrenResult.success && childrenResult.data ? childrenResult.data : [];
+      const childrenById: Record<string, Child> = {};
+      childrenList.forEach((c) => { childrenById[c.id] = c; });
+
       // Load active sessions
       const activeResult = await getUserSessions(user.id, 'parent', SESSION_STATUS.ACTIVE);
       // Load upcoming sessions (accepted but not yet active)
@@ -103,48 +110,24 @@ export default function ParentHomeScreen() {
           sessions.map(async (session) => {
             const details: SessionWithDetails = { ...session };
             
-            // Get child names and photos - handle multiple children if childIds exists
-            if (session.childIds && session.childIds.length > 0) {
-              console.log(`📝 Loading ${session.childIds.length} children for session ${session.id}:`, session.childIds);
-              // Multiple children: load all
-              const childResults = await Promise.all(
-                session.childIds.map(childId => getChildById(childId))
-              );
-              const childNames: string[] = [];
-              const childPhotoUrls: string[] = [];
-              
-              childResults.forEach((result, index) => {
-                if (result.success && result.data) {
-                  childNames.push(result.data.name);
-                  if (result.data.photoUrl) {
-                    childPhotoUrls.push(result.data.photoUrl);
-                  }
-                } else {
-                  console.warn(`⚠️ Failed to load child ${session.childIds[index]}:`, result.error);
-                }
-              });
-              
-              console.log(`✅ Loaded ${childNames.length} children:`, childNames);
+            // Resolve child names and photos from preloaded children (no per-child API calls)
+            const childIds = (session.childIds && session.childIds.length > 0)
+              ? session.childIds
+              : (session.childId ? [session.childId] : []);
+            const childNames: string[] = [];
+            const childPhotoUrls: string[] = [];
+            for (const id of childIds) {
+              const child = childrenById[id];
+              if (child) {
+                childNames.push(child.name);
+                if (child.photoUrl) childPhotoUrls.push(child.photoUrl);
+              }
+            }
+            if (childNames.length > 0) {
               details.childNames = childNames;
               details.childPhotoUrls = childPhotoUrls;
-              // Set primary child name for backward compatibility
-              if (childNames.length > 0) {
-                details.childName = childNames[0];
-              }
-              if (childPhotoUrls.length > 0) {
-                details.childPhotoUrl = childPhotoUrls[0];
-              }
-            } else if (session.childId) {
-              // Single child: load primary child
-              const childResult = await getChildById(session.childId);
-              if (childResult.success && childResult.data) {
-                details.childName = childResult.data.name;
-                details.childPhotoUrl = childResult.data.photoUrl;
-                details.childNames = [childResult.data.name];
-                if (childResult.data.photoUrl) {
-                  details.childPhotoUrls = [childResult.data.photoUrl];
-                }
-              }
+              details.childName = childNames[0];
+              details.childPhotoUrl = childPhotoUrls[0] ?? undefined;
             }
 
             // Get sitter name

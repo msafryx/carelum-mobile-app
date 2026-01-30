@@ -9,9 +9,10 @@ import HamburgerMenu from '@/src/components/ui/HamburgerMenu';
 import { useAuth } from '@/src/hooks/useAuth';
 import { useRouter } from 'expo-router';
 import { getUserSessions } from '@/src/services/session.service';
-import { getChildById } from '@/src/services/child.service';
+import { getParentChildren } from '@/src/services/child.service';
 import { getUserById } from '@/src/services/admin.service';
 import { Session } from '@/src/types/session.types';
+import { Child } from '@/src/types/child.types';
 import { format, formatDistanceToNow } from 'date-fns';
 import { SESSION_STATUS } from '@/src/config/constants';
 
@@ -59,24 +60,26 @@ export default function ActivitiesScreen() {
     }
 
     try {
+      // Preload parent's children once (avoids 404s and shows names reliably)
+      const childrenResult = await getParentChildren(user.id, isRefresh);
+      const childrenList: Child[] = childrenResult.success && childrenResult.data ? childrenResult.data : [];
+      const childrenById: Record<string, Child> = {};
+      childrenList.forEach((c) => { childrenById[c.id] = c; });
+
       const status = getStatusForTab(activeTab);
       const result = await getUserSessions(user.id, 'parent', status);
 
       if (result.success && result.data) {
-        // Fetch child names for each session
+        // Resolve child/sitter names from preloaded data
         const sessionsWithDetails = await Promise.all(
           result.data.map(async (session) => {
             const details: SessionWithDetails = { ...session };
-            
-            // Get child name
-            if (session.childId) {
-              const childResult = await getChildById(session.childId);
-              if (childResult.success && childResult.data) {
-                details.childName = childResult.data.name;
-              }
-            }
+            const childIds = (session.childIds && session.childIds.length > 0)
+              ? session.childIds
+              : (session.childId ? [session.childId] : []);
+            const child = childIds.length > 0 ? childrenById[childIds[0]] : undefined;
+            if (child) details.childName = child.name;
 
-            // Get sitter name
             if (session.sitterId) {
               const sitterResult = await getUserById(session.sitterId);
               if (sitterResult.success && sitterResult.data) {

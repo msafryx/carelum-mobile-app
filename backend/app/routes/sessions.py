@@ -11,6 +11,36 @@ import json
 from app.utils.auth import verify_token, CurrentUser, security
 from app.utils.error_handler import handle_error, AppError
 from app.utils.database import get_supabase, get_supabase_with_auth
+
+
+def _create_alert(
+    supabase_client,
+    session_id: str,
+    parent_id: str,
+    sitter_id: Optional[str],
+    alert_type: str,
+    title: str,
+    message: str,
+    child_id: Optional[str] = None,
+) -> None:
+    """Create an alert for session-related events (cancelled, accepted). Uses authenticated client so RLS allows insert."""
+    if not supabase_client:
+        return
+    try:
+        insert_data = {
+            "session_id": session_id,
+            "parent_id": parent_id,
+            "sitter_id": sitter_id,
+            "child_id": child_id,
+            "type": alert_type,
+            "severity": "info",
+            "title": title,
+            "message": message,
+            "status": "new",
+        }
+        supabase_client.table("alerts").insert(insert_data).execute()
+    except Exception as e:
+        print(f"⚠️ Failed to create alert: {e}")
 from fastapi.security import HTTPAuthorizationCredentials
 
 router = APIRouter()
@@ -652,8 +682,9 @@ async def update_session(
         # Add updated_at timestamp
         update_data["updated_at"] = datetime.utcnow().isoformat()
         
-        # Update session
-        response = supabase.table("sessions").update(update_data).eq("id", session_id).select().execute()
+        # Update session (supabase-py: update().eq() does not have .select(); do update then fetch)
+        supabase.table("sessions").update(update_data).eq("id", session_id).execute()
+        response = supabase.table("sessions").select("*").eq("id", session_id).single().execute()
         
         if not response.data:
             raise AppError(
@@ -662,7 +693,21 @@ async def update_session(
                 status_code=500
             )
         
-        return db_to_session_response(response.data[0])
+        updated = response.data
+        # Notify parent when sitter accepts
+        if updates.status == "accepted" and session_data.get("parent_id"):
+            _create_alert(
+                supabase,
+                session_id=session_id,
+                parent_id=session_data["parent_id"],
+                sitter_id=updated.get("sitter_id"),
+                alert_type="session_accepted",
+                title="Session accepted",
+                message="A sitter accepted your session.",
+                child_id=session_data.get("child_id"),
+            )
+        
+        return db_to_session_response(updated)
         
     except AppError:
         raise
@@ -732,13 +777,21 @@ async def cancel_session(
         if reason:
             update_data["cancellation_reason"] = reason
         
-        response = supabase.table("sessions").update(update_data).eq("id", session_id).execute()
+        supabase.table("sessions").update(update_data).eq("id", session_id).execute()
         
-        if not response.data:
-            raise AppError(
-                code="UPDATE_FAILED",
-                message="Failed to cancel session",
-                status_code=500
+        # Notify parent and sitter (one alert with both IDs so both see it in Notifications)
+        parent_id = session_data.get("parent_id")
+        sitter_id = session_data.get("sitter_id")
+        if parent_id:
+            _create_alert(
+                supabase,
+                session_id=session_id,
+                parent_id=parent_id,
+                sitter_id=sitter_id,
+                alert_type="session_cancelled",
+                title="Session cancelled",
+                message=reason or "This session was cancelled.",
+                child_id=session_data.get("child_id"),
             )
         
         return {
