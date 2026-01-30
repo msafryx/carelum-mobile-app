@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { View, StyleSheet, ScrollView, Text, TouchableOpacity, ActivityIndicator, RefreshControl, Alert } from 'react-native';
+import { View, StyleSheet, ScrollView, Text, TouchableOpacity, ActivityIndicator, RefreshControl, Alert, Image } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/src/components/ui/ThemeProvider';
 import Header from '@/src/components/ui/Header';
@@ -24,6 +24,7 @@ interface SessionWithDetails extends Session {
   childAge?: number;
   parentName?: string;
   parentCity?: string;
+  parentPhotoUrl?: string;
   requestMode?: RequestMode;
   requestStatus?: RequestStatus;
   children?: Array<{ id: string; name: string; age?: number; photoUrl?: string }>;
@@ -115,7 +116,7 @@ export default function SitterRequestsScreen() {
             
             details.children = children;
             
-            // Get parent name and city (use displayName, fallback to email prefix so we show real name)
+            // Get parent name, city, and photo
             if (session.parentId) {
               const parentResult = await getUserById(session.parentId);
               if (parentResult.success && parentResult.data) {
@@ -125,6 +126,7 @@ export default function SitterRequestsScreen() {
                   p.email?.split('@')[0] ||
                   'Parent';
                 details.parentCity = p.city ?? undefined;
+                details.parentPhotoUrl = (p as any).profileImageUrl ?? undefined;
               }
             }
 
@@ -481,12 +483,16 @@ function RequestCard({
   const primaryChild = children[0] || { name: request.childName || 'Child', age: request.childAge };
 
   return (
+    <TouchableOpacity
+      activeOpacity={0.95}
+      onPress={() => onViewDetails(request.id)}
+      style={styles.requestCardWrap}
+    >
     <Card 
       style={[
         styles.requestCard,
         isInvite && { borderLeftWidth: 4, borderLeftColor: colors.primary },
       ]}
-      // Remove any onPress from Card - only buttons should be clickable
     >
       <View style={styles.requestHeader}>
         <View style={styles.requestInfo}>
@@ -503,10 +509,19 @@ function RequestCard({
             </Text>
           </View>
         </View>
-        <Badge
-          label={getModeLabel(request.requestMode || 'INVITE')}
-          color={getModeBadgeColor(request.requestMode || 'INVITE')}
-        />
+        <View style={styles.requestHeaderRight}>
+          {request.parentPhotoUrl ? (
+            <Image source={{ uri: request.parentPhotoUrl }} style={styles.requestParentAvatar} />
+          ) : (
+            <View style={[styles.requestParentAvatarPlaceholder, { backgroundColor: colors.primary + '20' }]}>
+              <Ionicons name="person" size={20} color={colors.primary} />
+            </View>
+          )}
+          <Badge
+            label={getModeLabel(request.requestMode || 'INVITE')}
+            color={getModeBadgeColor(request.requestMode || 'INVITE')}
+          />
+        </View>
       </View>
 
       <View style={styles.requestDetails}>
@@ -631,10 +646,13 @@ function RequestCard({
         )}
       </View>
     </Card>
+    </TouchableOpacity>
   );
 }
 
 const styles = StyleSheet.create({
+  requestCardWrap: {
+  },
   container: {
     flex: 1,
   },
@@ -683,6 +701,22 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'flex-start',
     marginBottom: 14,
+  },
+  requestHeaderRight: {
+    alignItems: 'flex-end',
+    gap: 8,
+  },
+  requestParentAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+  },
+  requestParentAvatarPlaceholder: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   requestInfo: {
     flex: 1,

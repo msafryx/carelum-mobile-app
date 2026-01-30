@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { View, StyleSheet, ScrollView, Text, TouchableOpacity, RefreshControl, ActivityIndicator } from 'react-native';
+import { View, StyleSheet, ScrollView, Text, TouchableOpacity, RefreshControl, ActivityIndicator, Image } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/src/components/ui/ThemeProvider';
 import Header from '@/src/components/ui/Header';
@@ -38,6 +38,7 @@ const getStatusForTab = (tab: string): Session['status'] | undefined => {
 interface SessionWithDetails extends Session {
   childName?: string;
   sitterName?: string;
+  sitterPhotoUrl?: string;
 }
 
 export default function ActivitiesScreen() {
@@ -83,7 +84,9 @@ export default function ActivitiesScreen() {
             if (session.sitterId) {
               const sitterResult = await getUserById(session.sitterId);
               if (sitterResult.success && sitterResult.data) {
-                details.sitterName = sitterResult.data.displayName || 'Sitter';
+                const s = sitterResult.data;
+                details.sitterName = s.displayName || s.email?.split('@')[0] || 'Sitter';
+                details.sitterPhotoUrl = (s as any).profileImageUrl ?? undefined;
               }
             }
 
@@ -232,7 +235,13 @@ export default function ActivitiesScreen() {
                       </Text>
                     )}
                   </View>
-                  <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} />
+                  <View style={[styles.sitterAvatarWrap, { backgroundColor: colors.primary + '15' }]}>
+                    {session.sitterPhotoUrl ? (
+                      <Image source={{ uri: session.sitterPhotoUrl }} style={styles.sitterAvatar} />
+                    ) : (
+                      <Ionicons name="person-circle-outline" size={22} color={colors.primary} />
+                    )}
+                  </View>
                 </View>
 
                 <View style={styles.sessionDetails}>
@@ -341,6 +350,19 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'flex-start',
     marginBottom: 12,
+  },
+  sitterAvatarWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  sitterAvatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
   },
   sessionInfo: {
     flex: 1,

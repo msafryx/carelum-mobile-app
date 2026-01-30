@@ -240,12 +240,25 @@ CREATE TABLE IF NOT EXISTS sessions (
   cancellation_reason TEXT,
   -- Completion tracking
   completed_at TIMESTAMPTZ,
+  -- Session start (when sitter starts session → LIVE)
+  started_at TIMESTAMPTZ,
   -- Request expiration (for OPEN status requests)
   expires_at TIMESTAMPTZ, -- When the request expires (for OPEN status requests). Used to filter out expired requests in the babysitter requests feed.
   -- Timestamps
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Session timeline events (SESSION_STARTED, SESSION_COMPLETED, etc.)
+CREATE TABLE IF NOT EXISTS session_events (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  type TEXT NOT NULL CHECK (type IN ('session_started', 'session_completed', 'session_cancelled')),
+  triggered_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_session_events_session_id ON session_events(session_id);
+CREATE INDEX IF NOT EXISTS idx_session_events_created_at ON session_events(created_at DESC);
 
 -- Indexes for users table (sitter availability and location)
 CREATE INDEX IF NOT EXISTS idx_users_is_active ON users(is_active) WHERE role = 'sitter' AND is_active = TRUE;
@@ -265,7 +278,7 @@ CREATE TABLE IF NOT EXISTS alerts (
   child_id UUID REFERENCES children(id) ON DELETE CASCADE,
   parent_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   sitter_id UUID REFERENCES users(id) ON DELETE SET NULL,
-  type TEXT NOT NULL CHECK (type IN ('cry_detection', 'emergency', 'gps_anomaly', 'session_reminder')),
+  type TEXT NOT NULL CHECK (type IN ('cry_detection', 'emergency', 'gps_anomaly', 'session_reminder', 'session_request', 'session_accepted', 'session_cancelled', 'session_started')),
   severity TEXT NOT NULL CHECK (severity IN ('low', 'medium', 'high', 'critical')),
   title TEXT NOT NULL,
   message TEXT NOT NULL,
@@ -348,6 +361,7 @@ CREATE INDEX IF NOT EXISTS idx_sessions_created_at ON sessions(created_at DESC);
 -- For existing databases: These indexes are created by ADD_SESSION_TRACKING_COLUMNS.sql
 CREATE INDEX IF NOT EXISTS idx_sessions_cancelled_at ON sessions(cancelled_at) WHERE cancelled_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_sessions_completed_at ON sessions(completed_at) WHERE completed_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_sessions_started_at ON sessions(started_at) WHERE started_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_sessions_cancelled_by ON sessions(cancelled_by) WHERE cancelled_by IS NOT NULL;
 
 -- Indexes for request expiration (for babysitter requests feed)
@@ -528,12 +542,19 @@ CREATE POLICY "Parents can manage own child instructions" ON child_instructions
     SELECT 1 FROM users WHERE id = auth.uid() AND role = 'admin'
   ));
 
--- Sessions: Parents and sitters can read their sessions
+-- Sessions: Parents and sitters can read their sessions; sitters can read broadcast requests (city/nearby/nationwide)
 CREATE POLICY "Users can read own sessions" ON sessions
   FOR SELECT USING (
     parent_id = auth.uid() OR 
     sitter_id = auth.uid() OR
     EXISTS (SELECT 1 FROM users WHERE id = auth.uid() AND role = 'admin')
+  );
+CREATE POLICY "Sitters can read broadcast session requests" ON sessions
+  FOR SELECT USING (
+    get_user_role(auth.uid()) = 'sitter'
+    AND status = 'requested'
+    AND search_scope IN ('nearby', 'city', 'nationwide')
+    AND sitter_id IS NULL
   );
 
 CREATE POLICY "Users can create own sessions" ON sessions
@@ -544,6 +565,28 @@ CREATE POLICY "Users can update own sessions" ON sessions
     parent_id = auth.uid() OR 
     sitter_id = auth.uid() OR
     EXISTS (SELECT 1 FROM users WHERE id = auth.uid() AND role = 'admin')
+  );
+
+-- Session events: read/insert for users who have access to the session
+ALTER TABLE session_events ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Users can read session events for own sessions" ON session_events
+  FOR SELECT USING (
+    EXISTS (
+      SELECT 1 FROM sessions s
+      WHERE s.id = session_events.session_id
+      AND (s.parent_id = auth.uid() OR s.sitter_id = auth.uid())
+    ) OR EXISTS (SELECT 1 FROM users WHERE id = auth.uid() AND role = 'admin')
+  );
+CREATE POLICY "Sitter can insert session_started for assigned session" ON session_events
+  FOR INSERT WITH CHECK (
+    type = 'session_started' AND triggered_by = auth.uid()
+    AND EXISTS (SELECT 1 FROM sessions s WHERE s.id = session_events.session_id AND s.sitter_id = auth.uid())
+  );
+CREATE POLICY "Users can insert session_completed_cancelled for own sessions" ON session_events
+  FOR INSERT WITH CHECK (
+    type IN ('session_completed', 'session_cancelled')
+    AND (triggered_by = auth.uid())
+    AND EXISTS (SELECT 1 FROM sessions s WHERE s.id = session_events.session_id AND (s.parent_id = auth.uid() OR s.sitter_id = auth.uid()))
   );
 
 -- Alerts: Users can read their own alerts

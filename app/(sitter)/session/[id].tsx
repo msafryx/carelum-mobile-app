@@ -33,6 +33,8 @@ import {
   startSession,
   completeSession,
   updateSessionStatus,
+  acceptSessionRequest,
+  cancelSession,
 } from '@/src/services/session.service';
 import {
   getSessionGPSTracking,
@@ -54,6 +56,7 @@ import * as Location from 'expo-location';
 import { Session } from '@/src/types/session.types';
 import { LocationUpdate } from '@/src/types/session.types';
 import { Alert as AlertType } from '@/src/services/alert.service';
+import { formatExpectedDuration } from '@/src/utils/sessionSearchUtils';
 import { Ionicons } from '@expo/vector-icons';
 import * as Audio from 'expo-av';
 import { format } from 'date-fns';
@@ -279,18 +282,23 @@ export default function SitterSessionDetailScreen() {
     };
   }, [locationTrackingStop, recording]);
 
-  // Handle start session
+  // Handle start session (sitter only; BOOKED → LIVE)
   const handleStartSession = async () => {
     if (!session || !id) return;
 
     setActionLoading(true);
     const result = await startSession(id);
-    if (result.success) {
-      Alert.alert('Success', 'Session started');
-    } else {
-      Alert.alert('Error', result.error?.message || 'Failed to start session');
-    }
     setActionLoading(false);
+    if (result.success && result.data) {
+      setSession(result.data);
+      Alert.alert('Session started', 'Monitoring features are now available.');
+    } else {
+      const msg = result.error?.message || 'Failed to start session';
+      Alert.alert(
+        msg.includes('assigned sitter') ? 'Cannot start' : msg.includes('already started') ? 'Already started' : 'Error',
+        msg
+      );
+    }
   };
 
   // Handle toggle GPS tracking
@@ -491,12 +499,14 @@ export default function SitterSessionDetailScreen() {
     loadSessionData();
   };
 
+  const headerTitle = session?.status === 'requested' ? 'Session Request' : 'Active Session';
+
   if (loading) {
     return (
       <View style={[styles.container, { backgroundColor: colors.background }]}>
         <Header 
           showLogo={true} 
-          title="Active Session"
+          title={session?.status === 'requested' ? 'Session Request' : 'Active Session'}
           onBack={handleBackToRequests}
           rightComponent={
             <TouchableOpacity
@@ -521,7 +531,7 @@ export default function SitterSessionDetailScreen() {
       <View style={[styles.container, { backgroundColor: colors.background }]}>
         <Header 
           showLogo={true} 
-          title="Active Session"
+          title="Session Request"
           onBack={handleBackToRequests}
           rightComponent={
             <TouchableOpacity
@@ -549,10 +559,41 @@ export default function SitterSessionDetailScreen() {
 
   const canStartSession = session.status === 'accepted';
   const isActive = session.status === 'active';
+  const isRequested = session.status === 'requested';
+
+  // Handle accept (invite or broadcast request)
+  const handleAcceptRequest = async () => {
+    if (!session || !id) return;
+    setActionLoading(true);
+    const result = await acceptSessionRequest(id);
+    setActionLoading(false);
+    if (result.success) {
+      const updated = await getSessionById(id);
+      if (updated.success && updated.data) setSession(updated.data);
+      Alert.alert('Request accepted', 'You have accepted this session.');
+    } else {
+      Alert.alert('Error', result.error?.message || 'Failed to accept request.');
+    }
+  };
+
+  // Handle decline (invite or broadcast request)
+  const handleDeclineRequest = async () => {
+    if (!session || !id) return;
+    setActionLoading(true);
+    const result = await cancelSession(id, 'Declined by sitter');
+    setActionLoading(false);
+    if (result.success) {
+      Alert.alert('Request declined', 'You have declined this session.', [
+        { text: 'OK', onPress: () => router.replace('/(sitter)/requests') },
+      ]);
+    } else {
+      Alert.alert('Error', result.error?.message || 'Failed to decline request.');
+    }
+  };
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
-      <Header showLogo={true} title="Active Session" onBack={handleBackToRequests} />
+      <Header showLogo={true} title={headerTitle} onBack={handleBackToRequests} />
       <ScrollView
         style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}
@@ -565,7 +606,7 @@ export default function SitterSessionDetailScreen() {
           <View style={styles.sessionHeader}>
             <View style={[styles.statusBadge, { backgroundColor: getStatusColor(session.status, colors) }]}>
               <Text style={[styles.statusText, { color: colors.white }]}>
-                {session.status.toUpperCase()}
+                {session.status === 'active' ? 'LIVE' : session.status === 'accepted' ? 'BOOKED' : session.status.toUpperCase()}
               </Text>
             </View>
             {session.location && (() => {
@@ -614,7 +655,7 @@ export default function SitterSessionDetailScreen() {
                 <Ionicons name="time" size={14} color={colors.primary} />
               </View>
               <Text style={[styles.infoText, { color: colors.text }]}>
-                Started: {format(session.startTime, 'MMM dd, yyyy • h:mm a')}
+                {isRequested ? 'Date & time: ' : 'Started: '}{format(session.startTime, 'MMM dd, yyyy • h:mm a')}
               </Text>
             </View>
             {isActive && (
@@ -623,7 +664,7 @@ export default function SitterSessionDetailScreen() {
                   <Ionicons name="hourglass" size={14} color={colors.success || '#10b981'} />
                 </View>
                 <Text style={[styles.infoText, { color: colors.text }]}>
-                  Duration: {formatDuration(session.startTime)}
+                  Duration: {formatDuration(session.startedAt ?? session.startTime)}
                 </Text>
               </View>
             )}
@@ -639,6 +680,156 @@ export default function SitterSessionDetailScreen() {
             )}
           </View>
         </Card>
+
+        {/* Session details: booking mode, duration, time slots (when requested) */}
+        {isRequested && (
+          <Card style={styles.infoCard}>
+            <View style={styles.detailsSectionHeader}>
+              <Ionicons name="calendar" size={18} color={colors.primary} />
+              <Text style={[styles.detailsSectionTitle, { color: colors.text }]}>
+                Session details
+              </Text>
+            </View>
+            <View style={styles.sessionInfo}>
+              <View style={styles.infoRow}>
+                <View style={[styles.infoIconContainer, { backgroundColor: colors.primary + '10' }]}>
+                  <Ionicons name="time" size={14} color={colors.primary} />
+                </View>
+                <Text style={[styles.infoText, { color: colors.text }]}>
+                  Booking: {session.timeSlots && session.timeSlots.length > 0 ? 'Time slots' : 'Continuous'}
+                </Text>
+              </View>
+              {(session.endTime || (session.timeSlots && session.timeSlots.length > 0)) && (
+                <View style={styles.infoRow}>
+                  <View style={[styles.infoIconContainer, { backgroundColor: colors.success + '10' }]}>
+                    <Ionicons name="hourglass" size={14} color={colors.success || '#10b981'} />
+                  </View>
+                  <Text style={[styles.infoText, { color: colors.text }]}>
+                    Duration: {formatExpectedDuration(session)}
+                  </Text>
+                </View>
+              )}
+              {session.endTime && (
+                <View style={styles.infoRow}>
+                  <View style={[styles.infoIconContainer, { backgroundColor: colors.textSecondary + '20' }]}>
+                    <Ionicons name="flag" size={14} color={colors.textSecondary} />
+                  </View>
+                  <Text style={[styles.infoText, { color: colors.text }]}>
+                    End: {format(session.endTime, 'MMM dd, yyyy • h:mm a')}
+                  </Text>
+                </View>
+              )}
+            </View>
+            {session.timeSlots && session.timeSlots.length > 0 && (
+              <View style={styles.timeSlotsContainer}>
+                <View style={styles.timeSlotsHeader}>
+                  <Text style={[styles.timeSlotsTitle, { color: colors.text }]}>Time slots</Text>
+                  {session.timeSlots.length > 4 && (
+                    <Text style={[styles.timeSlotsCount, { color: colors.textSecondary }]}>
+                      {session.timeSlots.length} slots
+                    </Text>
+                  )}
+                </View>
+                <ScrollView
+                  style={styles.timeSlotsScrollContainer}
+                  nestedScrollEnabled
+                  showsVerticalScrollIndicator={session.timeSlots.length > 4}
+                >
+                  {session.timeSlots.map((slot, index) => {
+                    let dateStr = slot.date;
+                    let startStr = slot.startTime;
+                    let endStr = slot.endTime;
+                    try {
+                      if (slot.date) {
+                        const d = new Date(slot.date);
+                        if (!isNaN(d.getTime())) dateStr = format(d, 'MMM dd, yyyy');
+                      }
+                      if (slot.startTime) {
+                        const s = new Date(slot.startTime);
+                        if (!isNaN(s.getTime())) startStr = format(s, 'h:mm a');
+                      }
+                      if (slot.endTime) {
+                        const e = new Date(slot.endTime);
+                        if (!isNaN(e.getTime())) endStr = format(e, 'h:mm a');
+                      }
+                    } catch (_) {}
+                    return (
+                      <View
+                        key={index}
+                        style={[styles.timeSlotRow, { borderLeftColor: colors.primary + '80' }]}
+                      >
+                        <View style={styles.timeSlotLeft}>
+                          <Ionicons name="time-outline" size={16} color={colors.primary} />
+                          <View style={styles.timeSlotDetails}>
+                            <Text style={[styles.timeSlotDate, { color: colors.text }]}>{dateStr}</Text>
+                            <Text style={[styles.timeSlotTimeText, { color: colors.textSecondary }]}>
+                              {startStr} – {endStr}
+                            </Text>
+                          </View>
+                        </View>
+                        <View style={styles.timeSlotRight}>
+                          <Text style={[styles.timeSlotHours, { color: colors.primary }]}>
+                            {slot.hours}h
+                          </Text>
+                        </View>
+                      </View>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+            )}
+          </Card>
+        )}
+
+        {/* Accept / Decline (when status = requested: invite or broadcast) */}
+        {isRequested && (
+          <Card style={styles.actionCard}>
+            <Text style={[styles.actionTitle, { color: colors.text }]}>
+              Session request
+            </Text>
+            <Text style={[styles.actionDescription, { color: colors.textSecondary }]}>
+              Review the details above. Accept to book this session or decline if you're not available.
+            </Text>
+            <View style={styles.actionButtonRow}>
+              <TouchableOpacity
+                style={[
+                  styles.requestActionButton,
+                  styles.declineButton,
+                  { borderColor: colors.error || '#ef4444', backgroundColor: 'transparent' },
+                ]}
+                onPress={handleDeclineRequest}
+                disabled={actionLoading}
+                activeOpacity={0.8}
+              >
+                <Ionicons name="close-circle-outline" size={22} color={colors.error || '#ef4444'} />
+                <Text style={[styles.requestActionButtonText, { color: colors.error || '#ef4444' }]}>
+                  Decline
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.requestActionButton,
+                  styles.acceptButton,
+                  { backgroundColor: colors.primary },
+                ]}
+                onPress={handleAcceptRequest}
+                disabled={actionLoading}
+                activeOpacity={0.8}
+              >
+                {actionLoading ? (
+                  <ActivityIndicator color={colors.white} size="small" />
+                ) : (
+                  <>
+                    <Ionicons name="checkmark-circle" size={22} color={colors.white} />
+                    <Text style={[styles.requestActionButtonText, { color: colors.white }]}>
+                      Accept
+                    </Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            </View>
+          </Card>
+        )}
 
         {/* Location & map: parent + sitter locations, distance, estimated travel time */}
         {session.location && (
@@ -1034,6 +1225,71 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
   },
+  detailsSectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 12,
+  },
+  detailsSectionTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  timeSlotsContainer: {
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(0,0,0,0.08)',
+  },
+  timeSlotsHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  timeSlotsTitle: {
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  timeSlotsCount: {
+    fontSize: 13,
+  },
+  timeSlotsScrollContainer: {
+    maxHeight: 240,
+  },
+  timeSlotRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 8,
+    borderLeftWidth: 3,
+  },
+  timeSlotLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    flex: 1,
+  },
+  timeSlotDetails: {
+    flex: 1,
+    gap: 2,
+  },
+  timeSlotDate: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  timeSlotTimeText: {
+    fontSize: 13,
+  },
+  timeSlotRight: {
+    alignItems: 'flex-end',
+  },
+  timeSlotHours: {
+    fontSize: 15,
+    fontWeight: '700',
+  },
   actionCard: {
     marginBottom: 16,
   },
@@ -1045,6 +1301,31 @@ const styles = StyleSheet.create({
   actionDescription: {
     fontSize: 14,
     marginBottom: 16,
+  },
+  actionButtonRow: {
+    flexDirection: 'row',
+    gap: 12,
+    width: '100%',
+  },
+  requestActionButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    gap: 8,
+  },
+  declineButton: {
+    borderWidth: 2,
+  },
+  acceptButton: {
+    borderWidth: 0,
+  },
+  requestActionButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
   },
   actionButtonContainer: {
     width: '100%',

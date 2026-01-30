@@ -2,13 +2,14 @@
 Alert management endpoints
 """
 from fastapi import APIRouter, HTTPException, Depends, Query
+from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
 
-from app.utils.auth import verify_token, CurrentUser
+from app.utils.auth import verify_token, CurrentUser, security
 from app.utils.error_handler import handle_error, AppError
-from app.utils.database import get_supabase
+from app.utils.database import get_supabase, get_supabase_with_auth
 
 router = APIRouter()
 
@@ -93,13 +94,17 @@ async def get_user_alerts(
     sessionId: Optional[str] = Query(None, alias="session_id", description="Filter by session ID"),
     status: Optional[str] = Query(None, description="Filter by status"),
     alertType: Optional[str] = Query(None, alias="type", description="Filter by alert type"),
-    current_user: CurrentUser = Depends(verify_token)
+    current_user: CurrentUser = Depends(verify_token),
+    credentials: HTTPAuthorizationCredentials = Depends(security)
 ):
     """
-    Get current user's alerts (parent or sitter)
+    Get current user's alerts (parent or sitter).
+    Uses authenticated Supabase client so RLS returns only this user's alerts.
     """
     try:
-        supabase = get_supabase()
+        supabase = get_supabase_with_auth(credentials.credentials)
+        if not supabase:
+            supabase = get_supabase()
         
         if not supabase:
             raise AppError(
@@ -240,13 +245,16 @@ async def create_alert(
 @router.put("/{alert_id}/view", response_model=AlertResponse)
 async def mark_alert_as_viewed(
     alert_id: str,
-    current_user: CurrentUser = Depends(verify_token)
+    current_user: CurrentUser = Depends(verify_token),
+    credentials: HTTPAuthorizationCredentials = Depends(security)
 ):
     """
-    Mark alert as viewed
+    Mark alert as viewed (uses authenticated client so RLS allows update).
     """
     try:
-        supabase = get_supabase()
+        supabase = get_supabase_with_auth(credentials.credentials)
+        if not supabase:
+            supabase = get_supabase()
         
         if not supabase:
             raise AppError(
@@ -255,18 +263,17 @@ async def mark_alert_as_viewed(
                 status_code=503
             )
         
-        # Get existing alert
-        response = supabase.table("alerts").select("*").eq("id", alert_id).single().execute()
-        
-        if not response.data:
+        # Get existing alert (use limit(1) to avoid .single() parse issues with auth client)
+        response = supabase.table("alerts").select("*").eq("id", alert_id).limit(1).execute()
+        rows = response.data if isinstance(response.data, list) else ([response.data] if response.data else [])
+        if not rows:
             raise AppError(
                 code="ALERT_NOT_FOUND",
                 message="Alert not found",
                 status_code=404
             )
-        
-        alert_data = response.data
-        
+        alert_data = rows[0]
+
         # Verify access
         if not verify_alert_access(alert_data, current_user):
             raise AppError(
@@ -274,24 +281,23 @@ async def mark_alert_as_viewed(
                 message="You don't have access to this alert",
                 status_code=403
             )
-        
-        # Update status
+
+        # Update status to viewed (same auth client so RLS allows update)
         update_data = {
             "status": "viewed",
             "viewed_at": datetime.utcnow().isoformat(),
-            "updated_at": datetime.utcnow().isoformat()
         }
-        
-        response = supabase.table("alerts").update(update_data).eq("id", alert_id).select().execute()
-        
-        if not response.data:
+        supabase.table("alerts").update(update_data).eq("id", alert_id).execute()
+        # Fetch updated row with limit(1) to avoid .single() parse issues
+        response = supabase.table("alerts").select("*").eq("id", alert_id).limit(1).execute()
+        rows = response.data if isinstance(response.data, list) else ([response.data] if response.data else [])
+        if not rows:
             raise AppError(
                 code="UPDATE_FAILED",
                 message="Failed to update alert",
                 status_code=500
             )
-        
-        return db_to_alert_response(response.data[0])
+        return db_to_alert_response(rows[0])
         
     except AppError:
         raise

@@ -15,7 +15,7 @@ export interface Alert {
   childId?: string;
   parentId: string;
   sitterId?: string;
-  type: 'cry_detection' | 'emergency' | 'gps_anomaly' | 'session_reminder';
+  type: 'cry_detection' | 'emergency' | 'gps_anomaly' | 'session_reminder' | 'session_request' | 'session_accepted' | 'session_cancelled' | 'session_started';
   severity: 'low' | 'medium' | 'high' | 'critical';
   title: string;
   message: string;
@@ -155,10 +155,10 @@ export async function getUserAlerts(
 
     const alerts: Alert[] = (result.data || []).map((apiAlert: any) => ({
       id: apiAlert.id,
-      sessionId: apiAlert.sessionId,
-      childId: apiAlert.childId,
-      parentId: apiAlert.parentId,
-      sitterId: apiAlert.sitterId,
+      sessionId: apiAlert.sessionId ?? apiAlert.session_id,
+      childId: apiAlert.childId ?? apiAlert.child_id,
+      parentId: apiAlert.parentId ?? apiAlert.parent_id,
+      sitterId: apiAlert.sitterId ?? apiAlert.sitter_id,
       type: apiAlert.type,
       severity: apiAlert.severity,
       title: apiAlert.title,
@@ -263,10 +263,10 @@ export async function getSessionAlerts(
 
     const alerts: Alert[] = (result.data || []).map((apiAlert: any) => ({
       id: apiAlert.id,
-      sessionId: apiAlert.sessionId,
-      childId: apiAlert.childId,
-      parentId: apiAlert.parentId,
-      sitterId: apiAlert.sitterId,
+      sessionId: apiAlert.sessionId ?? apiAlert.session_id,
+      childId: apiAlert.childId ?? apiAlert.child_id,
+      parentId: apiAlert.parentId ?? apiAlert.parent_id,
+      sitterId: apiAlert.sitterId ?? apiAlert.sitter_id,
       type: apiAlert.type,
       severity: apiAlert.severity,
       title: apiAlert.title,

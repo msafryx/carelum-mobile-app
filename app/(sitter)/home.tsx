@@ -6,13 +6,13 @@ import { useTheme } from '@/src/components/ui/ThemeProvider';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useState, useEffect, useCallback } from 'react';
-import { ScrollView, StyleSheet, Text, TouchableOpacity, View, RefreshControl, ActivityIndicator } from 'react-native';
+import { ScrollView, StyleSheet, Text, TouchableOpacity, View, RefreshControl, ActivityIndicator, Image } from 'react-native';
 import { useAuth } from '@/src/hooks/useAuth';
 import { getUserSessions, discoverAvailableSessions } from '@/src/services/session.service';
 import { getChildById } from '@/src/services/child.service';
 import { getUserById } from '@/src/services/admin.service';
 import { updateUserProfileViaAPI } from '@/src/services/user-api.service';
-import { Session } from '@/src/types/session.types';
+import { Session, getRequestMode, type RequestMode } from '@/src/types/session.types';
 import { format } from 'date-fns';
 import { SESSION_STATUS } from '@/src/config/constants';
 import * as Location from 'expo-location';
@@ -21,6 +21,8 @@ import { Switch, Alert } from 'react-native';
 interface SessionWithDetails extends Session {
   childName?: string;
   parentName?: string;
+  parentPhotoUrl?: string;
+  requestMode?: RequestMode;
 }
 
 // Helper function to extract readable address from location
@@ -52,6 +54,27 @@ const getReadableLocation = (location: any): string | null => {
   
   return null;
 };
+
+function getModeBadgeColor(mode: RequestMode, colors: { primary?: string; success?: string; warning?: string; info?: string; textSecondary?: string }): string {
+  switch (mode) {
+    case 'INVITE': return colors.primary || '#3b82f6';
+    case 'NEARBY': return colors.success || '#10b981';
+    case 'CITY': return colors.warning || '#f59e0b';
+    case 'NATIONWIDE': return colors.info || '#6366f1';
+    default: return colors.textSecondary || '#6b7280';
+  }
+}
+
+function getModeLabel(mode: RequestMode, session: SessionWithDetails): string {
+  if (mode === 'NEARBY' && session.maxDistanceKm) return `${session.maxDistanceKm}km`;
+  switch (mode) {
+    case 'INVITE': return 'Invite';
+    case 'NEARBY': return 'Nearby';
+    case 'CITY': return 'City';
+    case 'NATIONWIDE': return 'Nationwide';
+    default: return 'Request';
+  }
+}
 
 export default function SitterHomeScreen() {
   const { colors, spacing } = useTheme();
@@ -183,7 +206,7 @@ export default function SitterHomeScreen() {
               }
             }
 
-            // Get parent name - use displayName, fallback to email prefix so we show real name
+            // Get parent name and photo - use displayName, fallback to email prefix
             if (session.parentId) {
               try {
                 const parentResult = await getUserById(session.parentId);
@@ -193,6 +216,7 @@ export default function SitterHomeScreen() {
                     (p.displayName && p.displayName.trim()) ||
                     p.email?.split('@')[0] ||
                     'Parent';
+                  details.parentPhotoUrl = (p as any).profileImageUrl ?? undefined;
                 } else {
                   console.warn(`⚠️ Could not load parent ${session.parentId}:`, parentResult.error?.message || 'Parent not found');
                   details.parentName = 'Parent';
@@ -203,6 +227,7 @@ export default function SitterHomeScreen() {
               }
             }
 
+            details.requestMode = getRequestMode(session.searchScope);
             return details;
           })
         );
@@ -351,7 +376,13 @@ export default function SitterHomeScreen() {
                       {session.childName ? `${session.childName}${session.childAge != null ? `, ${session.childAge}y` : ''}` : '1 child'}
                     </Text>
                   </View>
-                  <Ionicons name="radio" size={20} color={colors.success || '#10b981'} />
+                  <View style={[styles.personIconContainer, { backgroundColor: colors.primary + '15' }]}>
+                    {session.parentPhotoUrl ? (
+                      <Image source={{ uri: session.parentPhotoUrl }} style={styles.parentAvatar} />
+                    ) : (
+                      <Ionicons name="person-circle-outline" size={22} color={colors.primary} />
+                    )}
+                  </View>
                 </View>
                 <View style={styles.sessionDetails}>
                   <Text style={[styles.sessionTime, { color: colors.textSecondary }]}>
@@ -395,7 +426,13 @@ export default function SitterHomeScreen() {
                       {session.childName ? `${session.childName}${session.childAge != null ? `, ${session.childAge}y` : ''}` : '1 child'}
                     </Text>
                   </View>
-                  <Ionicons name="time" size={20} color={colors.warning || '#f59e0b'} />
+                  <View style={[styles.personIconContainer, { backgroundColor: colors.primary + '15' }]}>
+                    {session.parentPhotoUrl ? (
+                      <Image source={{ uri: session.parentPhotoUrl }} style={styles.parentAvatar} />
+                    ) : (
+                      <Ionicons name="person-circle-outline" size={22} color={colors.primary} />
+                    )}
+                  </View>
                 </View>
                 <View style={styles.sessionDetails}>
                   <Text style={[styles.sessionTime, { color: colors.textSecondary }]}>
@@ -436,22 +473,22 @@ export default function SitterHomeScreen() {
                       <Text style={[styles.availableSessionTitle, { color: colors.text }]}>
                         {session.parentName || 'Parent'}
                       </Text>
-                      {session.searchScope && session.searchScope !== 'invite' && (
-                        <View style={[styles.scopeBadge, { backgroundColor: colors.primary + '15' }]}>
-                          <Text style={[styles.scopeBadgeText, { color: colors.primary }]}>
-                            {session.searchScope === 'nearby' && session.maxDistanceKm
-                              ? `${session.maxDistanceKm}km`
-                              : session.searchScope.charAt(0).toUpperCase() + session.searchScope.slice(1)}
-                          </Text>
-                        </View>
-                      )}
+                      <View style={[styles.scopeBadge, { backgroundColor: getModeBadgeColor(session.requestMode || 'INVITE', colors) + '20' }]}>
+                        <Text style={[styles.scopeBadgeText, { color: getModeBadgeColor(session.requestMode || 'INVITE', colors) }]}>
+                          {getModeLabel(session.requestMode || 'INVITE', session)}
+                        </Text>
+                      </View>
                     </View>
                     <Text style={[styles.availableSessionParent, { color: colors.textSecondary }]}>
                       {session.childName ? `${session.childName}${session.childAge != null ? `, ${session.childAge}y` : ''}` : '1 child'}
                     </Text>
                   </View>
                   <View style={[styles.personIconContainer, { backgroundColor: colors.primary + '15' }]}>
-                    <Ionicons name="person-circle-outline" size={22} color={colors.primary} />
+                    {(session as SessionWithDetails).parentPhotoUrl ? (
+                      <Image source={{ uri: (session as SessionWithDetails).parentPhotoUrl! }} style={styles.parentAvatar} />
+                    ) : (
+                      <Ionicons name="person-circle-outline" size={22} color={colors.primary} />
+                    )}
                   </View>
                 </View>
                 <View style={styles.availableSessionDetails}>
@@ -631,6 +668,12 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  parentAvatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
   },
   availableSessionDetails: {
     gap: 8,

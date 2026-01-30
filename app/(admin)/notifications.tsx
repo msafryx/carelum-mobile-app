@@ -13,19 +13,17 @@ import { useTheme } from '@/src/components/ui/ThemeProvider';
 import Header from '@/src/components/ui/Header';
 import Card from '@/src/components/ui/Card';
 import EmptyState from '@/src/components/ui/EmptyState';
-import HamburgerMenu from '@/src/components/ui/HamburgerMenu';
+import AdminHamburgerMenu from '@/src/components/ui/AdminHamburgerMenu';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { useAuth } from '@/src/hooks/useAuth';
-import { useParentTabBadges } from '@/src/contexts/ParentTabBadgesContext';
 import { getUserAlerts, markAlertAsViewed } from '@/src/services/alert.service';
 import type { Alert } from '@/src/services/alert.service';
 import { formatDistanceToNow } from 'date-fns';
 
-export default function ParentNotificationsScreen() {
+export default function AdminNotificationsScreen() {
   const { colors } = useTheme();
   const router = useRouter();
   const { user } = useAuth();
-  const badges = useParentTabBadges();
   const [menuVisible, setMenuVisible] = useState(false);
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [loading, setLoading] = useState(true);
@@ -42,15 +40,11 @@ export default function ParentNotificationsScreen() {
           (a, b) => b.createdAt.getTime() - a.createdAt.getTime()
         );
         setAlerts(sorted);
-        // Mark all as viewed when user opens Notifications so badge count goes down
         const newAlerts = sorted.filter((a) => a.status === 'new');
         if (newAlerts.length > 0) {
-          // Optimistic: clear badge immediately so tab bar updates
-          badges?.setNotificationCount?.(0);
           for (const a of newAlerts) {
             if (a.id) await markAlertAsViewed(a.id);
           }
-          await badges?.refreshNotificationCount?.();
           setAlerts((prev) =>
             prev.map((a) => (a.status === 'new' ? { ...a, status: 'viewed' as const } : a))
           );
@@ -64,7 +58,7 @@ export default function ParentNotificationsScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [user?.id, badges?.refreshNotificationCount]);
+  }, [user?.id]);
 
   useFocusEffect(
     useCallback(() => {
@@ -74,17 +68,13 @@ export default function ParentNotificationsScreen() {
 
   const handleAlertPress = async (alert: Alert) => {
     if (alert.id && alert.status === 'new') {
-      // Optimistic: decrement badge so tab bar updates immediately
-      const current = badges?.notificationCount ?? 0;
-      badges?.setNotificationCount?.(Math.max(0, current - 1));
       await markAlertAsViewed(alert.id);
-      await badges?.refreshNotificationCount?.();
       setAlerts((prev) =>
         prev.map((a) => (a.id === alert.id ? { ...a, status: 'viewed' as const } : a))
       );
     }
     if (alert.sessionId) {
-      router.push(`/(parent)/session/${alert.sessionId}` as any);
+      router.push(`/(admin)/home` as any);
     }
   };
 
@@ -181,7 +171,7 @@ export default function ParentNotificationsScreen() {
           })
         )}
       </ScrollView>
-      <HamburgerMenu
+      <AdminHamburgerMenu
         visible={menuVisible}
         onClose={() => setMenuVisible(false)}
       />

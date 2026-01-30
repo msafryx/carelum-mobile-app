@@ -114,6 +114,7 @@ export async function createSessionRequest(
       cancelledBy: apiSession.cancelledBy,
       cancellationReason: apiSession.cancellationReason,
       completedAt: apiSession.completedAt ? new Date(apiSession.completedAt) : undefined,
+      startedAt: (apiSession.startedAt ?? apiSession.started_at) ? new Date(apiSession.startedAt ?? apiSession.started_at) : undefined,
       createdAt: new Date(apiSession.createdAt),
       updatedAt: new Date(apiSession.updatedAt),
     };
@@ -159,6 +160,7 @@ export async function getSessionById(sessionId: string): Promise<ServiceResult<S
           cancelledBy: s.cancelledBy,
           cancellationReason: s.cancellationReason,
           completedAt: s.completedAt ? new Date(s.completedAt) : undefined,
+          startedAt: (s.startedAt ?? s.started_at) ? new Date(s.startedAt ?? s.started_at) : undefined,
           createdAt: new Date(s.createdAt || Date.now()),
           updatedAt: new Date(s.updatedAt || Date.now()),
         };
@@ -215,6 +217,7 @@ async function syncSessionFromAPI(sessionId: string): Promise<ServiceResult<Sess
       cancelledBy: apiSession.cancelledBy,
       cancellationReason: apiSession.cancellationReason,
       completedAt: apiSession.completedAt ? new Date(apiSession.completedAt) : undefined,
+      startedAt: (apiSession.startedAt ?? apiSession.started_at) ? new Date(apiSession.startedAt ?? apiSession.started_at) : undefined,
       createdAt: new Date(apiSession.createdAt),
       updatedAt: new Date(apiSession.updatedAt),
     };
@@ -348,6 +351,7 @@ async function syncSessionsFromAPI(
       cancelledBy: apiSession.cancelledBy,
       cancellationReason: apiSession.cancellationReason,
       completedAt: apiSession.completedAt ? new Date(apiSession.completedAt) : undefined,
+      startedAt: (apiSession.startedAt ?? apiSession.started_at) ? new Date(apiSession.startedAt ?? apiSession.started_at) : undefined,
       createdAt: new Date(apiSession.createdAt),
       updatedAt: new Date(apiSession.updatedAt),
     }));
@@ -468,10 +472,50 @@ export async function declineSessionRequest(
 }
 
 /**
- * Start session (mark as active)
+ * Start session (sitter only). Transitions BOOKED → LIVE. Idempotent.
+ * Uses dedicated POST /sessions/:id/start for started_at and timeline event.
  */
-export async function startSession(sessionId: string): Promise<ServiceResult<void>> {
-  return updateSessionStatus(sessionId, 'active');
+export async function startSession(sessionId: string): Promise<ServiceResult<Session>> {
+  try {
+    const result = await apiRequest<any>(API_ENDPOINTS.SESSION_START(sessionId), {
+      method: 'POST',
+    });
+    if (!result.success) {
+      return result;
+    }
+    const apiSession = result.data;
+    const session: Session = {
+      id: apiSession.id,
+      parentId: apiSession.parentId,
+      sitterId: apiSession.sitterId || '',
+      childId: apiSession.childId,
+      childIds: parseChildIds(apiSession),
+      status: apiSession.status,
+      startTime: new Date(apiSession.startTime),
+      endTime: apiSession.endTime ? new Date(apiSession.endTime) : undefined,
+      location: apiSession.location,
+      hourlyRate: apiSession.hourlyRate,
+      totalAmount: apiSession.totalAmount,
+      notes: apiSession.notes,
+      searchScope: apiSession.searchScope || apiSession.search_scope,
+      maxDistanceKm: apiSession.maxDistanceKm || apiSession.max_distance_km,
+      timeSlots: parseTimeSlots(apiSession),
+      expiresAt: apiSession.expiresAt ? new Date(apiSession.expiresAt) : undefined,
+      cancelledAt: apiSession.cancelledAt ? new Date(apiSession.cancelledAt) : undefined,
+      cancelledBy: apiSession.cancelledBy,
+      cancellationReason: apiSession.cancellationReason,
+      completedAt: apiSession.completedAt ? new Date(apiSession.completedAt) : undefined,
+      startedAt: (apiSession.startedAt ?? apiSession.started_at) ? new Date(apiSession.startedAt ?? apiSession.started_at) : undefined,
+      createdAt: new Date(apiSession.createdAt),
+      updatedAt: new Date(apiSession.updatedAt),
+    };
+    return { success: true, data: session };
+  } catch (error: any) {
+    return {
+      success: false,
+      error: handleUnexpectedError(error),
+    };
+  }
 }
 
 /**
@@ -570,6 +614,7 @@ export async function discoverAvailableSessions(
       cancelledBy: apiSession.cancelledBy,
       cancellationReason: apiSession.cancellationReason,
       completedAt: apiSession.completedAt ? new Date(apiSession.completedAt) : undefined,
+      startedAt: (apiSession.startedAt ?? apiSession.started_at) ? new Date(apiSession.startedAt ?? apiSession.started_at) : undefined,
       createdAt: new Date(apiSession.createdAt),
       updatedAt: new Date(apiSession.updatedAt),
     }));

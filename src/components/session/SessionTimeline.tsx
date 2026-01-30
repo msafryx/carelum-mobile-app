@@ -56,7 +56,7 @@ export default function SessionTimeline({ session, events = [] }: SessionTimelin
         id: 'started',
         type: 'started',
         title: 'Session Started',
-        timestamp: session.startTime,
+        timestamp: session.startedAt ?? session.startTime,
         icon: 'play-circle-outline',
       });
     }

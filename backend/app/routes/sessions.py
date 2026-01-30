@@ -13,6 +13,65 @@ from app.utils.error_handler import handle_error, AppError
 from app.utils.database import get_supabase, get_supabase_with_auth
 
 
+def _extract_session_city(location) -> Optional[str]:
+    """Extract city from session location (string or dict)."""
+    if not location:
+        return None
+    if isinstance(location, str):
+        try:
+            location = json.loads(location)
+        except Exception:
+            return None
+    if isinstance(location, dict):
+        return location.get("city") or location.get("address")
+    return None
+
+
+def _notify_sitters_of_new_request(
+    supabase_client,
+    session_id: str,
+    parent_id: str,
+    child_id: Optional[str],
+    search_scope: str,
+    location,
+) -> None:
+    """Create alerts so sitters see the new request in Notifications (city/nearby/nationwide)."""
+    if not supabase_client or search_scope not in ("city", "nearby", "nationwide"):
+        return
+    try:
+        # Parents can read verified sitters (RLS). Fetch sitter IDs and optional city.
+        response = supabase_client.table("users").select("id, city").eq("role", "sitter").limit(500).execute()
+        rows = response.data or []
+        session_city = _extract_session_city(location) if search_scope == "city" and location else None
+        if session_city and isinstance(session_city, str):
+            session_city_lower = session_city.lower().strip()
+        else:
+            session_city_lower = None
+        sitter_ids = []
+        for row in rows:
+            sid = row.get("id")
+            if not sid:
+                continue
+            if search_scope == "city" and session_city_lower:
+                row_city = (row.get("city") or "").strip().lower()
+                if row_city != session_city_lower:
+                    continue
+            sitter_ids.append(sid)
+        for sitter_id in sitter_ids[:300]:  # cap at 300 alerts
+            _create_alert(
+                supabase_client,
+                session_id=session_id,
+                parent_id=parent_id,
+                sitter_id=sitter_id,
+                alert_type="session_request",
+                title="New session request",
+                message="A parent is looking for a sitter in your area.",
+                child_id=child_id,
+            )
+    except Exception as e:
+        print(f"⚠️ Failed to notify sitters of new request: {e}")
+
+
 def _create_alert(
     supabase_client,
     session_id: str,
@@ -33,7 +92,7 @@ def _create_alert(
             "sitter_id": sitter_id,
             "child_id": child_id,
             "type": alert_type,
-            "severity": "info",
+            "severity": "low",
             "title": title,
             "message": message,
             "status": "new",
@@ -41,6 +100,22 @@ def _create_alert(
         supabase_client.table("alerts").insert(insert_data).execute()
     except Exception as e:
         print(f"⚠️ Failed to create alert: {e}")
+
+
+def _create_session_event(supabase_client, session_id: str, event_type: str, triggered_by: str) -> None:
+    """Create a timeline event (session_started, session_completed, session_cancelled)."""
+    if not supabase_client:
+        return
+    try:
+        supabase_client.table("session_events").insert({
+            "session_id": session_id,
+            "type": event_type,
+            "triggered_by": triggered_by,
+        }).execute()
+    except Exception as e:
+        print(f"⚠️ Failed to create session event: {e}")
+
+
 from fastapi.security import HTTPAuthorizationCredentials
 
 router = APIRouter()
@@ -76,6 +151,7 @@ class SessionResponse(BaseModel):
     cancelledBy: Optional[str] = None
     cancellationReason: Optional[str] = None
     completedAt: Optional[str] = None
+    startedAt: Optional[str] = None  # When sitter started session (LIVE)
     createdAt: str
     updatedAt: str
 
@@ -152,6 +228,7 @@ def db_to_session_response(session_data: dict) -> SessionResponse:
         cancelledBy=session_data.get("cancelled_by"),
         cancellationReason=session_data.get("cancellation_reason"),
         completedAt=session_data.get("completed_at"),
+        startedAt=session_data.get("started_at"),
         createdAt=session_data["created_at"],
         updatedAt=session_data.get("updated_at", session_data["created_at"])
     )
@@ -324,6 +401,91 @@ async def get_session_by_id(
         raise
     except Exception as e:
         raise handle_error(e, "Failed to fetch session")
+
+
+@router.post("/{session_id}/start", response_model=SessionResponse)
+async def start_session(
+    session_id: str,
+    current_user: CurrentUser = Depends(verify_token),
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    """
+    Start a session (sitter only). Transitions BOOKED (accepted) → LIVE (active).
+    Idempotent: if already LIVE, returns current session.
+    Sets started_at and creates SESSION_STARTED timeline event.
+    """
+    try:
+        auth_token = credentials.credentials
+        supabase = get_supabase_with_auth(auth_token)
+        if not supabase:
+            raise AppError(
+                code="DB_NOT_AVAILABLE",
+                message="Database connection not available",
+                status_code=503
+            )
+        response = supabase.table("sessions").select("*").eq("id", session_id).single().execute()
+        if not response.data:
+            raise AppError(
+                code="SESSION_NOT_FOUND",
+                message="Session not found",
+                status_code=404
+            )
+        session_data = response.data
+        if not verify_session_access(session_data, current_user):
+            raise AppError(
+                code="FORBIDDEN",
+                message="You don't have access to this session",
+                status_code=403
+            )
+        current_status = session_data.get("status")
+        sitter_id = session_data.get("sitter_id")
+
+        # Only the assigned sitter can start
+        if current_user.role != "sitter":
+            raise AppError(
+                code="FORBIDDEN",
+                message="Only the assigned sitter can start this session",
+                status_code=403
+            )
+        if sitter_id != current_user.id:
+            raise AppError(
+                code="FORBIDDEN",
+                message="Only the assigned sitter can start this session",
+                status_code=403
+            )
+
+        # Idempotent: already LIVE → return current session
+        if current_status == "active":
+            return db_to_session_response(session_data)
+
+        if current_status != "accepted":
+            raise AppError(
+                code="INVALID_STATUS",
+                message="Session is not ready to start",
+                status_code=400
+            )
+
+        now_iso = datetime.utcnow().isoformat()
+        update_data = {
+            "status": "active",
+            "started_at": now_iso,
+            "updated_at": now_iso,
+        }
+        supabase.table("sessions").update(update_data).eq("id", session_id).execute()
+        _create_session_event(supabase, session_id, "session_started", current_user.id)
+
+        response = supabase.table("sessions").select("*").eq("id", session_id).single().execute()
+        if not response.data:
+            raise AppError(
+                code="UPDATE_FAILED",
+                message="Failed to update session",
+                status_code=500
+            )
+        return db_to_session_response(response.data)
+    except AppError:
+        raise
+    except Exception as e:
+        raise handle_error(e, "Failed to start session")
 
 
 @router.post("", response_model=SessionResponse)
@@ -534,6 +696,29 @@ async def create_session(
             # Extract the first item from response_data (could be list or dict)
             session_record = response_data[0] if isinstance(response_data, list) else response_data
             print(f"✅ Session created successfully: {session_record.get('id') if isinstance(session_record, dict) else 'NO ID'}")
+            # Notify sitters so they see the request in Notifications
+            new_session_id = session_record.get("id") if isinstance(session_record, dict) else None
+            if new_session_id:
+                if search_scope == "invite" and session_data.sitterId:
+                    _create_alert(
+                        supabase,
+                        session_id=new_session_id,
+                        parent_id=session_data.parentId,
+                        sitter_id=session_data.sitterId,
+                        alert_type="session_request",
+                        title="New invitation",
+                        message="You have a new session invitation.",
+                        child_id=session_data.childId,
+                    )
+                else:
+                    _notify_sitters_of_new_request(
+                        supabase,
+                        session_id=new_session_id,
+                        parent_id=session_data.parentId,
+                        child_id=session_data.childId,
+                        search_scope=search_scope,
+                        location=session_record.get("location") if isinstance(session_record, dict) else session_data.location,
+                    )
             return db_to_session_response(session_record)
             
         except AppError:
@@ -664,9 +849,10 @@ async def update_session(
                 if not updates.endTime:
                     update_data["end_time"] = datetime.utcnow().isoformat()
             elif updates.status == "active":
-                # Ensure sitter is assigned
-                if current_user.role == "sitter" and not session_data.get("sitter_id"):
-                    update_data["sitter_id"] = current_user.id
+                # Session start: set started_at and create timeline event
+                if not session_data.get("started_at"):
+                    update_data["started_at"] = datetime.utcnow().isoformat()
+                # Timeline event created after update (below) so we have updated session
         
         if updates.endTime is not None:
             update_data["end_time"] = updates.endTime
@@ -694,6 +880,22 @@ async def update_session(
             )
         
         updated = response.data
+        # Timeline event when session is started (LIVE)
+        if updates.status == "active" and session_data.get("status") != "active":
+            _create_session_event(supabase, session_id, "session_started", current_user.id)
+            # Notify parent that sitter has started the session
+            parent_id = session_data.get("parent_id")
+            if parent_id:
+                _create_alert(
+                    supabase,
+                    session_id=session_id,
+                    parent_id=parent_id,
+                    sitter_id=updated.get("sitter_id"),
+                    alert_type="session_started",
+                    title="Session started",
+                    message="Your sitter has started the session.",
+                    child_id=session_data.get("child_id"),
+                )
         # Notify parent when sitter accepts
         if updates.status == "accepted" and session_data.get("parent_id"):
             _create_alert(
@@ -779,10 +981,11 @@ async def cancel_session(
         
         supabase.table("sessions").update(update_data).eq("id", session_id).execute()
         
-        # Notify parent and sitter (one alert with both IDs so both see it in Notifications)
+        # Notify parent and sitter (message depends on who cancelled)
         parent_id = session_data.get("parent_id")
         sitter_id = session_data.get("sitter_id")
         if parent_id:
+            cancel_message = "A sitter declined your invitation." if current_user.role == "sitter" else (reason or "This session was cancelled.")
             _create_alert(
                 supabase,
                 session_id=session_id,
@@ -790,7 +993,7 @@ async def cancel_session(
                 sitter_id=sitter_id,
                 alert_type="session_cancelled",
                 title="Session cancelled",
-                message=reason or "This session was cancelled.",
+                message=cancel_message,
                 child_id=session_data.get("child_id"),
             )
         

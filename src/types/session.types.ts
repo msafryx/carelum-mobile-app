@@ -71,6 +71,8 @@ export interface Session {
   
   // Completion
   completedAt?: Date;
+  /** When sitter started the session (LIVE). Used for session timer. */
+  startedAt?: Date;
   parentRating?: number;
   parentReview?: string;
   sitterRating?: number;

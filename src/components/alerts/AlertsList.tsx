@@ -20,6 +20,8 @@ import { format, formatDistanceToNow } from 'date-fns';
 interface AlertsListProps {
   userId: string;
   sessionId?: string;
+  /** When "parent", session_request alerts are hidden (they are for sitters). */
+  role?: 'parent' | 'sitter';
   onAlertPress?: (alert: AlertType) => void;
   showActions?: boolean;
   onAlertsChange?: (hasAlerts: boolean) => void;
@@ -28,6 +30,7 @@ interface AlertsListProps {
 export default function AlertsList({
   userId,
   sessionId,
+  role,
   onAlertPress,
   showActions = true,
   onAlertsChange,
@@ -58,8 +61,11 @@ export default function AlertsList({
       }
 
       if (result.success && result.data) {
-        // Sort by creation time (newest first)
-        const sortedAlerts = [...result.data].sort(
+        let list = result.data;
+        if (role === 'parent') {
+          list = list.filter((a) => a.type !== 'session_request');
+        }
+        const sortedAlerts = [...list].sort(
           (a, b) => b.createdAt.getTime() - a.createdAt.getTime()
         );
         setAlerts(sortedAlerts);
@@ -75,7 +81,7 @@ export default function AlertsList({
       setLoading(false);
       setRefreshing(false);
     }
-  }, [userId, sessionId]);
+  }, [userId, sessionId, role]);
 
   useEffect(() => {
     loadAlerts();

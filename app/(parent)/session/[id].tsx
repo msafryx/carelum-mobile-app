@@ -213,9 +213,10 @@ export default function SessionDetailScreen() {
         }
       }
 
-      // Process alerts
+      // Process alerts (parent session: hide session_request — those are for sitters)
       if (alertsResult.success && alertsResult.data) {
-        setAlerts(alertsResult.data);
+        const list = alertsResult.data.filter((a) => a.type !== 'session_request');
+        setAlerts(list);
       }
     } catch (err: any) {
       setError(err.message || 'Failed to load session data');
@@ -501,7 +502,7 @@ export default function SessionDetailScreen() {
             <View style={styles.sessionHeaderLeft}>
               <View style={[styles.statusBadge, { backgroundColor: getStatusColor(session.status, colors) }]}>
                 <Text style={[styles.statusText, { color: colors.white }]}>
-                  {session.status.toUpperCase()}
+                  {session.status === 'active' ? 'LIVE' : session.status === 'accepted' ? 'BOOKED' : session.status.toUpperCase()}
                 </Text>
               </View>
               {children.length > 1 ? (
@@ -535,7 +536,7 @@ export default function SessionDetailScreen() {
               <View style={styles.infoRow}>
                 <Ionicons name="hourglass-outline" size={16} color={colors.textSecondary} />
                 <Text style={[styles.infoText, { color: colors.textSecondary }]}>
-                  Duration: {formatDuration(session.startTime)}
+                  Duration: {formatDuration(session.startedAt ?? session.startTime)}
                 </Text>
               </View>
             )}

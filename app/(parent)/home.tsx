@@ -25,6 +25,7 @@ interface SessionWithDetails extends Session {
   childPhotoUrl?: string;
   childPhotoUrls?: string[]; // Array of all child photo URLs
   sitterName?: string;
+  sitterPhotoUrl?: string;
 }
 
 // Searching Animation Component (Uber-like pulsing animation)
@@ -130,11 +131,13 @@ export default function ParentHomeScreen() {
               details.childPhotoUrl = childPhotoUrls[0] ?? undefined;
             }
 
-            // Get sitter name
+            // Get sitter name and photo
             if (session.sitterId) {
               const sitterResult = await getUserById(session.sitterId);
               if (sitterResult.success && sitterResult.data) {
-                details.sitterName = sitterResult.data.displayName || 'Sitter';
+                const s = sitterResult.data;
+                details.sitterName = s.displayName || s.email?.split('@')[0] || 'Sitter';
+                details.sitterPhotoUrl = (s as any).profileImageUrl ?? undefined;
               }
             }
 
@@ -349,7 +352,13 @@ export default function ParentHomeScreen() {
                       </Text>
                     )}
                   </View>
-                  <Ionicons name="radio" size={20} color={colors.success || '#10b981'} />
+                  <View style={[styles.sitterAvatarWrap, { backgroundColor: colors.primary + '15' }]}>
+                    {session.sitterPhotoUrl ? (
+                      <Image source={{ uri: session.sitterPhotoUrl }} style={styles.sitterAvatar} />
+                    ) : (
+                      <Ionicons name="person-circle-outline" size={22} color={colors.primary} />
+                    )}
+                  </View>
                 </View>
                 <View style={styles.sessionDetails}>
                   <Text style={[styles.sessionTime, { color: colors.textSecondary }]}>
@@ -468,6 +477,15 @@ export default function ParentHomeScreen() {
                       </Text>
                     </View>
                   </View>
+                  {session.sitterId && (
+                    <View style={[styles.sitterAvatarWrap, { backgroundColor: colors.primary + '15' }]}>
+                      {session.sitterPhotoUrl ? (
+                        <Image source={{ uri: session.sitterPhotoUrl }} style={styles.sitterAvatar} />
+                      ) : (
+                        <Ionicons name="person-circle-outline" size={22} color={colors.primary} />
+                      )}
+                    </View>
+                  )}
                 </View>
                 <View style={styles.sessionDetails}>
                   <Text style={[styles.sessionTime, { color: colors.textSecondary }]}>
@@ -547,7 +565,13 @@ export default function ParentHomeScreen() {
                       </Text>
                     )}
                   </View>
-                  <Ionicons name="time" size={20} color={colors.warning || '#f59e0b'} />
+                  <View style={[styles.sitterAvatarWrap, { backgroundColor: colors.primary + '15' }]}>
+                    {session.sitterPhotoUrl ? (
+                      <Image source={{ uri: session.sitterPhotoUrl }} style={styles.sitterAvatar} />
+                    ) : (
+                      <Ionicons name="person-circle-outline" size={22} color={colors.primary} />
+                    )}
+                  </View>
                 </View>
                 <View style={styles.sessionDetails}>
                   <Text style={[styles.sessionTime, { color: colors.textSecondary }]}>
@@ -737,6 +761,19 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
     marginBottom: 8,
     gap: 12,
+  },
+  sitterAvatarWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  sitterAvatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
   },
   childAvatar: {
     width: 50,

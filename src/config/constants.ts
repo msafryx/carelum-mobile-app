@@ -73,6 +73,7 @@ export const API_ENDPOINTS = {
   // Sessions
   SESSIONS: '/api/sessions',
   SESSION_BY_ID: (id: string) => `/api/sessions/${id}`,
+  SESSION_START: (id: string) => `/api/sessions/${id}/start`,
   SESSION_ALERTS: (id: string) => `/api/sessions/${id}/alerts`,
   SESSION_GPS: (id: string) => `/api/gps/sessions/${id}/gps`,
   SESSION_GPS_LATEST: (id: string) => `/api/gps/sessions/${id}/gps/latest`,

@@ -8,6 +8,7 @@ export default function AdminLayout() {
         <Stack.Screen name="home" />
         <Stack.Screen name="verifications" />
         <Stack.Screen name="users" />
+        <Stack.Screen name="notifications" />
         <Stack.Screen name="profile" />
         <Stack.Screen name="settings" />
         <Stack.Screen name="statistics" />

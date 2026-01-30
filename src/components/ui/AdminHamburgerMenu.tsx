@@ -87,6 +87,14 @@ export default function AdminHamburgerMenu({ visible, onClose }: Props) {
 
               <TouchableOpacity
                 style={[styles.item, { borderBottomColor: colors.border }]}
+                onPress={() => go('notifications')}
+              >
+                <Ionicons name="notifications" size={24} color={colors.text} style={styles.icon} />
+                <Text style={[styles.text, { color: colors.text }]}>Notifications</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.item, { borderBottomColor: colors.border }]}
                 onPress={() => go('statistics')}
               >
                 <Ionicons name="stats-chart" size={24} color={colors.text} style={styles.icon} />
