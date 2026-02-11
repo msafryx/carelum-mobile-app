@@ -32,10 +32,8 @@ export async function getAllUsers(
       .order('created_at', { ascending: false })
       .limit(limitCount);
 
-    // Map frontend role to database role
     if (role) {
-      const dbRole = role === 'babysitter' ? 'sitter' : role;
-      query = query.eq('role', dbRole);
+      query = query.eq('role', role);
     }
 
     const { data, error } = await query;
@@ -54,8 +52,7 @@ export async function getAllUsers(
       id: row.id,
       email: row.email,
       displayName: row.display_name,
-      // Map database role to frontend role
-      role: row.role === 'sitter' ? 'babysitter' : row.role,
+      role: row.role,
       preferredLanguage: row.preferred_language,
       userNumber: row.user_number,
       phoneNumber: row.phone_number,
@@ -113,8 +110,7 @@ export async function getUserById(userId: string): Promise<ServiceResult<User>> 
       id: data.id,
       email: data.email,
       displayName: data.display_name,
-      // Map database role to frontend role
-      role: data.role === 'sitter' ? 'babysitter' : data.role,
+      role: data.role,
       preferredLanguage: data.preferred_language,
       userNumber: data.user_number,
       profileImageUrl: data.photo_url,
@@ -159,10 +155,7 @@ export async function updateUser(
 
     const supabaseUpdates: any = {};
     if (updates.displayName !== undefined) supabaseUpdates.display_name = updates.displayName;
-    // Map frontend role to database role
-    if (updates.role !== undefined) {
-      supabaseUpdates.role = updates.role === 'babysitter' ? 'sitter' : updates.role;
-    }
+    if (updates.role !== undefined) supabaseUpdates.role = updates.role;
     if (updates.preferredLanguage !== undefined) supabaseUpdates.preferred_language = updates.preferredLanguage;
     if (updates.profileImageUrl !== undefined) supabaseUpdates.photo_url = updates.profileImageUrl;
     // Handle extended UserProfile properties
@@ -298,7 +291,6 @@ export async function changeUserRole(
   userId: string,
   newRole: 'parent' | 'babysitter' | 'admin'
 ): Promise<ServiceResult<void>> {
-  // Map frontend role to database role - updateUser will handle the mapping
   return updateUser(userId, { role: newRole } as any);
 }
 
@@ -324,11 +316,11 @@ export async function getAdminStats(): Promise<ServiceResult<{
       };
     }
 
-    // Get user counts - map 'babysitter' to 'sitter' for database query
+    // Get user counts
     const [allUsersResult, parentsResult, sittersResult, adminsResult, pendingVerificationsResult, activeSessionsResult] = await Promise.all([
       supabase.from('users').select('id', { count: 'exact', head: true }),
       supabase.from('users').select('id', { count: 'exact', head: true }).eq('role', 'parent'),
-      supabase.from('users').select('id', { count: 'exact', head: true }).eq('role', 'sitter'), // Database uses 'sitter'
+      supabase.from('users').select('id', { count: 'exact', head: true }).eq('role', 'babysitter'),
       supabase.from('users').select('id', { count: 'exact', head: true }).eq('role', 'admin'),
       supabase.from('verification_requests').select('id', { count: 'exact', head: true }).eq('status', 'pending'),
       supabase.from('sessions').select('id', { count: 'exact', head: true }).eq('status', 'active'),

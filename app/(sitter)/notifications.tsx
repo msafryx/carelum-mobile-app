@@ -50,22 +50,25 @@ export default function SitterNotificationsScreen() {
           for (const a of newAlerts) {
             if (a.id) await markAlertAsViewed(a.id);
           }
-          await badges?.refreshNotificationCount?.();
           // Update local state so list shows items as read
           setAlerts((prev) =>
             prev.map((a) => (a.status === 'new' ? { ...a, status: 'viewed' as const } : a))
           );
         }
+        // Always sync badge with server so count is correct (e.g. after opening tab or when all were already read)
+        await badges?.refreshNotificationCount?.();
       } else {
         setAlerts([]);
+        badges?.setNotificationCount?.(0);
       }
     } catch {
       setAlerts([]);
+      badges?.setNotificationCount?.(0);
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [user?.id, badges?.refreshNotificationCount]);
+  }, [user?.id, badges?.refreshNotificationCount, badges?.setNotificationCount]);
 
   useFocusEffect(
     useCallback(() => {

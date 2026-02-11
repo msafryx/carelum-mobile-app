@@ -1046,16 +1046,21 @@ async def discover_available_sessions(
                 status_code=503
             )
         
-        # Get sitter's profile to check city
-        sitter_profile = None
-        if sitter_city or scope == 'city':
-            try:
-                profile_response = supabase.table("users").select("city").eq("id", current_user.id).single().execute()
-                if profile_response.data:
-                    sitter_profile = profile_response.data
-                    sitter_city = sitter_city or profile_response.data.get("city")
-            except:
-                pass  # Continue without city filter if profile fetch fails
+        # Only verified sitters can see session requests
+        try:
+            profile_response = supabase.table("users").select("is_verified, city").eq("id", current_user.id).single().execute()
+            if profile_response.data:
+                if not profile_response.data.get("is_verified", False):
+                    print(f"🔒 Unverified sitter {current_user.id} attempted to discover sessions - returning empty list")
+                    return []
+                sitter_profile = profile_response.data
+                sitter_city = sitter_city or profile_response.data.get("city")
+            else:
+                # No profile or unverified - return empty
+                return []
+        except Exception as profile_err:
+            print(f"⚠️ Could not load sitter profile for verification check: {profile_err}")
+            return []  # Fail closed: don't show sessions if we can't verify
         
         # Query for available sessions (status = 'requested')
         # Note: expires_at column may not exist yet - we'll filter expired sessions in Python
