@@ -148,7 +148,7 @@ export default function AdminHomeScreen() {
               label="Active"
               value={stats.activeSessions}
               color={colors.success}
-              onPress={() => {}}
+              onPress={() => router.push('/(admin)/sessions')}
             />
           </View>
 

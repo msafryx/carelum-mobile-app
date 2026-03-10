@@ -64,6 +64,25 @@ function formatDuration(startTime: Date): string {
   return `${minutes}m`;
 }
 
+function formatMonitoringDuration(startTime?: Date): string {
+  if (!startTime) return '0m';
+  const now = new Date();
+  const diff = now.getTime() - startTime.getTime();
+  const hours = Math.floor(diff / (1000 * 60 * 60));
+  const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  return `${minutes}m`;
+}
+
+function formatDurationBetween(start: Date, end: Date): string {
+  const diff = end.getTime() - start.getTime();
+  if (diff <= 0) return '0m';
+  const hours = Math.floor(diff / (1000 * 60 * 60));
+  const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  return `${minutes}m`;
+}
+
 // Searching Animation Component (Uber-like pulsing animation)
 function SearchingAnimation() {
   const pulseAnim = useRef(new Animated.Value(1)).current;
@@ -123,6 +142,21 @@ export default function SessionDetailScreen() {
   const [searchDuration, setSearchDuration] = useState<string>('');
   const searchDurationIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const sessionRef = useRef<Session | null>(null);
+
+  const monitoringEnabled = session?.monitoringEnabled || false;
+  const lastSignal =
+    session?.lastLocationAt && session.lastAudioSignalAt
+      ? new Date(Math.max(session.lastLocationAt.getTime(), session.lastAudioSignalAt.getTime()))
+      : session?.lastLocationAt || session?.lastAudioSignalAt || null;
+  const monitoringUnstable =
+    monitoringEnabled &&
+    lastSignal &&
+    (Date.now() - lastSignal.getTime() > 2 * 60 * 1000);
+  const monitoringStatusLabel = !monitoringEnabled
+    ? 'Monitoring OFF'
+    : monitoringUnstable
+      ? 'Monitoring UNSTABLE'
+      : 'Monitoring ACTIVE';
 
   // Load session data
   const loadSessionData = useCallback(async () => {
@@ -213,10 +247,9 @@ export default function SessionDetailScreen() {
         }
       }
 
-      // Process alerts (parent session: hide session_request — those are for sitters)
+      // Process alerts
       if (alertsResult.success && alertsResult.data) {
-        const list = alertsResult.data.filter((a) => a.type !== 'session_request');
-        setAlerts(list);
+        setAlerts(alertsResult.data);
       }
     } catch (err: any) {
       setError(err.message || 'Failed to load session data');
@@ -771,8 +804,25 @@ export default function SessionDetailScreen() {
           </View>
         </Card>
 
-        {/* Enhanced GPS Tracking */}
+        {/* Monitoring Status */}
         {session.status === 'active' && (
+          <Card style={styles.infoCard}>
+            <View style={styles.infoRow}>
+              <Ionicons
+                name={!monitoringEnabled ? 'power' : monitoringUnstable ? 'warning' : 'radio'}
+                size={16}
+                color={!monitoringEnabled ? colors.textSecondary : monitoringUnstable ? (colors.warning || colors.textSecondary) : (colors.success || colors.primary)}
+              />
+              <Text style={[styles.infoText, { color: colors.textSecondary }]}>
+                {monitoringStatusLabel}
+                {monitoringEnabled ? ` • ${formatMonitoringDuration(session.monitoringStartedAt)}` : ''}
+              </Text>
+            </View>
+          </Card>
+        )}
+
+        {/* Enhanced GPS Tracking */}
+        {session.status === 'active' && monitoringEnabled && (
           <EnhancedGPSMap
             sessionId={id!}
             currentLocation={currentLocation || undefined}
@@ -821,7 +871,7 @@ export default function SessionDetailScreen() {
         )}
 
         {/* Cry Detection */}
-        {session.status === 'active' && (
+        {session.status === 'active' && monitoringEnabled && (
           <CryDetectionIndicator
             isEnabled={session.cryDetectionEnabled || false}
             isActive={session.monitoringEnabled || false}
@@ -876,8 +926,45 @@ export default function SessionDetailScreen() {
           onEmergency={handleEmergency}
           onCancel={() => setCancelModalVisible(true)}
           isLoading={actionLoading}
-          canEndSession={session.status === 'active'}
+          canEndSession={false}
         />
+
+        {/* Parent: Completed session summary + rate sitter */}
+        {session.status === 'completed' && (
+          <Card style={styles.infoCard}>
+            <Text style={[styles.sectionTitle, { color: colors.text, marginBottom: 12 }]}>
+              Session completed
+            </Text>
+            <View style={styles.sessionInfo}>
+              <View style={styles.infoRow}>
+                <Ionicons name="time-outline" size={16} color={colors.textSecondary} />
+                <Text style={[styles.infoText, { color: colors.textSecondary }]}>
+                  Total duration: {session.startedAt && session.completedAt
+                    ? formatDurationBetween(session.startedAt, session.completedAt)
+                    : session.startTime && (session.completedAt ?? session.endTime)
+                      ? formatDurationBetween(session.startTime, session.completedAt ?? session.endTime!)
+                      : '—'}
+                </Text>
+              </View>
+              <View style={styles.infoRow}>
+                <Ionicons name="radio-outline" size={16} color={colors.textSecondary} />
+                <Text style={[styles.infoText, { color: colors.textSecondary }]}>
+                  Monitoring ended
+                </Text>
+              </View>
+            </View>
+            <TouchableOpacity
+              style={[styles.rateButton, { backgroundColor: colors.primary }]}
+              onPress={() => {
+                // TODO: Navigate to rate sitter screen or open rating modal
+                Alert.alert('Rate sitter', 'Rating feature will be available here.');
+              }}
+            >
+              <Ionicons name="star" size={20} color={colors.white} />
+              <Text style={[styles.rateButtonText, { color: colors.white }]}>Rate sitter</Text>
+            </TouchableOpacity>
+          </Card>
+        )}
 
         {/* Session Timeline */}
         <SessionTimeline session={session} />
@@ -945,6 +1032,20 @@ const styles = StyleSheet.create({
   },
   chatbotCard: {
     marginBottom: 0,
+  },
+  rateButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+    borderRadius: 12,
+    marginTop: 16,
+  },
+  rateButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
   },
   chatbotButton: {
     flexDirection: 'row',

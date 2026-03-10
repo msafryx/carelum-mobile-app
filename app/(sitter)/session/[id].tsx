@@ -31,7 +31,9 @@ import {
   getSessionById,
   subscribeToSession,
   startSession,
-  completeSession,
+  setSessionMonitoringEnabled,
+  endSession,
+  requestSessionEnd,
   updateSessionStatus,
   acceptSessionRequest,
   cancelSession,
@@ -61,16 +63,22 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Audio from 'expo-av';
 import { format } from 'date-fns';
 
-// Helper function to format duration
+// Helper function to format duration (from start to now)
 function formatDuration(startTime: Date): string {
   const now = new Date();
   const diff = now.getTime() - startTime.getTime();
   const hours = Math.floor(diff / (1000 * 60 * 60));
   const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
-  
-  if (hours > 0) {
-    return `${hours}h ${minutes}m`;
-  }
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  return `${minutes}m`;
+}
+
+function formatDurationBetween(start: Date, end: Date): string {
+  const diff = end.getTime() - start.getTime();
+  if (diff <= 0) return '0m';
+  const hours = Math.floor(diff / (1000 * 60 * 60));
+  const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+  if (hours > 0) return `${hours}h ${minutes}m`;
   return `${minutes}m`;
 }
 
@@ -352,28 +360,37 @@ export default function SitterSessionDetailScreen() {
   const handleStartMonitoring = async () => {
     if (!session || !id || !user) return;
 
+    setActionLoading(true);
+    const toggleRes = await setSessionMonitoringEnabled(id, true);
+    setActionLoading(false);
+    if (!toggleRes.success || !toggleRes.data) {
+      Alert.alert('Error', toggleRes.error?.message || 'Failed to enable monitoring.');
+      return;
+    }
+
+    setSession(toggleRes.data);
     setIsMonitoringActive(true);
 
-    // Start GPS if enabled
-    if (gpsTrackingEnabled) {
-      handleToggleGPS(true);
-    }
-
-    // Start cry detection if enabled
-    if (cryDetectionEnabled) {
-      startCryDetection();
-    }
-
-    // Update session
-    await updateSessionStatus(id, session.status, {
-      monitoringEnabled: true,
-    } as any);
+    // Auto-start monitoring components
+    setGpsTrackingEnabled(true);
+    setCryDetectionEnabled(true);
+    handleToggleGPS(true);
+    handleToggleCryDetection(true);
+    startCryDetection();
   };
 
   // Handle stop monitoring
   const handleStopMonitoring = async () => {
     if (!session || !id) return;
 
+    setActionLoading(true);
+    const toggleRes = await setSessionMonitoringEnabled(id, false);
+    setActionLoading(false);
+    if (!toggleRes.success || !toggleRes.data) {
+      Alert.alert('Error', toggleRes.error?.message || 'Failed to disable monitoring.');
+      return;
+    }
+    setSession(toggleRes.data);
     setIsMonitoringActive(false);
 
     // Stop GPS tracking
@@ -390,9 +407,7 @@ export default function SitterSessionDetailScreen() {
     }
 
     // Update session
-    await updateSessionStatus(id, session.status, {
-      monitoringEnabled: false,
-    } as any);
+    // (Backend state already updated via /monitoring)
   };
 
   // Start cry detection recording
@@ -461,9 +476,22 @@ export default function SitterSessionDetailScreen() {
     }
   };
 
-  // Handle end session
+  // Handle end session (sitter or admin only; parent cannot end)
   const handleEndSession = async () => {
     if (!session || !id) return;
+
+    // If sitter, send request-end instead of actually ending
+    if (user?.role === 'sitter') {
+      setActionLoading(true);
+      const res = await requestSessionEnd(id);
+      setActionLoading(false);
+      if (res.success) {
+        Alert.alert('Request sent', 'Your request to end the session has been sent to the parent.');
+      } else {
+        Alert.alert('Error', res.error?.message || 'Failed to send end-session request.');
+      }
+      return;
+    }
 
     Alert.alert(
       'End Session',
@@ -475,18 +503,15 @@ export default function SitterSessionDetailScreen() {
           style: 'destructive',
           onPress: async () => {
             setActionLoading(true);
-
-            // Stop all monitoring
             await handleStopMonitoring();
-
-            const result = await completeSession(id);
-            if (result.success) {
-              Alert.alert('Success', 'Session ended successfully');
-              router.back();
+            const result = await endSession(id);
+            setActionLoading(false);
+            if (result.success && result.data) {
+              setSession(result.data);
+              Alert.alert('Success', 'Session ended successfully.');
             } else {
               Alert.alert('Error', result.error?.message || 'Failed to end session');
             }
-            setActionLoading(false);
           },
         },
       ]
@@ -1058,6 +1083,43 @@ export default function SitterSessionDetailScreen() {
               </TouchableOpacity>
             </Card>
           </>
+        )}
+
+        {/* Sitter: Completed session summary (duration + earnings) */}
+        {session.status === 'completed' && (
+          <Card style={styles.infoCard}>
+            <Text style={[styles.detailsSectionTitle, { color: colors.text }]}>
+              Session completed
+            </Text>
+            <View style={styles.sessionInfo}>
+              <View style={styles.infoRow}>
+                <View style={[styles.infoIconContainer, { backgroundColor: colors.success + '10' }]}>
+                  <Ionicons name="time" size={14} color={colors.success || '#10b981'} />
+                </View>
+                <Text style={[styles.infoText, { color: colors.text }]}>
+                  Session duration: {session.startedAt && session.completedAt
+                    ? formatDurationBetween(session.startedAt, session.completedAt)
+                    : session.startTime && (session.completedAt ?? session.endTime)
+                      ? formatDurationBetween(session.startTime, session.completedAt ?? session.endTime!)
+                      : '—'}
+                </Text>
+              </View>
+              {(session.totalAmount != null || session.hourlyRate != null) && (
+                <View style={styles.infoRow}>
+                  <View style={[styles.infoIconContainer, { backgroundColor: colors.warning + '10' }]}>
+                    <Ionicons name="cash" size={14} color={colors.warning || '#f59e0b'} />
+                  </View>
+                  <Text style={[styles.infoText, { color: colors.text }]}>
+                    Earnings: {session.totalAmount != null
+                      ? `Rs. ${session.totalAmount.toFixed(0)}`
+                      : session.hourlyRate != null
+                        ? `Rs. ${session.hourlyRate.toFixed(0)}/hr`
+                        : '—'}
+                  </Text>
+                </View>
+              )}
+            </View>
+          </Card>
         )}
 
         {/* Session Timeline */}

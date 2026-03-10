@@ -114,7 +114,14 @@ export async function createSessionRequest(
       cancelledBy: apiSession.cancelledBy,
       cancellationReason: apiSession.cancellationReason,
       completedAt: apiSession.completedAt ? new Date(apiSession.completedAt) : undefined,
+      endedAt: apiSession.endedAt ? new Date(apiSession.endedAt) : undefined,
+      endedAt: apiSession.endedAt ? new Date(apiSession.endedAt) : undefined,
+      endedAt: apiSession.endedAt ? new Date(apiSession.endedAt) : undefined,
       startedAt: (apiSession.startedAt ?? apiSession.started_at) ? new Date(apiSession.startedAt ?? apiSession.started_at) : undefined,
+      monitoringEnabled: (apiSession.monitoringEnabled ?? apiSession.monitoring_enabled) ?? undefined,
+      monitoringStartedAt: (apiSession.monitoringStartedAt ?? apiSession.monitoring_started_at) ? new Date(apiSession.monitoringStartedAt ?? apiSession.monitoring_started_at) : undefined,
+      lastLocationAt: (apiSession.lastLocationAt ?? apiSession.last_location_at) ? new Date(apiSession.lastLocationAt ?? apiSession.last_location_at) : undefined,
+      lastAudioSignalAt: (apiSession.lastAudioSignalAt ?? apiSession.last_audio_signal_at) ? new Date(apiSession.lastAudioSignalAt ?? apiSession.last_audio_signal_at) : undefined,
       createdAt: new Date(apiSession.createdAt),
       updatedAt: new Date(apiSession.updatedAt),
     };
@@ -161,6 +168,8 @@ export async function getSessionById(sessionId: string): Promise<ServiceResult<S
           cancellationReason: s.cancellationReason,
           completedAt: s.completedAt ? new Date(s.completedAt) : undefined,
           startedAt: (s.startedAt ?? s.started_at) ? new Date(s.startedAt ?? s.started_at) : undefined,
+          monitoringEnabled: (s.monitoringEnabled ?? s.monitoring_enabled) ?? undefined,
+          monitoringStartedAt: (s.monitoringStartedAt ?? s.monitoring_started_at) ? new Date(s.monitoringStartedAt ?? s.monitoring_started_at) : undefined,
           createdAt: new Date(s.createdAt || Date.now()),
           updatedAt: new Date(s.updatedAt || Date.now()),
         };
@@ -217,6 +226,7 @@ async function syncSessionFromAPI(sessionId: string): Promise<ServiceResult<Sess
       cancelledBy: apiSession.cancelledBy,
       cancellationReason: apiSession.cancellationReason,
       completedAt: apiSession.completedAt ? new Date(apiSession.completedAt) : undefined,
+      endedAt: apiSession.endedAt ? new Date(apiSession.endedAt) : undefined,
       startedAt: (apiSession.startedAt ?? apiSession.started_at) ? new Date(apiSession.startedAt ?? apiSession.started_at) : undefined,
       createdAt: new Date(apiSession.createdAt),
       updatedAt: new Date(apiSession.updatedAt),
@@ -351,7 +361,12 @@ async function syncSessionsFromAPI(
       cancelledBy: apiSession.cancelledBy,
       cancellationReason: apiSession.cancellationReason,
       completedAt: apiSession.completedAt ? new Date(apiSession.completedAt) : undefined,
+      endedAt: apiSession.endedAt ? new Date(apiSession.endedAt) : undefined,
       startedAt: (apiSession.startedAt ?? apiSession.started_at) ? new Date(apiSession.startedAt ?? apiSession.started_at) : undefined,
+      monitoringEnabled: (apiSession.monitoringEnabled ?? apiSession.monitoring_enabled) ?? undefined,
+      monitoringStartedAt: (apiSession.monitoringStartedAt ?? apiSession.monitoring_started_at) ? new Date(apiSession.monitoringStartedAt ?? apiSession.monitoring_started_at) : undefined,
+      lastLocationAt: (apiSession.lastLocationAt ?? apiSession.last_location_at) ? new Date(apiSession.lastLocationAt ?? apiSession.last_location_at) : undefined,
+      lastAudioSignalAt: (apiSession.lastAudioSignalAt ?? apiSession.last_audio_signal_at) ? new Date(apiSession.lastAudioSignalAt ?? apiSession.last_audio_signal_at) : undefined,
       createdAt: new Date(apiSession.createdAt),
       updatedAt: new Date(apiSession.updatedAt),
     }));
@@ -506,6 +521,10 @@ export async function startSession(sessionId: string): Promise<ServiceResult<Ses
       cancellationReason: apiSession.cancellationReason,
       completedAt: apiSession.completedAt ? new Date(apiSession.completedAt) : undefined,
       startedAt: (apiSession.startedAt ?? apiSession.started_at) ? new Date(apiSession.startedAt ?? apiSession.started_at) : undefined,
+      monitoringEnabled: (apiSession.monitoringEnabled ?? apiSession.monitoring_enabled) ?? undefined,
+      monitoringStartedAt: (apiSession.monitoringStartedAt ?? apiSession.monitoring_started_at) ? new Date(apiSession.monitoringStartedAt ?? apiSession.monitoring_started_at) : undefined,
+      lastLocationAt: (apiSession.lastLocationAt ?? apiSession.last_location_at) ? new Date(apiSession.lastLocationAt ?? apiSession.last_location_at) : undefined,
+      lastAudioSignalAt: (apiSession.lastAudioSignalAt ?? apiSession.last_audio_signal_at) ? new Date(apiSession.lastAudioSignalAt ?? apiSession.last_audio_signal_at) : undefined,
       createdAt: new Date(apiSession.createdAt),
       updatedAt: new Date(apiSession.updatedAt),
     };
@@ -519,17 +538,130 @@ export async function startSession(sessionId: string): Promise<ServiceResult<Ses
 }
 
 /**
- * Complete session
+ * Enable/disable monitoring (separate from session start).
+ * Backend enforces: session must be active; sitter-only (admin can only disable).
+ */
+export async function setSessionMonitoringEnabled(
+  sessionId: string,
+  enabled: boolean
+): Promise<ServiceResult<Session>> {
+  try {
+    const result = await apiRequest<any>(API_ENDPOINTS.SESSION_MONITORING(sessionId), {
+      method: 'PUT',
+      body: JSON.stringify({ enabled }),
+    });
+
+    if (!result.success) return result;
+
+    const apiSession = result.data;
+    const session: Session = {
+      id: apiSession.id,
+      parentId: apiSession.parentId,
+      sitterId: apiSession.sitterId || '',
+      childId: apiSession.childId,
+      childIds: parseChildIds(apiSession),
+      status: apiSession.status,
+      startTime: new Date(apiSession.startTime),
+      endTime: apiSession.endTime ? new Date(apiSession.endTime) : undefined,
+      location: apiSession.location,
+      hourlyRate: apiSession.hourlyRate,
+      totalAmount: apiSession.totalAmount,
+      notes: apiSession.notes,
+      searchScope: apiSession.searchScope || apiSession.search_scope,
+      maxDistanceKm: apiSession.maxDistanceKm || apiSession.max_distance_km,
+      timeSlots: parseTimeSlots(apiSession),
+      expiresAt: apiSession.expiresAt ? new Date(apiSession.expiresAt) : undefined,
+      cancelledAt: apiSession.cancelledAt ? new Date(apiSession.cancelledAt) : undefined,
+      cancelledBy: apiSession.cancelledBy,
+      cancellationReason: apiSession.cancellationReason,
+      completedAt: apiSession.completedAt ? new Date(apiSession.completedAt) : undefined,
+      startedAt: (apiSession.startedAt ?? apiSession.started_at) ? new Date(apiSession.startedAt ?? apiSession.started_at) : undefined,
+      monitoringEnabled: (apiSession.monitoringEnabled ?? apiSession.monitoring_enabled) ?? undefined,
+      monitoringStartedAt: (apiSession.monitoringStartedAt ?? apiSession.monitoring_started_at) ? new Date(apiSession.monitoringStartedAt ?? apiSession.monitoring_started_at) : undefined,
+      lastLocationAt: (apiSession.lastLocationAt ?? apiSession.last_location_at) ? new Date(apiSession.lastLocationAt ?? apiSession.last_location_at) : undefined,
+      lastAudioSignalAt: (apiSession.lastAudioSignalAt ?? apiSession.last_audio_signal_at) ? new Date(apiSession.lastAudioSignalAt ?? apiSession.last_audio_signal_at) : undefined,
+      createdAt: new Date(apiSession.createdAt),
+      updatedAt: new Date(apiSession.updatedAt),
+    };
+
+    return { success: true, data: session };
+  } catch (error: any) {
+    return { success: false, error: handleUnexpectedError(error) };
+  }
+}
+
+/**
+ * End session (sitter or admin). POST /api/sessions/{id}/end.
+ * Returns updated session. Parent cannot end (backend returns 403).
+ */
+export async function endSession(sessionId: string): Promise<ServiceResult<Session>> {
+  try {
+    const result = await apiRequest<any>(API_ENDPOINTS.SESSION_END(sessionId), {
+      method: 'POST',
+    });
+    if (!result.success) return result;
+    const apiSession = result.data;
+    const session: Session = {
+      id: apiSession.id,
+      parentId: apiSession.parentId,
+      sitterId: apiSession.sitterId || '',
+      childId: apiSession.childId,
+      childIds: parseChildIds(apiSession),
+      status: apiSession.status,
+      startTime: new Date(apiSession.startTime),
+      endTime: apiSession.endTime ? new Date(apiSession.endTime) : undefined,
+      location: apiSession.location,
+      hourlyRate: apiSession.hourlyRate,
+      totalAmount: apiSession.totalAmount,
+      notes: apiSession.notes,
+      searchScope: apiSession.searchScope || apiSession.search_scope,
+      maxDistanceKm: apiSession.maxDistanceKm || apiSession.max_distance_km,
+      timeSlots: parseTimeSlots(apiSession),
+      expiresAt: apiSession.expiresAt ? new Date(apiSession.expiresAt) : undefined,
+      cancelledAt: apiSession.cancelledAt ? new Date(apiSession.cancelledAt) : undefined,
+      cancelledBy: apiSession.cancelledBy,
+      cancellationReason: apiSession.cancellationReason,
+      completedAt: apiSession.completedAt ? new Date(apiSession.completedAt) : undefined,
+      startedAt: (apiSession.startedAt ?? apiSession.started_at) ? new Date(apiSession.startedAt ?? apiSession.started_at) : undefined,
+      monitoringEnabled: (apiSession.monitoringEnabled ?? apiSession.monitoring_enabled) ?? undefined,
+      monitoringStartedAt: (apiSession.monitoringStartedAt ?? apiSession.monitoring_started_at) ? new Date(apiSession.monitoringStartedAt ?? apiSession.monitoring_started_at) : undefined,
+      lastLocationAt: (apiSession.lastLocationAt ?? apiSession.last_location_at) ? new Date(apiSession.lastLocationAt ?? apiSession.last_location_at) : undefined,
+      lastAudioSignalAt: (apiSession.lastAudioSignalAt ?? apiSession.last_audio_signal_at) ? new Date(apiSession.lastAudioSignalAt ?? apiSession.last_audio_signal_at) : undefined,
+      createdAt: new Date(apiSession.createdAt),
+      updatedAt: new Date(apiSession.updatedAt),
+    };
+    return { success: true, data: session };
+  } catch (error: any) {
+    return { success: false, error: handleUnexpectedError(error) };
+  }
+}
+
+/**
+ * Complete session (alias for endSession; returns void for backward compatibility).
  */
 export async function completeSession(
   sessionId: string,
-  rating?: number,
-  review?: string
+  _rating?: number,
+  _review?: string
 ): Promise<ServiceResult<void>> {
-  return updateSessionStatus(sessionId, 'completed', {
-    endTime: new Date(),
-    notes: review,
-  } as any);
+  const result = await endSession(sessionId);
+  if (!result.success) return result;
+  return { success: true };
+}
+
+/**
+ * Sitter request to end session (no status change; notifies parent).
+ */
+export async function requestSessionEnd(sessionId: string): Promise<ServiceResult<void>> {
+  try {
+    const result = await apiRequest<any>(API_ENDPOINTS.SESSION_REQUEST_END(sessionId), {
+      method: 'POST',
+    });
+    if (!result.success) return result;
+    return { success: true };
+  } catch (error: any) {
+    return { success: false, error: handleUnexpectedError(error) };
+  }
 }
 
 /**

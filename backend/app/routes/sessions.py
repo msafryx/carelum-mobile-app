@@ -103,7 +103,7 @@ def _create_alert(
 
 
 def _create_session_event(supabase_client, session_id: str, event_type: str, triggered_by: str) -> None:
-    """Create a timeline event (session_started, session_completed, session_cancelled)."""
+    """Create a timeline event (session_started, session_completed, session_cancelled, etc.)."""
     if not supabase_client:
         return
     try:
@@ -151,7 +151,12 @@ class SessionResponse(BaseModel):
     cancelledBy: Optional[str] = None
     cancellationReason: Optional[str] = None
     completedAt: Optional[str] = None
+    endedAt: Optional[str] = None
     startedAt: Optional[str] = None  # When sitter started session (LIVE)
+    monitoringEnabled: Optional[bool] = None
+    lastLocationAt: Optional[str] = None
+    lastAudioSignalAt: Optional[str] = None
+    monitoringStartedAt: Optional[str] = None
     createdAt: str
     updatedAt: str
 
@@ -181,6 +186,10 @@ class UpdateSessionRequest(BaseModel):
     totalAmount: Optional[float] = None
     notes: Optional[str] = None
     cancellationReason: Optional[str] = None  # For cancellation tracking
+
+
+class MonitoringToggleRequest(BaseModel):
+    enabled: bool
 
 
 def db_to_session_response(session_data: dict) -> SessionResponse:
@@ -228,7 +237,12 @@ def db_to_session_response(session_data: dict) -> SessionResponse:
         cancelledBy=session_data.get("cancelled_by"),
         cancellationReason=session_data.get("cancellation_reason"),
         completedAt=session_data.get("completed_at"),
+        endedAt=session_data.get("ended_at"),
         startedAt=session_data.get("started_at"),
+        monitoringEnabled=session_data.get("monitoring_enabled"),
+        lastLocationAt=session_data.get("last_location_at"),
+        lastAudioSignalAt=session_data.get("last_audio_signal_at"),
+        monitoringStartedAt=session_data.get("monitoring_started_at"),
         createdAt=session_data["created_at"],
         updatedAt=session_data.get("updated_at", session_data["created_at"])
     )
@@ -473,6 +487,19 @@ async def start_session(
         }
         supabase.table("sessions").update(update_data).eq("id", session_id).execute()
         _create_session_event(supabase, session_id, "session_started", current_user.id)
+        # Notify parent that sitter has started the session
+        parent_id = session_data.get("parent_id")
+        if parent_id:
+            _create_alert(
+                supabase,
+                session_id=session_id,
+                parent_id=parent_id,
+                sitter_id=current_user.id,
+                alert_type="session_started",
+                title="Session started",
+                message="Your sitter has started the session.",
+                child_id=session_data.get("child_id"),
+            )
 
         response = supabase.table("sessions").select("*").eq("id", session_id).single().execute()
         if not response.data:
@@ -486,6 +513,325 @@ async def start_session(
         raise
     except Exception as e:
         raise handle_error(e, "Failed to start session")
+
+
+class EndSessionRequest(BaseModel):
+    endedBy: Optional[str] = None  # 'parent' | 'admin' (optional; derived from role if missing)
+
+
+@router.post("/{session_id}/end", response_model=SessionResponse)
+async def end_session(
+    session_id: str,
+    payload: Optional[EndSessionRequest] = None,
+    current_user: CurrentUser = Depends(verify_token),
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+):
+    """
+    Safely complete a session.
+
+    Corrected rules:
+    - Parent (session parent) can end active session at any time.
+    - Admin can force end any non-terminal session.
+    - Sitter cannot end sessions (must use request-end flow).
+    """
+    try:
+        auth_token = credentials.credentials
+        supabase = get_supabase_with_auth(auth_token)
+        if not supabase:
+            raise AppError(
+                code="DB_NOT_AVAILABLE",
+                message="Database connection not available",
+                status_code=503,
+            )
+
+        response = supabase.table("sessions").select("*").eq("id", session_id).single().execute()
+        if not response.data:
+            raise AppError(
+                code="SESSION_NOT_FOUND",
+                message="Session not found",
+                status_code=404,
+            )
+        session_data = response.data
+
+        # Verify access at session level (parent, sitter, admin)
+        if not verify_session_access(session_data, current_user):
+            raise AppError(
+                code="FORBIDDEN",
+                message="You don't have access to this session",
+                status_code=403,
+            )
+
+        parent_id = session_data.get("parent_id")
+        sitter_id = session_data.get("sitter_id")
+
+        # Determine who is ending the session
+        ended_by = (payload.endedBy if payload else None) or (
+            "parent" if current_user.role == "parent" else
+            "admin" if current_user.role == "admin" else
+            None
+        )
+
+        # Sitter is never allowed to end
+        if current_user.role == "sitter":
+            raise AppError(
+                code="FORBIDDEN",
+                message="Sitters cannot end sessions. They can only request to end.",
+                status_code=403,
+            )
+
+        # Parent: must be owning parent
+        if current_user.role == "parent":
+            if parent_id != current_user.id:
+                raise AppError(
+                    code="FORBIDDEN",
+                    message="Only the session parent can end this session",
+                    status_code=403,
+                )
+
+        # Admin: always allowed (force end)
+        if current_user.role not in ["parent", "admin"]:
+            raise AppError(
+                code="FORBIDDEN",
+                message="Only parent or admin can end this session",
+                status_code=403,
+            )
+
+        current_status = session_data.get("status")
+
+        # Idempotent: already completed
+        if current_status == "completed":
+            return db_to_session_response(session_data)
+
+        # Only allow ending non-terminal sessions
+        if current_status in ["cancelled"]:
+            raise AppError(
+                code="INVALID_STATUS",
+                message="Cannot end a cancelled session",
+                status_code=400,
+            )
+
+        # Must be active to end (for safety / monitoring shutdown)
+        if current_status != "active":
+            raise AppError(
+                code="INVALID_STATUS",
+                message="Session is not active",
+                status_code=400,
+            )
+
+        now_iso = datetime.utcnow().isoformat()
+        update_data = {
+            "status": "completed",
+            "completed_at": now_iso,
+            "ended_at": now_iso,
+            "updated_at": now_iso,
+            "monitoring_enabled": False,
+        }
+        if not session_data.get("end_time"):
+            update_data["end_time"] = now_iso
+
+        supabase.table("sessions").update(update_data).eq("id", session_id).execute()
+
+        # Timeline event: session_completed (triggered_by parent/admin)
+        _create_session_event(supabase, session_id, "session_completed", current_user.id)
+
+        # Notify parent that session has completed
+        if parent_id:
+            _create_alert(
+                supabase,
+                session_id=session_id,
+                parent_id=parent_id,
+                sitter_id=session_data.get("sitter_id"),
+                alert_type="session_completed",
+                title="Session completed",
+                message="Your session has been completed.",
+                child_id=session_data.get("child_id"),
+            )
+
+        updated = supabase.table("sessions").select("*").eq("id", session_id).single().execute()
+        if not updated.data:
+            raise AppError(
+                code="UPDATE_FAILED",
+                message="Failed to update session",
+                status_code=500,
+            )
+        return db_to_session_response(updated.data)
+    except AppError:
+        raise
+    except Exception as e:
+        raise handle_error(e, "Failed to end session")
+
+
+@router.post("/{session_id}/request-end")
+async def request_end_session(
+    session_id: str,
+    current_user: CurrentUser = Depends(verify_token),
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+):
+    """
+    Sitter requests to end an active session.
+    Creates timeline event + alert to parent. Does NOT change status.
+    """
+    try:
+        auth_token = credentials.credentials
+        supabase = get_supabase_with_auth(auth_token)
+        if not supabase:
+            raise AppError(
+                code="DB_NOT_AVAILABLE",
+                message="Database connection not available",
+                status_code=503,
+            )
+
+        response = supabase.table("sessions").select("*").eq("id", session_id).single().execute()
+        if not response.data:
+            raise AppError(
+                code="SESSION_NOT_FOUND",
+                message="Session not found",
+                status_code=404,
+            )
+        session_data = response.data
+
+        # Only assigned sitter can request end, and session must be active
+        if current_user.role != "sitter":
+            raise AppError(
+                code="FORBIDDEN",
+                message="Only the sitter can request to end the session",
+                status_code=403,
+            )
+        if session_data.get("sitter_id") != current_user.id:
+            raise AppError(
+                code="FORBIDDEN",
+                message="Only the assigned sitter can request to end this session",
+                status_code=403,
+            )
+        if session_data.get("status") != "active":
+            raise AppError(
+                code="INVALID_STATUS",
+                message="Only active sessions can be requested to end",
+                status_code=400,
+            )
+
+        # Timeline event
+        _create_session_event(supabase, session_id, "sitter_requested_end", current_user.id)
+
+        # Notify parent
+        parent_id = session_data.get("parent_id")
+        if parent_id:
+            _create_alert(
+                supabase,
+                session_id=session_id,
+                parent_id=parent_id,
+                sitter_id=current_user.id,
+                alert_type="session_reminder",
+                title="Sitter requested to end session",
+                message="Your sitter has requested to end the session. Please review and decide whether to extend or finish.",
+                child_id=session_data.get("child_id"),
+            )
+
+        return {"success": True}
+    except AppError:
+        raise
+    except Exception as e:
+        raise handle_error(e, "Failed to request session end")
+
+@router.put("/{session_id}/monitoring", response_model=SessionResponse)
+async def set_monitoring(
+    session_id: str,
+    payload: MonitoringToggleRequest,
+    current_user: CurrentUser = Depends(verify_token),
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+):
+    """
+    Enable/disable monitoring (separate from session start).
+
+    Rules:
+    - Sitter can enable/disable for their assigned active session
+    - Admin can only disable monitoring (safety)
+    - Session must be active
+
+    Updates:
+    - monitoring_enabled
+    - monitoring_started_at (set when enabling; cleared when disabling)
+    Inserts session_event: monitoring_enabled
+    """
+    try:
+        auth_token = credentials.credentials
+        supabase = get_supabase_with_auth(auth_token)
+        if not supabase:
+            raise AppError(
+                code="DB_NOT_AVAILABLE",
+                message="Database connection not available",
+                status_code=503,
+            )
+
+        response = supabase.table("sessions").select("*").eq("id", session_id).single().execute()
+        if not response.data:
+            raise AppError(
+                code="SESSION_NOT_FOUND",
+                message="Session not found",
+                status_code=404,
+            )
+        session_data = response.data
+
+        if not verify_session_access(session_data, current_user):
+            raise AppError(
+                code="FORBIDDEN",
+                message="You don't have access to this session",
+                status_code=403,
+            )
+
+        if session_data.get("status") != "active":
+            raise AppError(
+                code="INVALID_STATUS",
+                message="Session must be active to change monitoring",
+                status_code=400,
+            )
+
+        # Authorization: sitter (assigned) can toggle; admin can only disable
+        sitter_id = session_data.get("sitter_id")
+        if current_user.role == "admin":
+            if payload.enabled is True:
+                raise AppError(
+                    code="FORBIDDEN",
+                    message="Admin cannot enable monitoring",
+                    status_code=403,
+                )
+        else:
+            if current_user.role != "sitter":
+                raise AppError(
+                    code="FORBIDDEN",
+                    message="Only sitter can change monitoring",
+                    status_code=403,
+                )
+            if sitter_id != current_user.id:
+                raise AppError(
+                    code="FORBIDDEN",
+                    message="Only the assigned sitter can change monitoring",
+                    status_code=403,
+                )
+
+        now_iso = datetime.utcnow().isoformat()
+        update_data = {
+            "monitoring_enabled": payload.enabled,
+            "monitoring_started_at": now_iso if payload.enabled else None,
+            "updated_at": now_iso,
+        }
+        supabase.table("sessions").update(update_data).eq("id", session_id).execute()
+
+        # Session event (best-effort)
+        _create_session_event(supabase, session_id, "monitoring_enabled", current_user.id)
+
+        updated = supabase.table("sessions").select("*").eq("id", session_id).single().execute()
+        if not updated.data:
+            raise AppError(
+                code="UPDATE_FAILED",
+                message="Failed to update monitoring",
+                status_code=500,
+            )
+        return db_to_session_response(updated.data)
+    except AppError:
+        raise
+    except Exception as e:
+        raise handle_error(e, "Failed to update monitoring")
 
 
 @router.post("", response_model=SessionResponse)

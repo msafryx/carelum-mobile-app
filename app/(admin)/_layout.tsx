@@ -6,6 +6,7 @@ export default function AdminLayout() {
     <ErrorBoundary>
       <Stack screenOptions={{ headerShown: false }}>
         <Stack.Screen name="home" />
+        <Stack.Screen name="sessions" />
         <Stack.Screen name="verifications" />
         <Stack.Screen name="users" />
         <Stack.Screen name="notifications" />

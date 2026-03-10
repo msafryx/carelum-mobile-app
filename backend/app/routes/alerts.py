@@ -233,7 +233,15 @@ async def create_alert(
                 message="Failed to create alert",
                 status_code=500
             )
-        
+        # For cry_detection alerts, update session last_audio_signal_at for monitoring health
+        try:
+            if alert_data.type == "cry_detection" and alert_data.sessionId:
+                supabase.table("sessions").update(
+                    {"last_audio_signal_at": datetime.utcnow().isoformat()}
+                ).eq("id", alert_data.sessionId).execute()
+        except Exception as update_err:
+            print(f"⚠️ Failed to update last_audio_signal_at for session {alert_data.sessionId}: {update_err}")
+
         return db_to_alert_response(response.data[0])
         
     except AppError:

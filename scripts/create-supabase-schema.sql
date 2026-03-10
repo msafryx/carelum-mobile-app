@@ -240,8 +240,15 @@ CREATE TABLE IF NOT EXISTS sessions (
   cancellation_reason TEXT,
   -- Completion tracking
   completed_at TIMESTAMPTZ,
+  ended_at TIMESTAMPTZ,
   -- Session start (when sitter starts session → LIVE)
   started_at TIMESTAMPTZ,
+  -- Monitoring runtime health
+  last_location_at TIMESTAMPTZ,
+  last_audio_signal_at TIMESTAMPTZ,
+  -- Monitoring (separate from session start)
+  monitoring_enabled BOOLEAN DEFAULT FALSE,
+  monitoring_started_at TIMESTAMPTZ,
   -- Request expiration (for OPEN status requests)
   expires_at TIMESTAMPTZ, -- When the request expires (for OPEN status requests). Used to filter out expired requests in the babysitter requests feed.
   -- Timestamps
@@ -253,7 +260,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE TABLE IF NOT EXISTS session_events (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-  type TEXT NOT NULL CHECK (type IN ('session_started', 'session_completed', 'session_cancelled')),
+  type TEXT NOT NULL CHECK (type IN ('session_started', 'session_completed', 'session_cancelled', 'monitoring_enabled', 'sitter_requested_end', 'session_time_expired', 'session_extended', 'session_auto_completed', 'admin_force_end')),
   triggered_by UUID REFERENCES users(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -278,7 +285,7 @@ CREATE TABLE IF NOT EXISTS alerts (
   child_id UUID REFERENCES children(id) ON DELETE CASCADE,
   parent_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   sitter_id UUID REFERENCES users(id) ON DELETE SET NULL,
-  type TEXT NOT NULL CHECK (type IN ('cry_detection', 'emergency', 'gps_anomaly', 'session_reminder', 'session_request', 'session_accepted', 'session_cancelled', 'session_started')),
+  type TEXT NOT NULL CHECK (type IN ('cry_detection', 'emergency', 'gps_anomaly', 'session_reminder', 'session_request', 'session_accepted', 'session_cancelled', 'session_started', 'session_completed')),
   severity TEXT NOT NULL CHECK (severity IN ('low', 'medium', 'high', 'critical')),
   title TEXT NOT NULL,
   message TEXT NOT NULL,

@@ -118,7 +118,14 @@ async def track_location(
                 message="Failed to record GPS location",
                 status_code=500
             )
-        
+        # Update session last_location_at for monitoring health
+        try:
+            supabase.table("sessions").update(
+                {"last_location_at": datetime.utcnow().isoformat()}
+            ).eq("id", location_data.sessionId).execute()
+        except Exception as update_err:
+            print(f"⚠️ Failed to update last_location_at for session {location_data.sessionId}: {update_err}")
+
         return db_to_gps_response(response.data[0])
         
     except AppError:

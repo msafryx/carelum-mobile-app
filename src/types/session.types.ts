@@ -65,12 +65,16 @@ export interface Session {
   
   // AI Monitoring
   monitoringEnabled?: boolean;
+  monitoringStartedAt?: Date;
+  lastLocationAt?: Date;
+  lastAudioSignalAt?: Date;
   cryDetectionEnabled?: boolean;
   lastCryDetection?: Date;
   cryAlertsCount?: number;
   
   // Completion
   completedAt?: Date;
+  endedAt?: Date;
   /** When sitter started the session (LIVE). Used for session timer. */
   startedAt?: Date;
   parentRating?: number;
