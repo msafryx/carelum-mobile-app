@@ -23,13 +23,12 @@ export default function ChatbotScreen() {
   const { user } = useAuth();
   const [menuVisible, setMenuVisible] = useState(false);
 
-  // If no session context, show empty state or redirect
-  if (!sessionId || !childId || !sitterId) {
+  if (!sessionId || !childId) {
     return (
       <View style={[styles.container, { backgroundColor: colors.background }]}>
-        <Header 
-          showLogo={true} 
-          title="AI Assistant" 
+        <Header
+          showLogo={true}
+          title="Child Assistant"
           showBack={true}
           rightComponent={
             <TouchableOpacity
@@ -42,9 +41,9 @@ export default function ChatbotScreen() {
           }
         />
         <View style={styles.emptyContainer}>
-          <Ionicons name="chatbubbles-outline" size={64} color={colors.textSecondary} />
+          <Ionicons name="reader-outline" size={64} color={colors.textSecondary} />
           <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
-            Please access the chatbot from an active session
+            Please open the Child Assistant from a session.
           </Text>
         </View>
         <HamburgerMenu visible={menuVisible} onClose={() => setMenuVisible(false)} />

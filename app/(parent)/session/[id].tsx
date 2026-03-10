@@ -7,7 +7,9 @@ import EnhancedGPSMap from '@/src/components/gps/EnhancedGPSMap';
 import CancelSessionModal from '@/src/components/session/CancelSessionModal';
 import CryDetectionIndicator from '@/src/components/session/CryDetectionIndicator';
 import SessionControls from '@/src/components/session/SessionControls';
+import EmergencyCallButton from '@/src/components/session/EmergencyCallButton';
 import SessionTimeline from '@/src/components/session/SessionTimeline';
+import { createReview } from '@/src/services/review.service';
 import Card from '@/src/components/ui/Card';
 import ErrorDisplay from '@/src/components/ui/ErrorDisplay';
 import HamburgerMenu from '@/src/components/ui/HamburgerMenu';
@@ -910,9 +912,9 @@ export default function SessionDetailScreen() {
                 router.push(`/(parent)/chatbot?sessionId=${id}&childId=${child.id}&sitterId=${session.sitterId}`);
               }}
             >
-              <Ionicons name="chatbubbles" size={24} color={colors.white} />
+              <Ionicons name="reader-outline" size={24} color={colors.white} />
               <Text style={[styles.chatbotButtonText, { color: colors.white }]}>
-                Ask AI Assistant
+                Child Assistant
               </Text>
               <Ionicons name="chevron-forward" size={20} color={colors.white} />
             </TouchableOpacity>
@@ -955,20 +957,45 @@ export default function SessionDetailScreen() {
             </View>
             <TouchableOpacity
               style={[styles.rateButton, { backgroundColor: colors.primary }]}
-              onPress={() => {
-                // TODO: Navigate to rate sitter screen or open rating modal
-                Alert.alert('Rate sitter', 'Rating feature will be available here.');
+              onPress={async () => {
+                if (!session.sitterId) {
+                  Alert.alert('Unavailable', 'Sitter information is missing for this session.');
+                  return;
+                }
+
+                const { getSessionReport } = await import('@/src/services/session.service');
+                const reportRes = await getSessionReport(session.id);
+                if (!reportRes.success || !reportRes.data) {
+                  Alert.alert('Error', reportRes.error?.message || 'Failed to load session report.');
+                  return;
+                }
+
+                const report = reportRes.data;
+                const lines = [
+                  `Session: ${report.sessionId}`,
+                  report.startedAt ? `Started: ${report.startedAt}` : null,
+                  report.endedAt ? `Ended: ${report.endedAt}` : null,
+                  report.monitoringDurationMinutes != null
+                    ? `Monitoring: ${report.monitoringDurationMinutes} min`
+                    : null,
+                  `Cry alerts: ${report.cryAlertCount}`,
+                  `GPS points: ${report.gpsPointCount}`,
+                ].filter(Boolean);
+
+                Alert.alert('Session report', lines.join('\n'));
               }}
             >
-              <Ionicons name="star" size={20} color={colors.white} />
-              <Text style={[styles.rateButtonText, { color: colors.white }]}>Rate sitter</Text>
+              <Ionicons name="document-text" size={20} color={colors.white} />
+              <Text style={[styles.rateButtonText, { color: colors.white }]}>Download report</Text>
             </TouchableOpacity>
           </Card>
         )}
 
         {/* Session Timeline */}
-        <SessionTimeline session={session} />
+        <SessionTimeline session={session} role="parent" />
       </ScrollView>
+
+      <EmergencyCallButton session={session} role="parent" />
 
       {/* Cancel Session Modal */}
       {cancelModalVisible && session && (

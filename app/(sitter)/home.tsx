@@ -9,6 +9,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View, RefreshControl, ActivityIndicator, Image } from 'react-native';
 import { useAuth } from '@/src/hooks/useAuth';
 import { getUserSessions, discoverAvailableSessions } from '@/src/services/session.service';
+import EmergencyCallSheet from '@/src/components/session/EmergencyCallSheet';
 import { getChildById } from '@/src/services/child.service';
 import { getUserById } from '@/src/services/admin.service';
 import { updateUserProfileViaAPI } from '@/src/services/user-api.service';
@@ -90,6 +91,7 @@ export default function SitterHomeScreen() {
   // Will be synced when profile loads
   const [isActive, setIsActive] = useState(userProfile?.isActive ?? false);
   const [updatingActiveStatus, setUpdatingActiveStatus] = useState(false);
+  const [emergencySheetVisible, setEmergencySheetVisible] = useState(false);
 
   const handleProfilePress = () => {
     // Always route to profile setup from homepage
@@ -523,10 +525,44 @@ export default function SitterHomeScreen() {
 
       <TouchableOpacity
         style={[styles.messagesButton, { backgroundColor: colors.primary }]}
-        onPress={() => router.push('/(sitter)/messages')}
+        onPress={() => {
+          const session = activeSessions[0] || upcomingSessions[0];
+          if (session?.id && session?.childId) {
+            router.push(`/(sitter)/chatbot?sessionId=${session.id}&childId=${session.childId}` as any);
+          } else {
+            Alert.alert(
+              'Child Assistant',
+              'Open the Child Assistant from an active or upcoming session.'
+            );
+          }
+        }}
       >
         <Ionicons name="chatbubbles" size={28} color={colors.white} />
       </TouchableOpacity>
+
+      <TouchableOpacity
+        style={[styles.emergencyButton, { backgroundColor: colors.emergency || '#dc2626' }]}
+        onPress={() => {
+          const session = activeSessions[0];
+          if (session?.id && session?.status === 'active') {
+            setEmergencySheetVisible(true);
+          } else {
+            Alert.alert(
+              'Emergency call',
+              'No active session. Start a session to use emergency call.'
+            );
+          }
+        }}
+      >
+        <Ionicons name="call" size={26} color={colors.white} />
+      </TouchableOpacity>
+
+      <EmergencyCallSheet
+        sessionId={activeSessions[0]?.id ?? ''}
+        role="sitter"
+        visible={emergencySheetVisible}
+        onClose={() => setEmergencySheetVisible(false)}
+      />
 
       <SitterHamburgerMenu
         visible={menuVisible}
@@ -573,6 +609,21 @@ const styles = StyleSheet.create({
     position: 'absolute',
     bottom: 30,
     right: 20,
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+  },
+  emergencyButton: {
+    position: 'absolute',
+    bottom: 30,
+    left: 20,
     width: 60,
     height: 60,
     borderRadius: 30,

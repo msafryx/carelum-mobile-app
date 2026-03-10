@@ -7,6 +7,7 @@ import { useAuth } from '@/src/hooks/useAuth';
 import { getAll, save, STORAGE_KEYS } from '@/src/services/local-storage.service';
 import { getUserSessions, cancelSession, subscribeToUserSessions } from '@/src/services/session.service';
 import CancelSessionModal from '@/src/components/session/CancelSessionModal';
+import EmergencyCallSheet from '@/src/components/session/EmergencyCallSheet';
 import { getParentChildren, getChildById } from '@/src/services/child.service';
 import { getUserById } from '@/src/services/admin.service';
 import { Session } from '@/src/types/session.types';
@@ -81,6 +82,7 @@ export default function ParentHomeScreen() {
   const [searchDurations, setSearchDurations] = useState<Record<string, string>>({});
   const searchDurationIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const [cancelling, setCancelling] = useState(false);
+  const [emergencySheetVisible, setEmergencySheetVisible] = useState(false);
   const sessionSubscriptionRef = useRef<(() => void) | null>(null);
 
   const loadSessions = useCallback(async (isRefresh = false) => {
@@ -661,17 +663,44 @@ export default function ParentHomeScreen() {
 
       <TouchableOpacity
         style={[styles.chatbotButton, { backgroundColor: colors.primary }]}
-        onPress={() => router.push('/(parent)/messages')}
+        onPress={() => {
+          const session = activeSessions[0] || upcomingSessions[0];
+          if (session?.id && session?.childId) {
+            router.push(`/(parent)/chatbot?sessionId=${session.id}&childId=${session.childId}` as any);
+          } else {
+            Alert.alert(
+              'Child Assistant',
+              'Open the Child Assistant from an active or upcoming session.'
+            );
+          }
+        }}
       >
         <Ionicons name="chatbubbles" size={28} color={colors.white} />
       </TouchableOpacity>
 
       <TouchableOpacity
-        style={[styles.emergencyButton, { backgroundColor: colors.emergency }]}
-        onPress={() => {}}
+        style={[styles.emergencyButton, { backgroundColor: colors.emergency || '#dc2626' }]}
+        onPress={() => {
+          const session = activeSessions[0];
+          if (session?.id && session?.status === 'active') {
+            setEmergencySheetVisible(true);
+          } else {
+            Alert.alert(
+              'Emergency call',
+              'No active session. Start a session to use emergency call.'
+            );
+          }
+        }}
       >
         <Ionicons name="call" size={26} color={colors.white} />
       </TouchableOpacity>
+
+      <EmergencyCallSheet
+        sessionId={activeSessions[0]?.id ?? ''}
+        role="parent"
+        visible={emergencySheetVisible}
+        onClose={() => setEmergencySheetVisible(false)}
+      />
 
       <HamburgerMenu
         visible={menuVisible}

@@ -73,9 +73,13 @@ export const API_ENDPOINTS = {
   // Sessions
   SESSIONS: '/api/sessions',
   SESSION_BY_ID: (id: string) => `/api/sessions/${id}`,
+  SESSION_REPORT: (id: string) => `/api/sessions/${id}/report`,
+  SESSION_EMERGENCY_INFO: (id: string) => `/api/sessions/${id}/emergency-info`,
+  SESSION_EMERGENCY_CALL: (id: string) => `/api/sessions/${id}/emergency-call`,
   SESSION_START: (id: string) => `/api/sessions/${id}/start`,
   SESSION_MONITORING: (id: string) => `/api/sessions/${id}/monitoring`,
   SESSION_END: (id: string) => `/api/sessions/${id}/end`,
+  SESSION_EVENTS: (id: string) => `/api/sessions/${id}/events`,
   SESSION_REQUEST_END: (id: string) => `/api/sessions/${id}/request-end`,
   SESSION_ALERTS: (id: string) => `/api/sessions/${id}/alerts`,
   SESSION_GPS: (id: string) => `/api/gps/sessions/${id}/gps`,
@@ -84,6 +88,7 @@ export const API_ENDPOINTS = {
   CHILDREN: '/api/children',
   CHILD_BY_ID: (id: string) => `/api/children/${id}`,
   CHILD_INSTRUCTIONS: (id: string) => `/api/children/${id}/instructions`,
+  CHILD_ASSISTANT: '/api/child-assistant',
   // Alerts
   ALERTS: '/api/alerts',
   ALERT_BY_ID: (id: string) => `/api/alerts/${id}`,

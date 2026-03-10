@@ -7,6 +7,7 @@ from typing import Optional, List
 from decimal import Decimal
 from datetime import datetime
 import json
+import os
 
 from app.utils.auth import verify_token, CurrentUser, security
 from app.utils.error_handler import handle_error, AppError
@@ -159,6 +160,54 @@ class SessionResponse(BaseModel):
     monitoringStartedAt: Optional[str] = None
     createdAt: str
     updatedAt: str
+
+
+class SessionEventResponse(BaseModel):
+    """Session timeline event"""
+    id: str
+    sessionId: str
+    type: str
+    triggeredBy: Optional[str] = None
+    createdAt: str
+
+
+class SessionReportResponse(BaseModel):
+    """Aggregated session report for parent/sitter/admin."""
+    sessionId: str
+    parentId: str
+    sitterId: Optional[str]
+    childId: str
+    status: str
+    startedAt: Optional[str] = None
+    endedAt: Optional[str] = None
+    monitoringStartedAt: Optional[str] = None
+    monitoringEnabled: Optional[bool] = None
+    lastLocationAt: Optional[str] = None
+    lastAudioSignalAt: Optional[str] = None
+    # Derived metrics
+    monitoringDurationMinutes: Optional[int] = None
+    cryAlertCount: int
+    gpsPointCount: int
+    # Basic parties summary
+    parentName: Optional[str] = None
+    sitterName: Optional[str] = None
+    childName: Optional[str] = None
+
+
+class EmergencyInfoResponse(BaseModel):
+    """Phones and labels for emergency call bottom sheet."""
+    emergencyNumber: str
+    sitterPhone: Optional[str] = None
+    parentPhone: Optional[str] = None
+    childEmergencyContactName: Optional[str] = None
+    childEmergencyContactPhone: Optional[str] = None
+    doctorContact: Optional[str] = None
+    doctorPhone: Optional[str] = None
+
+
+class EmergencyCallRequest(BaseModel):
+    """Log which emergency option was used."""
+    action: str  # 'sitter' | 'parent' | 'emergency' | 'child_contact' | 'doctor'
 
 
 class CreateSessionRequest(BaseModel):
@@ -417,6 +466,290 @@ async def get_session_by_id(
         raise handle_error(e, "Failed to fetch session")
 
 
+@router.get("/{session_id}/events", response_model=List[SessionEventResponse])
+async def get_session_events(
+    session_id: str,
+    current_user: CurrentUser = Depends(verify_token),
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    """
+    Get timeline events for a session. Same access as get session (parent/sitter/admin).
+    """
+    try:
+        auth_token = credentials.credentials
+        supabase = get_supabase_with_auth(auth_token)
+        if not supabase:
+            raise AppError(
+                code="DB_NOT_AVAILABLE",
+                message="Database connection not available",
+                status_code=503
+            )
+        session_resp = supabase.table("sessions").select("id, parent_id, sitter_id").eq("id", session_id).single().execute()
+        if not session_resp.data:
+            raise AppError(
+                code="SESSION_NOT_FOUND",
+                message="Session not found",
+                status_code=404
+            )
+        session_data = session_resp.data
+        if not verify_session_access(session_data, current_user):
+            raise AppError(
+                code="FORBIDDEN",
+                message="You don't have access to this session",
+                status_code=403
+            )
+        events_resp = supabase.table("session_events").select("id, session_id, type, triggered_by, created_at").eq("session_id", session_id).order("created_at", desc=False).execute()
+        events = events_resp.data or []
+        return [
+            SessionEventResponse(
+                id=e["id"],
+                sessionId=e["session_id"],
+                type=e["type"],
+                triggeredBy=e.get("triggered_by"),
+                createdAt=e["created_at"],
+            )
+            for e in events
+        ]
+    except AppError:
+        raise
+    except Exception as e:
+        raise handle_error(e, "Failed to fetch session events")
+
+
+@router.get("/{session_id}/report", response_model=SessionReportResponse)
+async def get_session_report(
+    session_id: str,
+    current_user: CurrentUser = Depends(verify_token),
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    """
+    Generate an aggregated session report (start/end, monitoring, alerts, GPS).
+    Parent can download, sitter can view history, admin can export.
+    """
+    try:
+        auth_token = credentials.credentials
+        supabase = get_supabase_with_auth(auth_token)
+        if not supabase:
+            raise AppError(
+                code="DB_NOT_AVAILABLE",
+                message="Database connection not available",
+                status_code=503
+            )
+
+        # Fetch session
+        session_resp = supabase.table("sessions").select("*").eq("id", session_id).single().execute()
+        if not session_resp.data:
+            raise AppError(
+                code="SESSION_NOT_FOUND",
+                message="Session not found",
+                status_code=404
+            )
+        session_data = session_resp.data
+
+        # Access check
+        if not verify_session_access(session_data, current_user):
+            raise AppError(
+                code="FORBIDDEN",
+                message="You don't have access to this session",
+                status_code=403
+            )
+
+        # Basic fields from session
+        started_at = session_data.get("started_at")
+        ended_at = session_data.get("ended_at") or session_data.get("completed_at") or session_data.get("end_time")
+        monitoring_started_at = session_data.get("monitoring_started_at")
+        monitoring_enabled = session_data.get("monitoring_enabled")
+        last_location_at = session_data.get("last_location_at")
+        last_audio_signal_at = session_data.get("last_audio_signal_at")
+
+        # Derived monitoring duration (in minutes)
+        monitoring_duration_minutes: Optional[int] = None
+        if monitoring_started_at and ended_at:
+            try:
+                from datetime import datetime
+                start_dt = datetime.fromisoformat(str(monitoring_started_at).replace("Z", "+00:00"))
+                end_dt = datetime.fromisoformat(str(ended_at).replace("Z", "+00:00"))
+                diff_sec = max(0, (end_dt - start_dt).total_seconds())
+                monitoring_duration_minutes = int(diff_sec // 60)
+            except Exception as _:
+                monitoring_duration_minutes = None
+
+        # Cry alerts count
+        alerts_resp = supabase.table("alerts").select("id, type").eq("session_id", session_id).execute()
+        alerts = alerts_resp.data or []
+        cry_alert_count = sum(1 for a in alerts if a.get("type") == "cry_detection")
+
+        # GPS summary: count of points
+        gps_resp = supabase.table("gps_tracking").select("id").eq("session_id", session_id).execute()
+        gps_points = gps_resp.data or []
+        gps_point_count = len(gps_points)
+
+        # Basic party names (best-effort, optional)
+        parent_name = None
+        sitter_name = None
+        child_name = None
+        parent_id = session_data.get("parent_id")
+        sitter_id = session_data.get("sitter_id")
+        child_id = session_data.get("child_id")
+        try:
+            if parent_id:
+                u = supabase.table("users").select("id, display_name").eq("id", parent_id).single().execute()
+                if u.data:
+                    parent_name = u.data.get("display_name")
+            if sitter_id:
+                u = supabase.table("users").select("id, display_name").eq("id", sitter_id).single().execute()
+                if u.data:
+                    sitter_name = u.data.get("display_name")
+            if child_id:
+                c = supabase.table("children").select("id, name").eq("id", child_id).single().execute()
+                if c.data:
+                    child_name = c.data.get("name")
+        except Exception as _:
+            # Non-fatal if name lookups fail
+            pass
+
+        return SessionReportResponse(
+            sessionId=session_data.get("id"),
+            parentId=parent_id,
+            sitterId=sitter_id,
+            childId=child_id,
+            status=session_data.get("status"),
+            startedAt=started_at,
+            endedAt=ended_at,
+            monitoringStartedAt=monitoring_started_at,
+            monitoringEnabled=monitoring_enabled,
+            lastLocationAt=last_location_at,
+            lastAudioSignalAt=last_audio_signal_at,
+            monitoringDurationMinutes=monitoring_duration_minutes,
+            cryAlertCount=cry_alert_count,
+            gpsPointCount=gps_point_count,
+            parentName=parent_name,
+            sitterName=sitter_name,
+            childName=child_name,
+        )
+    except AppError:
+        raise
+    except Exception as e:
+        raise handle_error(e, "Failed to generate session report")
+
+
+@router.get("/{session_id}/emergency-info", response_model=EmergencyInfoResponse)
+async def get_session_emergency_info(
+    session_id: str,
+    current_user: CurrentUser = Depends(verify_token),
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    """
+    Get phone numbers for emergency call sheet (parent/sitter, session must be accessible).
+    Only useful when session is active; caller can still use for completed sessions.
+    """
+    try:
+        auth_token = credentials.credentials
+        supabase = get_supabase_with_auth(auth_token)
+        if not supabase:
+            raise AppError(
+                code="DB_NOT_AVAILABLE",
+                message="Database connection not available",
+                status_code=503
+            )
+        session_resp = supabase.table("sessions").select("*").eq("id", session_id).single().execute()
+        if not session_resp.data:
+            raise AppError(
+                code="SESSION_NOT_FOUND",
+                message="Session not found",
+                status_code=404
+            )
+        session_data = session_resp.data
+        if not verify_session_access(session_data, current_user):
+            raise AppError(
+                code="FORBIDDEN",
+                message="You don't have access to this session",
+                status_code=403
+            )
+        emergency_number = os.getenv("EMERGENCY_PHONE_NUMBER", "911").strip() or "911"
+        parent_id = session_data.get("parent_id")
+        sitter_id = session_data.get("sitter_id")
+        child_id = session_data.get("child_id")
+        sitter_phone = None
+        parent_phone = None
+        child_emergency_name = None
+        child_emergency_phone = None
+        doctor_contact = None
+        doctor_phone = None
+        if sitter_id:
+            u = supabase.table("users").select("phone_number").eq("id", sitter_id).single().execute()
+            if u.data:
+                sitter_phone = u.data.get("phone_number")
+        if parent_id:
+            u = supabase.table("users").select("phone_number").eq("id", parent_id).single().execute()
+            if u.data:
+                parent_phone = u.data.get("phone_number")
+        if child_id:
+            c = supabase.table("children").select(
+                "emergency_contact_name, emergency_contact_phone, doctor_contact, doctor_phone"
+            ).eq("id", child_id).single().execute()
+            if c.data:
+                child_emergency_name = c.data.get("emergency_contact_name")
+                child_emergency_phone = c.data.get("emergency_contact_phone")
+                doctor_contact = c.data.get("doctor_contact")
+                doctor_phone = c.data.get("doctor_phone")
+        return EmergencyInfoResponse(
+            emergencyNumber=emergency_number,
+            sitterPhone=sitter_phone,
+            parentPhone=parent_phone,
+            childEmergencyContactName=child_emergency_name,
+            childEmergencyContactPhone=child_emergency_phone,
+            doctorContact=doctor_contact,
+            doctorPhone=doctor_phone,
+        )
+    except AppError:
+        raise
+    except Exception as e:
+        raise handle_error(e, "Failed to get emergency info")
+
+
+@router.post("/{session_id}/emergency-call")
+async def log_emergency_call(
+    session_id: str,
+    body: EmergencyCallRequest,
+    current_user: CurrentUser = Depends(verify_token),
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    """
+    Log that the user used the emergency call button (creates session_event emergency_contact_called).
+    Admin can view in session timeline.
+    """
+    try:
+        auth_token = credentials.credentials
+        supabase = get_supabase_with_auth(auth_token)
+        if not supabase:
+            raise AppError(
+                code="DB_NOT_AVAILABLE",
+                message="Database connection not available",
+                status_code=503
+            )
+        session_resp = supabase.table("sessions").select("id, parent_id, sitter_id").eq("id", session_id).single().execute()
+        if not session_resp.data:
+            raise AppError(
+                code="SESSION_NOT_FOUND",
+                message="Session not found",
+                status_code=404
+            )
+        session_data = session_resp.data
+        if not verify_session_access(session_data, current_user):
+            raise AppError(
+                code="FORBIDDEN",
+                message="You don't have access to this session",
+                status_code=403
+            )
+        _create_session_event(supabase, session_id, "emergency_contact_called", current_user.id)
+        return {"success": True, "action": body.action}
+    except AppError:
+        raise
+    except Exception as e:
+        raise handle_error(e, "Failed to log emergency call")
+
+
 @router.post("/{session_id}/start", response_model=SessionResponse)
 async def start_session(
     session_id: str,
@@ -633,6 +966,8 @@ async def end_session(
 
         # Timeline event: session_completed (triggered_by parent/admin)
         _create_session_event(supabase, session_id, "session_completed", current_user.id)
+        if current_user.role == "admin":
+            _create_session_event(supabase, session_id, "admin_action", current_user.id)
 
         # Notify parent that session has completed
         if parent_id:
@@ -817,8 +1152,8 @@ async def set_monitoring(
         }
         supabase.table("sessions").update(update_data).eq("id", session_id).execute()
 
-        # Session event (best-effort)
-        _create_session_event(supabase, session_id, "monitoring_enabled", current_user.id)
+        # Session event
+        _create_session_event(supabase, session_id, "monitoring_enabled" if payload.enabled else "monitoring_disabled", current_user.id)
 
         updated = supabase.table("sessions").select("*").eq("id", session_id).single().execute()
         if not updated.data:
@@ -1045,6 +1380,7 @@ async def create_session(
             # Notify sitters so they see the request in Notifications
             new_session_id = session_record.get("id") if isinstance(session_record, dict) else None
             if new_session_id:
+                _create_session_event(supabase, new_session_id, "session_requested", current_user.id)
                 if search_scope == "invite" and session_data.sitterId:
                     _create_alert(
                         supabase,
@@ -1242,19 +1578,21 @@ async def update_session(
                     message="Your sitter has started the session.",
                     child_id=session_data.get("child_id"),
                 )
-        # Notify parent when sitter accepts
-        if updates.status == "accepted" and session_data.get("parent_id"):
-            _create_alert(
-                supabase,
-                session_id=session_id,
-                parent_id=session_data["parent_id"],
-                sitter_id=updated.get("sitter_id"),
-                alert_type="session_accepted",
-                title="Session accepted",
-                message="A sitter accepted your session.",
-                child_id=session_data.get("child_id"),
-            )
-        
+        # Timeline event + notify parent when sitter accepts
+        if updates.status == "accepted":
+            _create_session_event(supabase, session_id, "session_accepted", current_user.id)
+            if session_data.get("parent_id"):
+                _create_alert(
+                    supabase,
+                    session_id=session_id,
+                    parent_id=session_data["parent_id"],
+                    sitter_id=updated.get("sitter_id"),
+                    alert_type="session_accepted",
+                    title="Session accepted",
+                    message="A sitter accepted your session.",
+                    child_id=session_data.get("child_id"),
+                )
+
         return db_to_session_response(updated)
         
     except AppError:
@@ -1326,7 +1664,9 @@ async def cancel_session(
             update_data["cancellation_reason"] = reason
         
         supabase.table("sessions").update(update_data).eq("id", session_id).execute()
-        
+
+        _create_session_event(supabase, session_id, "session_cancelled", current_user.id)
+
         # Notify parent and sitter (message depends on who cancelled)
         parent_id = session_data.get("parent_id")
         sitter_id = session_data.get("sitter_id")

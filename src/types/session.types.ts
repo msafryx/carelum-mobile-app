@@ -94,6 +94,15 @@ export interface Session {
   updatedAt: Date;
 }
 
+/** Session timeline event from API (GET /api/sessions/:id/events) */
+export interface SessionEvent {
+  id: string;
+  sessionId: string;
+  type: string;
+  triggeredBy?: string;
+  createdAt: string;
+}
+
 /**
  * Request mode mapping (for UI display)
  * Maps searchScope to requestMode for better UX

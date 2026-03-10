@@ -195,14 +195,16 @@ async def get_alert_by_id(
 @router.post("", response_model=AlertResponse)
 async def create_alert(
     alert_data: CreateAlertRequest,
-    current_user: CurrentUser = Depends(verify_token)
+    current_user: CurrentUser = Depends(verify_token),
+    credentials: HTTPAuthorizationCredentials = Depends(security)
 ):
     """
     Create a new alert (for system/internal use)
     """
     try:
-        supabase = get_supabase()
-        
+        supabase = get_supabase_with_auth(credentials.credentials)
+        if not supabase:
+            supabase = get_supabase()
         if not supabase:
             raise AppError(
                 code="DB_NOT_AVAILABLE",
@@ -233,14 +235,19 @@ async def create_alert(
                 message="Failed to create alert",
                 status_code=500
             )
-        # For cry_detection alerts, update session last_audio_signal_at for monitoring health
+        # For cry_detection alerts, update session last_audio_signal_at and add timeline event
         try:
             if alert_data.type == "cry_detection" and alert_data.sessionId:
                 supabase.table("sessions").update(
                     {"last_audio_signal_at": datetime.utcnow().isoformat()}
                 ).eq("id", alert_data.sessionId).execute()
+                supabase.table("session_events").insert({
+                    "session_id": alert_data.sessionId,
+                    "type": "cry_detected",
+                    "triggered_by": alert_data.sitterId or current_user.id,
+                }).execute()
         except Exception as update_err:
-            print(f"⚠️ Failed to update last_audio_signal_at for session {alert_data.sessionId}: {update_err}")
+            print(f"⚠️ Failed to update session/timeline for cry_detection {alert_data.sessionId}: {update_err}")
 
         return db_to_alert_response(response.data[0])
         

@@ -9,6 +9,13 @@ export interface Child {
   dateOfBirth?: Date;
   gender?: 'male' | 'female' | 'other';
   photoUrl?: string;
+  medicalNotes?: string;
+  allergies?: string;
+  emergencyContactName?: string;
+  emergencyContactPhone?: string;
+  doctorContact?: string;
+  doctorPhone?: string;
+  specialInstructions?: string;
   createdAt: Date;
   updatedAt: Date;
 }

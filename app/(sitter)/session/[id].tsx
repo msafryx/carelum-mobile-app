@@ -25,6 +25,7 @@ import TwoPinMap from '@/src/components/gps/TwoPinMap';
 import CryDetectionIndicator from '@/src/components/session/CryDetectionIndicator';
 import CryDetectionInterface from '@/src/components/monitoring/CryDetectionInterface';
 import MonitoringControls from '@/src/components/session/MonitoringControls';
+import EmergencyCallButton from '@/src/components/session/EmergencyCallButton';
 import SessionTimeline from '@/src/components/session/SessionTimeline';
 import { useAuth } from '@/src/hooks/useAuth';
 import {
@@ -1060,9 +1061,9 @@ export default function SitterSessionDetailScreen() {
                     router.push(`/(sitter)/chatbot?sessionId=${id}&childId=${session.childId}`);
                   }}
                 >
-                  <Ionicons name="chatbubbles" size={24} color={colors.white} />
+                  <Ionicons name="reader-outline" size={24} color={colors.white} />
                   <Text style={[styles.chatbotButtonText, { color: colors.white }]}>
-                    Ask AI Assistant
+                    Child Assistant
                   </Text>
                   <Ionicons name="chevron-forward" size={20} color={colors.white} />
                 </TouchableOpacity>
@@ -1123,8 +1124,10 @@ export default function SitterSessionDetailScreen() {
         )}
 
         {/* Session Timeline */}
-        <SessionTimeline session={session} />
+        <SessionTimeline session={session} role="sitter" />
       </ScrollView>
+
+      <EmergencyCallButton session={session} role="sitter" />
     </View>
   );
 }

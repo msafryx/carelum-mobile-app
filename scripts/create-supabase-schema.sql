@@ -188,6 +188,13 @@ CREATE TABLE IF NOT EXISTS children (
   child_number TEXT UNIQUE, -- c1, c2, etc.
   parent_number TEXT, -- p1, p2, etc.
   sitter_number TEXT, -- b1, b2, etc.
+  medical_notes TEXT,
+  allergies TEXT,
+  emergency_contact_name TEXT,
+  emergency_contact_phone TEXT,
+  doctor_contact TEXT,
+  doctor_phone TEXT,
+  special_instructions TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -260,7 +267,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE TABLE IF NOT EXISTS session_events (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-  type TEXT NOT NULL CHECK (type IN ('session_started', 'session_completed', 'session_cancelled', 'monitoring_enabled', 'sitter_requested_end', 'session_time_expired', 'session_extended', 'session_auto_completed', 'admin_force_end')),
+  type TEXT NOT NULL CHECK (type IN ('session_requested', 'session_accepted', 'session_started', 'monitoring_enabled', 'monitoring_disabled', 'cry_detected', 'session_completed', 'session_cancelled', 'admin_action', 'sitter_requested_end', 'session_time_expired', 'session_extended', 'session_auto_completed', 'admin_force_end', 'emergency_contact_called')),
   triggered_by UUID REFERENCES users(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -416,6 +423,28 @@ CREATE INDEX IF NOT EXISTS idx_chat_messages_receiver_id ON chat_messages(receiv
 CREATE INDEX IF NOT EXISTS idx_chat_messages_created_at ON chat_messages(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_gps_tracking_session_id ON gps_tracking(session_id);
 CREATE INDEX IF NOT EXISTS idx_gps_tracking_created_at ON gps_tracking(created_at DESC);
+
+-- Child care instructions (optional structured instructions for assistant)
+CREATE TABLE IF NOT EXISTS child_care_instructions (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  child_id UUID NOT NULL REFERENCES children(id) ON DELETE CASCADE,
+  instruction_type TEXT NOT NULL CHECK (instruction_type IN ('feeding', 'sleep', 'medicine', 'behavior', 'safety', 'general')),
+  instruction_text TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_child_care_instructions_child_id ON child_care_instructions(child_id);
+
+-- Assistant query logs (for admin audit)
+CREATE TABLE IF NOT EXISTS assistant_query_logs (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  child_id UUID NOT NULL REFERENCES children(id) ON DELETE CASCADE,
+  question TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_assistant_query_logs_session_id ON assistant_query_logs(session_id);
+CREATE INDEX IF NOT EXISTS idx_assistant_query_logs_created_at ON assistant_query_logs(created_at DESC);
 
 -- Function to update updated_at timestamp
 CREATE OR REPLACE FUNCTION update_updated_at_column()
@@ -595,6 +624,14 @@ CREATE POLICY "Users can insert session_completed_cancelled for own sessions" ON
     AND (triggered_by = auth.uid())
     AND EXISTS (SELECT 1 FROM sessions s WHERE s.id = session_events.session_id AND (s.parent_id = auth.uid() OR s.sitter_id = auth.uid()))
   );
+CREATE POLICY "Session participants and admin can insert timeline events" ON session_events
+  FOR INSERT WITH CHECK (
+    triggered_by = auth.uid()
+    AND (
+      EXISTS (SELECT 1 FROM sessions s WHERE s.id = session_events.session_id AND (s.parent_id = auth.uid() OR s.sitter_id = auth.uid()))
+      OR EXISTS (SELECT 1 FROM users u WHERE u.id = auth.uid() AND u.role = 'admin')
+    )
+  );
 
 -- Alerts: Users can read their own alerts
 CREATE POLICY "Users can read own alerts" ON alerts
@@ -692,6 +729,37 @@ CREATE POLICY "Users can read session reviews" ON reviews
 
 CREATE POLICY "Users can create reviews" ON reviews
   FOR INSERT WITH CHECK (reviewer_id = auth.uid());
+
+-- Admins can delete abusive/inappropriate reviews
+CREATE POLICY "Admin can delete reviews" ON reviews
+  FOR DELETE USING (
+    EXISTS (SELECT 1 FROM users WHERE id = auth.uid() AND role = 'admin')
+  );
+
+-- Child care instructions: parent can manage; parent and sitter (with session) can read
+ALTER TABLE child_care_instructions ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Read child_care_instructions for own or session child" ON child_care_instructions
+  FOR SELECT USING (
+    EXISTS (SELECT 1 FROM children c WHERE c.id = child_care_instructions.child_id AND c.parent_id = auth.uid())
+    OR EXISTS (SELECT 1 FROM sessions s WHERE s.child_id = child_care_instructions.child_id AND (s.parent_id = auth.uid() OR s.sitter_id = auth.uid()))
+  );
+CREATE POLICY "Parent can manage child_care_instructions" ON child_care_instructions
+  FOR ALL USING (
+    EXISTS (SELECT 1 FROM children c WHERE c.id = child_care_instructions.child_id AND c.parent_id = auth.uid())
+  );
+
+-- Assistant query logs: session participants can insert; admin and participants can read
+ALTER TABLE assistant_query_logs ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Session participants can insert assistant logs" ON assistant_query_logs
+  FOR INSERT WITH CHECK (
+    user_id = auth.uid()
+    AND EXISTS (SELECT 1 FROM sessions s WHERE s.id = assistant_query_logs.session_id AND (s.parent_id = auth.uid() OR s.sitter_id = auth.uid()))
+  );
+CREATE POLICY "Participants and admin can read assistant logs" ON assistant_query_logs
+  FOR SELECT USING (
+    EXISTS (SELECT 1 FROM sessions s WHERE s.id = assistant_query_logs.session_id AND (s.parent_id = auth.uid() OR s.sitter_id = auth.uid()))
+    OR EXISTS (SELECT 1 FROM users WHERE id = auth.uid() AND role = 'admin')
+  );
 
 -- Views for readable date formats (optional, for easier querying)
 CREATE OR REPLACE VIEW users_readable AS

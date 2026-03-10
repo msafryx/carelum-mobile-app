@@ -4,7 +4,7 @@
  */
 import { isSupabaseConfigured, supabase } from '@/src/config/supabase';
 import { ErrorCode, ServiceResult } from '@/src/types/error.types';
-import { Session } from '@/src/types/session.types';
+import { Session, SessionEvent } from '@/src/types/session.types';
 import { handleUnexpectedError } from '@/src/utils/errorHandler';
 import { apiRequest } from './api-base.service';
 import { API_ENDPOINTS } from '@/src/config/constants';
@@ -139,6 +139,135 @@ export async function createSessionRequest(
  * Get session by ID
  * INSTANT: Loads from AsyncStorage first, syncs from API in background
  */
+/**
+ * Get timeline events for a session (parent/sitter see same; admin sees admin actions too).
+ */
+export async function getSessionEvents(sessionId: string): Promise<ServiceResult<SessionEvent[]>> {
+  try {
+    const result = await apiRequest<any[]>(API_ENDPOINTS.SESSION_EVENTS(sessionId));
+    if (!result.success) return result;
+    const list = Array.isArray(result.data) ? result.data : [];
+    const events: SessionEvent[] = list.map((e: any) => ({
+      id: e.id,
+      sessionId: e.sessionId ?? e.session_id,
+      type: e.type,
+      triggeredBy: e.triggeredBy ?? e.triggered_by,
+      createdAt: e.createdAt ?? e.created_at ?? '',
+    }));
+    return { success: true, data: events };
+  } catch (error: any) {
+    return {
+      success: false,
+      error: handleUnexpectedError(error),
+    };
+  }
+}
+
+export interface SessionReport {
+  sessionId: string;
+  parentId: string;
+  sitterId?: string | null;
+  childId: string;
+  status: string;
+  startedAt?: string | null;
+  endedAt?: string | null;
+  monitoringStartedAt?: string | null;
+  monitoringEnabled?: boolean | null;
+  lastLocationAt?: string | null;
+  lastAudioSignalAt?: string | null;
+  monitoringDurationMinutes?: number | null;
+  cryAlertCount: number;
+  gpsPointCount: number;
+  parentName?: string | null;
+  sitterName?: string | null;
+  childName?: string | null;
+}
+
+export async function getSessionReport(sessionId: string): Promise<ServiceResult<SessionReport>> {
+  try {
+    const result = await apiRequest<any>(API_ENDPOINTS.SESSION_REPORT(sessionId));
+    if (!result.success) return result;
+    const data = result.data;
+    return {
+      success: true,
+      data: {
+        sessionId: data.sessionId,
+        parentId: data.parentId,
+        sitterId: data.sitterId,
+        childId: data.childId,
+        status: data.status,
+        startedAt: data.startedAt,
+        endedAt: data.endedAt,
+        monitoringStartedAt: data.monitoringStartedAt,
+        monitoringEnabled: data.monitoringEnabled,
+        lastLocationAt: data.lastLocationAt,
+        lastAudioSignalAt: data.lastAudioSignalAt,
+        monitoringDurationMinutes: data.monitoringDurationMinutes,
+        cryAlertCount: data.cryAlertCount,
+        gpsPointCount: data.gpsPointCount,
+        parentName: data.parentName,
+        sitterName: data.sitterName,
+        childName: data.childName,
+      },
+    };
+  } catch (error: any) {
+    return {
+      success: false,
+      error: handleUnexpectedError(error),
+    };
+  }
+}
+
+export interface EmergencyInfo {
+  emergencyNumber: string;
+  sitterPhone?: string | null;
+  parentPhone?: string | null;
+  childEmergencyContactName?: string | null;
+  childEmergencyContactPhone?: string | null;
+  doctorContact?: string | null;
+  doctorPhone?: string | null;
+}
+
+export async function getSessionEmergencyInfo(sessionId: string): Promise<ServiceResult<EmergencyInfo>> {
+  try {
+    const result = await apiRequest<any>(API_ENDPOINTS.SESSION_EMERGENCY_INFO(sessionId));
+    if (!result.success) return result;
+    const d = result.data;
+    return {
+      success: true,
+      data: {
+        emergencyNumber: d.emergencyNumber ?? '911',
+        sitterPhone: d.sitterPhone,
+        parentPhone: d.parentPhone,
+        childEmergencyContactName: d.childEmergencyContactName,
+        childEmergencyContactPhone: d.childEmergencyContactPhone,
+        doctorContact: d.doctorContact,
+        doctorPhone: d.doctorPhone,
+      },
+    };
+  } catch (error: any) {
+    return {
+      success: false,
+      error: handleUnexpectedError(error),
+    };
+  }
+}
+
+export async function logEmergencyCall(sessionId: string, action: string): Promise<ServiceResult<{ success: boolean; action: string }>> {
+  try {
+    const result = await apiRequest<{ success: boolean; action: string }>(
+      API_ENDPOINTS.SESSION_EMERGENCY_CALL(sessionId),
+      { method: 'POST', body: JSON.stringify({ action }) }
+    );
+    return result;
+  } catch (error: any) {
+    return {
+      success: false,
+      error: handleUnexpectedError(error),
+    };
+  }
+}
+
 export async function getSessionById(sessionId: string): Promise<ServiceResult<Session>> {
   try {
     // Try AsyncStorage first (instant UI)

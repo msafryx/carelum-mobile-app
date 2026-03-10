@@ -15,7 +15,7 @@ import Header from '@/src/components/ui/Header';
 import Card from '@/src/components/ui/Card';
 import AdminHamburgerMenu from '@/src/components/ui/AdminHamburgerMenu';
 import { useAuth } from '@/src/hooks/useAuth';
-import { getUserSessions, setSessionMonitoringEnabled } from '@/src/services/session.service';
+import { getUserSessions, setSessionMonitoringEnabled, getSessionReport } from '@/src/services/session.service';
 import { getSessionGPSTracking } from '@/src/services/monitoring.service';
 import { getSessionAlerts } from '@/src/services/alert.service';
 import { Session } from '@/src/types/session.types';
@@ -126,6 +126,51 @@ export default function AdminSessionsScreen() {
     ]);
   };
 
+  const handleForceEnd = async (sessionId: string) => {
+    Alert.alert('Force End Session', 'Force end this session immediately?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Force End',
+        style: 'destructive',
+        onPress: async () => {
+          // Reuse existing endSession endpoint via session.service.ts
+          const { endSession } = await import('@/src/services/session.service');
+          const res = await endSession(sessionId);
+          if (!res.success || !res.data) {
+            Alert.alert('Error', res.error?.message || 'Failed to end session.');
+            return;
+          }
+          setRows((prev) =>
+            prev.map((r) => (r.session.id === sessionId ? { ...r, session: res.data! } : r))
+          );
+        },
+      },
+    ]);
+  };
+
+  const handleViewReport = async (sessionId: string) => {
+    const res = await getSessionReport(sessionId);
+    if (!res.success || !res.data) {
+      Alert.alert('Error', res.error?.message || 'Failed to load session report.');
+      return;
+    }
+    const r = res.data;
+    const lines = [
+      `Session: ${r.sessionId}`,
+      `Status: ${r.status}`,
+      r.startedAt ? `Started: ${r.startedAt}` : null,
+      r.endedAt ? `Ended: ${r.endedAt}` : null,
+      r.monitoringStartedAt ? `Monitoring started: ${r.monitoringStartedAt}` : null,
+      r.monitoringDurationMinutes != null ? `Monitoring duration: ${r.monitoringDurationMinutes} min` : null,
+      `Cry alerts: ${r.cryAlertCount}`,
+      `GPS points: ${r.gpsPointCount}`,
+      r.parentName ? `Parent: ${r.parentName}` : null,
+      r.sitterName ? `Sitter: ${r.sitterName}` : null,
+      r.childName ? `Child: ${r.childName}` : null,
+    ].filter(Boolean);
+    Alert.alert('Session report', lines.join('\n'));
+  };
+
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
       <TouchableOpacity style={styles.burgerButton} onPress={() => setMenuVisible(true)}>
@@ -212,6 +257,28 @@ export default function AdminSessionsScreen() {
                     </Text>
                   </TouchableOpacity>
                 )}
+                {!isCompleted && (
+                  <TouchableOpacity
+                    style={[styles.disableButton, { borderColor: colors.error || '#ef4444', marginTop: 8 }]}
+                    onPress={() => handleForceEnd(s.id)}
+                    activeOpacity={0.85}
+                  >
+                    <Ionicons name="stop-circle" size={18} color={colors.error || '#ef4444'} />
+                    <Text style={[styles.disableText, { color: colors.error || '#ef4444' }]}>
+                      Force end session
+                    </Text>
+                  </TouchableOpacity>
+                )}
+                <TouchableOpacity
+                  style={[styles.disableButton, { borderColor: colors.primary, marginTop: 8 }]}
+                  onPress={() => handleViewReport(s.id)}
+                  activeOpacity={0.85}
+                >
+                  <Ionicons name="document-text" size={18} color={colors.primary} />
+                  <Text style={[styles.disableText, { color: colors.primary }]}>
+                    View session report
+                  </Text>
+                </TouchableOpacity>
               </Card>
             );
           })

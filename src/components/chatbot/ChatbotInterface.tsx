@@ -1,8 +1,9 @@
 /**
- * Chatbot Interface Component
- * Complete chat UI with message bubbles, input field, loading states, and error handling
+ * Child Assistant Interface (instruction-based)
+ * Ask about the child: allergies, feeding, sleep, medicine, emergency contacts.
+ * Not a messaging system – knowledge assistant from child profile + instructions.
  */
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   View,
   StyleSheet,
@@ -17,190 +18,75 @@ import {
 } from 'react-native';
 import { useTheme } from '@/src/components/ui/ThemeProvider';
 import { Ionicons } from '@expo/vector-icons';
-import {
-  getOrCreateConversation,
-  sendChatbotMessage,
-  ChatbotMessage,
-  ChatbotConversation,
-} from '@/src/services/chatbot.service';
+import { askChildAssistant } from '@/src/services/chatbot.service';
 import { format } from 'date-fns';
+
+const QUICK_PROMPTS = [
+  'Allergies',
+  'Feeding instructions',
+  'Sleep routine',
+  'Medicine schedule',
+  'Emergency contacts',
+] as const;
 
 interface ChatbotInterfaceProps {
   sessionId: string;
   childId: string;
-  sitterId: string;
+  sitterId?: string;
   onClose?: () => void;
+}
+
+interface QAMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: Date;
 }
 
 export default function ChatbotInterface({
   sessionId,
   childId,
-  sitterId,
   onClose,
 }: ChatbotInterfaceProps) {
-  const { colors, spacing } = useTheme();
-  const [messages, setMessages] = useState<ChatbotMessage[]>([]);
+  const { colors } = useTheme();
+  const [messages, setMessages] = useState<QAMessage[]>([]);
   const [inputText, setInputText] = useState('');
-  const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [conversation, setConversation] = useState<ChatbotConversation | null>(null);
   const scrollViewRef = useRef<ScrollView>(null);
 
-  // Initialize conversation
-  useEffect(() => {
-    initializeConversation();
-  }, [sessionId, childId, sitterId]);
-
-  // Scroll to bottom when new messages arrive
   useEffect(() => {
     if (messages.length > 0) {
-      setTimeout(() => {
-        scrollViewRef.current?.scrollToEnd({ animated: true });
-      }, 100);
+      setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 100);
     }
   }, [messages]);
 
-  const initializeConversation = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const result = await getOrCreateConversation(sessionId, sitterId, childId);
-      if (result.success && result.data) {
-        setConversation(result.data);
-        setMessages(result.data.messages || []);
-      } else {
-        setError(result.error?.message || 'Failed to initialize conversation');
-      }
-    } catch (err: any) {
-      setError(err.message || 'Failed to load conversation');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleSend = useCallback(async () => {
-    if (!inputText.trim() || sending || !conversation) return;
-
-    const userMessage: ChatbotMessage = {
-      role: 'user',
-      content: inputText.trim(),
-      timestamp: new Date(),
-    };
-
-    // Add user message immediately
-    setMessages((prev) => [...prev, userMessage]);
+  const ask = async (question: string) => {
+    if (!question.trim() || sending) return;
+    const q = question.trim();
+    setMessages((prev) => [...prev, { role: 'user', content: q, timestamp: new Date() }]);
     setInputText('');
     setSending(true);
     setError(null);
 
-    try {
-      const result = await sendChatbotMessage(
-        conversation.id || '',
-        userMessage.content,
-        sessionId,
-        childId
-      );
+    const result = await askChildAssistant(sessionId, childId, q);
+    setSending(false);
 
-      if (result.success && result.data) {
-        const assistantMessage: ChatbotMessage = {
-          role: 'assistant',
-          content: result.data.answer || 'I apologize, but I couldn\'t generate a response.',
-          timestamp: new Date(),
-          sources: result.data.sources,
-        };
-
-        setMessages((prev) => [...prev, assistantMessage]);
-
-        // Update conversation
-        if (conversation) {
-          const updatedConversation: ChatbotConversation = {
-            ...conversation,
-            messages: [...messages, userMessage, assistantMessage],
-            lastActivityAt: new Date(),
-            updatedAt: new Date(),
-          };
-          setConversation(updatedConversation);
-        }
-      } else {
-        setError(result.error?.message || 'Failed to send message');
-        // Remove user message on error
-        setMessages((prev) => prev.slice(0, -1));
-        Alert.alert('Error', result.error?.message || 'Failed to send message');
-      }
-    } catch (err: any) {
-      setError(err.message || 'An error occurred');
+    if (result.success && result.data) {
+      setMessages((prev) => [
+        ...prev,
+        { role: 'assistant', content: result.data!.answer, timestamp: new Date() },
+      ]);
+    } else {
+      setError(result.error?.message || 'Failed to get answer');
       setMessages((prev) => prev.slice(0, -1));
-      Alert.alert('Error', err.message || 'An error occurred while sending message');
-    } finally {
-      setSending(false);
+      Alert.alert('Error', result.error?.message || 'Failed to get answer');
     }
-  }, [inputText, sending, conversation, sessionId, childId, messages]);
-
-  const renderMessage = (message: ChatbotMessage, index: number) => {
-    const isUser = message.role === 'user';
-    return (
-      <View
-        key={index}
-        style={[
-          styles.messageContainer,
-          isUser ? styles.userMessageContainer : styles.assistantMessageContainer,
-        ]}
-      >
-        <View
-          style={[
-            styles.messageBubble,
-            {
-              backgroundColor: isUser ? colors.primary : colors.backgroundSecondary,
-              alignSelf: isUser ? 'flex-end' : 'flex-start',
-            },
-          ]}
-        >
-          <Text
-            style={[
-              styles.messageText,
-              { color: isUser ? colors.white : colors.text },
-            ]}
-          >
-            {message.content}
-          </Text>
-          {message.sources && message.sources.length > 0 && (
-            <View style={styles.sourcesContainer}>
-              <Text style={[styles.sourcesLabel, { color: colors.textSecondary }]}>
-                Sources:
-              </Text>
-              {message.sources.map((source, idx) => (
-                <Text key={idx} style={[styles.sourceText, { color: colors.textSecondary }]}>
-                  • {source}
-                </Text>
-              ))}
-            </View>
-          )}
-          <Text
-            style={[
-              styles.messageTime,
-              { color: isUser ? colors.white + 'CC' : colors.textSecondary },
-            ]}
-          >
-            {format(message.timestamp, 'h:mm a')}
-          </Text>
-        </View>
-      </View>
-    );
   };
 
-  if (loading) {
-    return (
-      <View style={[styles.container, { backgroundColor: colors.background }]}>
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={colors.primary} />
-          <Text style={[styles.loadingText, { color: colors.textSecondary }]}>
-            Loading chatbot...
-          </Text>
-        </View>
-      </View>
-    );
-  }
+  const handleSend = () => {
+    if (!inputText.trim() || sending) return;
+    ask(inputText.trim());
+  };
 
   return (
     <KeyboardAvoidingView
@@ -208,11 +94,10 @@ export default function ChatbotInterface({
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
     >
-      {/* Header */}
-      <View style={[styles.header, { backgroundColor: colors.white, borderBottomColor: colors.border }]}>
+      <View style={[styles.header, { borderBottomColor: colors.border }]}>
         <View style={styles.headerLeft}>
-          <Ionicons name="chatbubbles" size={24} color={colors.primary} />
-          <Text style={[styles.headerTitle, { color: colors.text }]}>AI Assistant</Text>
+          <Ionicons name="reader-outline" size={24} color={colors.primary} />
+          <Text style={[styles.headerTitle, { color: colors.text }]}>Child Assistant</Text>
         </View>
         {onClose && (
           <TouchableOpacity onPress={onClose} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
@@ -221,49 +106,88 @@ export default function ChatbotInterface({
         )}
       </View>
 
-      {/* Error Banner */}
       {error && (
-        <View style={[styles.errorBanner, { backgroundColor: colors.error + '20' }]}>
-          <Ionicons name="alert-circle" size={20} color={colors.error} />
-          <Text style={[styles.errorText, { color: colors.error }]}>{error}</Text>
+        <View style={[styles.errorBanner, { backgroundColor: (colors.error || '#dc2626') + '20' }]}>
+          <Ionicons name="alert-circle" size={20} color={colors.error || '#dc2626'} />
+          <Text style={[styles.errorText, { color: colors.error || '#dc2626' }]}>{error}</Text>
           <TouchableOpacity onPress={() => setError(null)}>
-            <Ionicons name="close" size={20} color={colors.error} />
+            <Ionicons name="close" size={20} color={colors.error || '#dc2626'} />
           </TouchableOpacity>
         </View>
       )}
 
-      {/* Messages */}
       <ScrollView
         ref={scrollViewRef}
-        style={styles.messagesContainer}
-        contentContainerStyle={styles.messagesContent}
+        style={styles.scroll}
+        contentContainerStyle={styles.scrollContent}
         keyboardShouldPersistTaps="handled"
       >
         {messages.length === 0 ? (
-          <View style={styles.emptyContainer}>
-            <Ionicons name="chatbubbles-outline" size={64} color={colors.textSecondary} />
-            <Text style={[styles.emptyTitle, { color: colors.text }]}>
-              Start a conversation
+          <View style={styles.empty}>
+            <Text style={[styles.emptyTitle, { color: colors.text }]}>Ask about the child</Text>
+            <Text style={[styles.emptySubtitle, { color: colors.textSecondary }]}>
+              Get quick answers from the child’s profile and instructions.
             </Text>
-            <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
-              Ask me anything about child care instructions for this session.
-            </Text>
+            <View style={styles.quickPrompts}>
+              {QUICK_PROMPTS.map((label) => (
+                <TouchableOpacity
+                  key={label}
+                  style={[styles.quickBtn, { backgroundColor: colors.primary + '20', borderColor: colors.primary }]}
+                  onPress={() => ask(label)}
+                  disabled={sending}
+                >
+                  <Text style={[styles.quickBtnText, { color: colors.primary }]}>{label}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
           </View>
         ) : (
-          messages.map((message, index) => renderMessage(message, index))
+          messages.map((msg, i) => (
+            <View
+              key={i}
+              style={[
+                styles.bubbleWrap,
+                msg.role === 'user' ? styles.userWrap : styles.assistantWrap,
+              ]}
+            >
+              <View
+                style={[
+                  styles.bubble,
+                  {
+                    backgroundColor: msg.role === 'user' ? colors.primary : colors.backgroundSecondary,
+                    alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start',
+                  },
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.bubbleText,
+                    { color: msg.role === 'user' ? '#fff' : colors.text },
+                  ]}
+                >
+                  {msg.content}
+                </Text>
+                <Text
+                  style={[
+                    styles.time,
+                    { color: msg.role === 'user' ? 'rgba(255,255,255,0.8)' : colors.textSecondary },
+                  ]}
+                >
+                  {format(msg.timestamp, 'h:mm a')}
+                </Text>
+              </View>
+            </View>
+          ))
         )}
         {sending && (
-          <View style={styles.typingIndicator}>
+          <View style={styles.typing}>
             <ActivityIndicator size="small" color={colors.textSecondary} />
-            <Text style={[styles.typingText, { color: colors.textSecondary }]}>
-              AI is thinking...
-            </Text>
+            <Text style={[styles.typingText, { color: colors.textSecondary }]}>Looking up...</Text>
           </View>
         )}
       </ScrollView>
 
-      {/* Input */}
-      <View style={[styles.inputContainer, { backgroundColor: colors.white, borderTopColor: colors.border }]}>
+      <View style={[styles.inputRow, { borderTopColor: colors.border }]}>
         <TextInput
           style={[
             styles.input,
@@ -273,7 +197,7 @@ export default function ChatbotInterface({
               borderColor: colors.border,
             },
           ]}
-          placeholder="Type your message..."
+          placeholder="Type a question..."
           placeholderTextColor={colors.textSecondary}
           value={inputText}
           onChangeText={setInputText}
@@ -284,7 +208,7 @@ export default function ChatbotInterface({
         />
         <TouchableOpacity
           style={[
-            styles.sendButton,
+            styles.sendBtn,
             {
               backgroundColor: inputText.trim() && !sending ? colors.primary : colors.border,
             },
@@ -293,9 +217,9 @@ export default function ChatbotInterface({
           disabled={!inputText.trim() || sending}
         >
           {sending ? (
-            <ActivityIndicator size="small" color={colors.white} />
+            <ActivityIndicator size="small" color="#fff" />
           ) : (
-            <Ionicons name="send" size={20} color={colors.white} />
+            <Ionicons name="send" size={20} color="#fff" />
           )}
         </TouchableOpacity>
       </View>
@@ -304,18 +228,7 @@ export default function ChatbotInterface({
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  loadingText: {
-    marginTop: 12,
-    fontSize: 14,
-  },
+  container: { flex: 1 },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -324,15 +237,8 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     borderBottomWidth: 1,
   },
-  headerLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  headerTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-  },
+  headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  headerTitle: { fontSize: 18, fontWeight: '600' },
   errorBanner: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -340,84 +246,35 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     gap: 8,
   },
-  errorText: {
-    flex: 1,
-    fontSize: 14,
+  errorText: { flex: 1, fontSize: 14 },
+  scroll: { flex: 1 },
+  scrollContent: { padding: 16, paddingBottom: 8 },
+  empty: { paddingVertical: 24 },
+  emptyTitle: { fontSize: 20, fontWeight: '600', marginBottom: 8 },
+  emptySubtitle: { fontSize: 14, marginBottom: 20 },
+  quickPrompts: { gap: 10 },
+  quickBtn: {
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    borderWidth: 1,
+    alignSelf: 'flex-start',
   },
-  messagesContainer: {
-    flex: 1,
-  },
-  messagesContent: {
-    padding: 16,
-    paddingBottom: 8,
-  },
-  emptyContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingVertical: 60,
-  },
-  emptyTitle: {
-    fontSize: 20,
-    fontWeight: '600',
-    marginTop: 16,
-    marginBottom: 8,
-  },
-  emptyText: {
-    fontSize: 14,
-    textAlign: 'center',
-    paddingHorizontal: 32,
-  },
-  messageContainer: {
-    marginBottom: 12,
-  },
-  userMessageContainer: {
-    alignItems: 'flex-end',
-  },
-  assistantMessageContainer: {
-    alignItems: 'flex-start',
-  },
-  messageBubble: {
-    maxWidth: '80%',
+  quickBtnText: { fontSize: 15, fontWeight: '600' },
+  bubbleWrap: { marginBottom: 12 },
+  userWrap: { alignItems: 'flex-end' },
+  assistantWrap: { alignItems: 'flex-start' },
+  bubble: {
+    maxWidth: '85%',
     paddingHorizontal: 16,
     paddingVertical: 12,
     borderRadius: 18,
   },
-  messageText: {
-    fontSize: 15,
-    lineHeight: 20,
-  },
-  sourcesContainer: {
-    marginTop: 8,
-    paddingTop: 8,
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(0,0,0,0.1)',
-  },
-  sourcesLabel: {
-    fontSize: 11,
-    fontWeight: '600',
-    marginBottom: 4,
-  },
-  sourceText: {
-    fontSize: 11,
-    marginLeft: 8,
-  },
-  messageTime: {
-    fontSize: 11,
-    marginTop: 4,
-    alignSelf: 'flex-end',
-  },
-  typingIndicator: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingVertical: 8,
-  },
-  typingText: {
-    fontSize: 14,
-    fontStyle: 'italic',
-  },
-  inputContainer: {
+  bubbleText: { fontSize: 15, lineHeight: 22 },
+  time: { fontSize: 11, marginTop: 4, alignSelf: 'flex-end' },
+  typing: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8 },
+  typingText: { fontSize: 14, fontStyle: 'italic' },
+  inputRow: {
     flexDirection: 'row',
     alignItems: 'flex-end',
     paddingHorizontal: 16,
@@ -435,7 +292,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     fontSize: 15,
   },
-  sendButton: {
+  sendBtn: {
     width: 44,
     height: 44,
     borderRadius: 22,
