@@ -95,7 +95,7 @@ async def get_all_users(
             users.append(UserResponse(
                 id=user_data["id"],
                 email=user_data["email"],
-                displayName=user_data.get("display_name", ""),
+                displayName=user_data.get("display_name") or "",
                 role=user_data.get("role", "parent"),
                 preferredLanguage=user_data.get("preferred_language", "en"),
                 userNumber=user_data.get("user_number"),
@@ -150,7 +150,7 @@ async def get_user_by_id(
         return UserResponse(
             id=user_data["id"],
             email=user_data["email"],
-            displayName=user_data.get("display_name", ""),
+            displayName=user_data.get("display_name") or "",
             role=user_data.get("role", "parent"),
             preferredLanguage=user_data.get("preferred_language", "en"),
             userNumber=user_data.get("user_number"),
@@ -234,7 +234,7 @@ async def update_user(
         return UserResponse(
             id=user_data["id"],
             email=user_data["email"],
-            displayName=user_data.get("display_name", ""),
+            displayName=user_data.get("display_name") or "",
             role=user_data.get("role", "parent"),
             preferredLanguage=user_data.get("preferred_language", "en"),
             userNumber=user_data.get("user_number"),

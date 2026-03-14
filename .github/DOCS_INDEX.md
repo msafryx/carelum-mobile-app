@@ -29,8 +29,7 @@ See **DOCS_TO_KEEP.md** for keep vs remove policy.
 
 ## 🧪 Testing
 
-- **[TESTING_GUIDE.md](../TESTING_GUIDE.md)** – Full testing (UI, API, requests feed, sessions)
-- **[QUICK_START_TESTING.md](../QUICK_START_TESTING.md)** – Quick testing reference
+- **[TESTING_GUIDE.md](../TESTING_GUIDE.md)** – Complete testing (setup, auth, sessions, LIVE, payments, interviews, admin)
 
 ---
 
@@ -64,8 +63,7 @@ See **DOCS_TO_KEEP.md** for keep vs remove policy.
 | README_SUPABASE.md | Database and Supabase setup |
 | DB_VERIFICATION_PLAN.md | Schema verification |
 | ADMIN.md | Admin system |
-| TESTING_GUIDE.md | All testing |
-| QUICK_START_TESTING.md | Quick tests |
+| TESTING_GUIDE.md | Complete testing (setup through payments & interviews) |
 | APP_FEATURES_STATUS.md | Feature status |
 | IMPLEMENTATION_PLAN.md | Roadmap |
 | SECURITY.md | Security practices |

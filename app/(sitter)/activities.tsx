@@ -75,11 +75,15 @@ export default function SitterActivitiesScreen() {
               }
             }
 
-            // Get parent name
+            // Get parent name (use displayName, fallback to email prefix so we show real name)
             if (session.parentId) {
               const parentResult = await getUserById(session.parentId);
               if (parentResult.success && parentResult.data) {
-                details.parentName = parentResult.data.displayName || 'Parent';
+                const p = parentResult.data;
+                details.parentName =
+                  (p.displayName && p.displayName.trim()) ||
+                  p.email?.split('@')[0] ||
+                  'Parent';
               }
             }
 

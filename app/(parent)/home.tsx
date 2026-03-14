@@ -5,11 +5,13 @@ import Header from '@/src/components/ui/Header';
 import { useTheme } from '@/src/components/ui/ThemeProvider';
 import { useAuth } from '@/src/hooks/useAuth';
 import { getAll, save, STORAGE_KEYS } from '@/src/services/local-storage.service';
-import { getUserSessions, cancelSession } from '@/src/services/session.service';
+import { getUserSessions, cancelSession, subscribeToUserSessions } from '@/src/services/session.service';
 import CancelSessionModal from '@/src/components/session/CancelSessionModal';
-import { getChildById } from '@/src/services/child.service';
+import EmergencyCallSheet from '@/src/components/session/EmergencyCallSheet';
+import { getParentChildren, getChildById } from '@/src/services/child.service';
 import { getUserById } from '@/src/services/admin.service';
 import { Session } from '@/src/types/session.types';
+import { Child } from '@/src/types/child.types';
 import { SESSION_STATUS } from '@/src/config/constants';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -24,6 +26,7 @@ interface SessionWithDetails extends Session {
   childPhotoUrl?: string;
   childPhotoUrls?: string[]; // Array of all child photo URLs
   sitterName?: string;
+  sitterPhotoUrl?: string;
 }
 
 // Searching Animation Component (Uber-like pulsing animation)
@@ -79,7 +82,9 @@ export default function ParentHomeScreen() {
   const [searchDurations, setSearchDurations] = useState<Record<string, string>>({});
   const searchDurationIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const [cancelling, setCancelling] = useState(false);
-  
+  const [emergencySheetVisible, setEmergencySheetVisible] = useState(false);
+  const sessionSubscriptionRef = useRef<(() => void) | null>(null);
+
   const loadSessions = useCallback(async (isRefresh = false) => {
     if (!user) return;
 
@@ -90,10 +95,16 @@ export default function ParentHomeScreen() {
     }
 
     try {
-      // Load active sessions
+      // Preload parent's children once (avoids 404s from getChildById and shows names/photos reliably)
+      const childrenResult = await getParentChildren(user.id, isRefresh);
+      const childrenList: Child[] = childrenResult.success && childrenResult.data ? childrenResult.data : [];
+      const childrenById: Record<string, Child> = {};
+      childrenList.forEach((c) => { childrenById[c.id] = c; });
+
+      // Load active sessions (LIVE)
       const activeResult = await getUserSessions(user.id, 'parent', SESSION_STATUS.ACTIVE);
-      // Load upcoming sessions (accepted but not yet active)
-      const upcomingResult = await getUserSessions(user.id, 'parent', SESSION_STATUS.ACCEPTED);
+      // Load upcoming: accepted, payment_pending (sitter accepted – parent pays), booked (paid – not yet started)
+      const upcomingResult = await getUserSessions(user.id, 'parent', 'accepted,payment_pending,booked');
       // Load requested sessions (newly created, waiting for sitter acceptance)
       const requestedResult = await getUserSessions(user.id, 'parent', SESSION_STATUS.REQUESTED);
 
@@ -102,55 +113,33 @@ export default function ParentHomeScreen() {
           sessions.map(async (session) => {
             const details: SessionWithDetails = { ...session };
             
-            // Get child names and photos - handle multiple children if childIds exists
-            if (session.childIds && session.childIds.length > 0) {
-              console.log(`📝 Loading ${session.childIds.length} children for session ${session.id}:`, session.childIds);
-              // Multiple children: load all
-              const childResults = await Promise.all(
-                session.childIds.map(childId => getChildById(childId))
-              );
-              const childNames: string[] = [];
-              const childPhotoUrls: string[] = [];
-              
-              childResults.forEach((result, index) => {
-                if (result.success && result.data) {
-                  childNames.push(result.data.name);
-                  if (result.data.photoUrl) {
-                    childPhotoUrls.push(result.data.photoUrl);
-                  }
-                } else {
-                  console.warn(`⚠️ Failed to load child ${session.childIds[index]}:`, result.error);
-                }
-              });
-              
-              console.log(`✅ Loaded ${childNames.length} children:`, childNames);
-              details.childNames = childNames;
-              details.childPhotoUrls = childPhotoUrls;
-              // Set primary child name for backward compatibility
-              if (childNames.length > 0) {
-                details.childName = childNames[0];
-              }
-              if (childPhotoUrls.length > 0) {
-                details.childPhotoUrl = childPhotoUrls[0];
-              }
-            } else if (session.childId) {
-              // Single child: load primary child
-              const childResult = await getChildById(session.childId);
-              if (childResult.success && childResult.data) {
-                details.childName = childResult.data.name;
-                details.childPhotoUrl = childResult.data.photoUrl;
-                details.childNames = [childResult.data.name];
-                if (childResult.data.photoUrl) {
-                  details.childPhotoUrls = [childResult.data.photoUrl];
-                }
+            // Resolve child names and photos from preloaded children (no per-child API calls)
+            const childIds = (session.childIds && session.childIds.length > 0)
+              ? session.childIds
+              : (session.childId ? [session.childId] : []);
+            const childNames: string[] = [];
+            const childPhotoUrls: string[] = [];
+            for (const id of childIds) {
+              const child = childrenById[id];
+              if (child) {
+                childNames.push(child.name);
+                if (child.photoUrl) childPhotoUrls.push(child.photoUrl);
               }
             }
+            if (childNames.length > 0) {
+              details.childNames = childNames;
+              details.childPhotoUrls = childPhotoUrls;
+              details.childName = childNames[0];
+              details.childPhotoUrl = childPhotoUrls[0] ?? undefined;
+            }
 
-            // Get sitter name
+            // Get sitter name and photo
             if (session.sitterId) {
               const sitterResult = await getUserById(session.sitterId);
               if (sitterResult.success && sitterResult.data) {
-                details.sitterName = sitterResult.data.displayName || 'Sitter';
+                const s = sitterResult.data;
+                details.sitterName = s.displayName || s.email?.split('@')[0] || 'Sitter';
+                details.sitterPhotoUrl = (s as any).profileImageUrl ?? undefined;
               }
             }
 
@@ -200,6 +189,20 @@ export default function ParentHomeScreen() {
   useEffect(() => {
     loadSessions();
   }, [loadSessions]);
+
+  // Realtime: subscribe to parent's sessions (created, status changes, sitter accepts/declines)
+  useEffect(() => {
+    if (!user?.id) return;
+    sessionSubscriptionRef.current = subscribeToUserSessions(user.id, 'parent', () => {
+      loadSessions(true);
+    });
+    return () => {
+      if (sessionSubscriptionRef.current) {
+        sessionSubscriptionRef.current();
+        sessionSubscriptionRef.current = null;
+      }
+    };
+  }, [user?.id, loadSessions]);
 
   // Real-time search duration updates for requested sessions
   useEffect(() => {
@@ -351,7 +354,13 @@ export default function ParentHomeScreen() {
                       </Text>
                     )}
                   </View>
-                  <Ionicons name="radio" size={20} color={colors.success || '#10b981'} />
+                  <View style={[styles.sitterAvatarWrap, { backgroundColor: colors.primary + '15' }]}>
+                    {session.sitterPhotoUrl ? (
+                      <Image source={{ uri: session.sitterPhotoUrl }} style={styles.sitterAvatar} />
+                    ) : (
+                      <Ionicons name="person-circle-outline" size={22} color={colors.primary} />
+                    )}
+                  </View>
                 </View>
                 <View style={styles.sessionDetails}>
                   <Text style={[styles.sessionTime, { color: colors.textSecondary }]}>
@@ -470,6 +479,15 @@ export default function ParentHomeScreen() {
                       </Text>
                     </View>
                   </View>
+                  {session.sitterId && (
+                    <View style={[styles.sitterAvatarWrap, { backgroundColor: colors.primary + '15' }]}>
+                      {session.sitterPhotoUrl ? (
+                        <Image source={{ uri: session.sitterPhotoUrl }} style={styles.sitterAvatar} />
+                      ) : (
+                        <Ionicons name="person-circle-outline" size={22} color={colors.primary} />
+                      )}
+                    </View>
+                  )}
                 </View>
                 <View style={styles.sessionDetails}>
                   <Text style={[styles.sessionTime, { color: colors.textSecondary }]}>
@@ -549,7 +567,13 @@ export default function ParentHomeScreen() {
                       </Text>
                     )}
                   </View>
-                  <Ionicons name="time" size={20} color={colors.warning || '#f59e0b'} />
+                  <View style={[styles.sitterAvatarWrap, { backgroundColor: colors.primary + '15' }]}>
+                    {session.sitterPhotoUrl ? (
+                      <Image source={{ uri: session.sitterPhotoUrl }} style={styles.sitterAvatar} />
+                    ) : (
+                      <Ionicons name="person-circle-outline" size={22} color={colors.primary} />
+                    )}
+                  </View>
                 </View>
                 <View style={styles.sessionDetails}>
                   <Text style={[styles.sessionTime, { color: colors.textSecondary }]}>
@@ -639,17 +663,44 @@ export default function ParentHomeScreen() {
 
       <TouchableOpacity
         style={[styles.chatbotButton, { backgroundColor: colors.primary }]}
-        onPress={() => router.push('/(parent)/messages')}
+        onPress={() => {
+          const session = activeSessions[0] || upcomingSessions[0];
+          if (session?.id && session?.childId) {
+            router.push(`/(parent)/chatbot?sessionId=${session.id}&childId=${session.childId}` as any);
+          } else {
+            Alert.alert(
+              'Child Assistant',
+              'Open the Child Assistant from an active or upcoming session.'
+            );
+          }
+        }}
       >
         <Ionicons name="chatbubbles" size={28} color={colors.white} />
       </TouchableOpacity>
 
       <TouchableOpacity
-        style={[styles.emergencyButton, { backgroundColor: colors.emergency }]}
-        onPress={() => {}}
+        style={[styles.emergencyButton, { backgroundColor: colors.emergency || '#dc2626' }]}
+        onPress={() => {
+          const session = activeSessions[0];
+          if (session?.id && session?.status === 'active') {
+            setEmergencySheetVisible(true);
+          } else {
+            Alert.alert(
+              'Emergency call',
+              'No active session. Start a session to use emergency call.'
+            );
+          }
+        }}
       >
         <Ionicons name="call" size={26} color={colors.white} />
       </TouchableOpacity>
+
+      <EmergencyCallSheet
+        sessionId={activeSessions[0]?.id ?? ''}
+        role="parent"
+        visible={emergencySheetVisible}
+        onClose={() => setEmergencySheetVisible(false)}
+      />
 
       <HamburgerMenu
         visible={menuVisible}
@@ -739,6 +790,19 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
     marginBottom: 8,
     gap: 12,
+  },
+  sitterAvatarWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  sitterAvatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
   },
   childAvatar: {
     width: 50,

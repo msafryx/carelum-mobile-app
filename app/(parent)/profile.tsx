@@ -6,6 +6,7 @@ import { supabase } from '@/src/config/supabase';
 import { useAuth } from '@/src/hooks/useAuth';
 import { deleteUser } from '@/src/services/admin.service';
 import { signOut, updateUserProfile } from '@/src/services/auth.service';
+import { createPaymentCustomer } from '@/src/services/payment.service';
 import { deleteChild, getParentChildren, saveChild } from '@/src/services/child.service';
 import { getAll, STORAGE_KEYS } from '@/src/services/local-storage.service';
 import { uploadFile } from '@/src/services/storage.service';
@@ -82,6 +83,8 @@ export default function ProfileScreen() {
   const [twoFA, setTwoFA] = useState(false);
   const [menuVisible, setMenuVisible] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [paymentLoading, setPaymentLoading] = useState(false);
+  const [paymentCustomerReady, setPaymentCustomerReady] = useState(false);
   // Removed fetchingProfile - profile loads in background without blocking UI
   const [saving, setSaving] = useState(false);
   const fetchingRef = useRef(false);
@@ -1157,6 +1160,42 @@ export default function ProfileScreen() {
         </Card>
 
         <Card>
+          <Text style={[styles.sectionTitle, { color: colors.text }]}>Payment Methods</Text>
+          <Text style={[styles.helperText, { color: colors.textSecondary }]}>
+            Add a card to pay for sessions. Payment is held until the session is complete.
+          </Text>
+          <TouchableOpacity
+            onPress={async () => {
+              setPaymentLoading(true);
+              const res = await createPaymentCustomer();
+              setPaymentLoading(false);
+              if (res.success && res.data) {
+                setPaymentCustomerReady(!!res.data.stripeCustomerId);
+                Alert.alert(
+                  'Payment setup',
+                  res.data.alreadyExists
+                    ? 'Your payment account is already set up.'
+                    : 'Payment account created. You can add a card when you book a session (Confirm and Pay).'
+                );
+              } else {
+                Alert.alert('Error', res.error?.message || 'Could not set up payment. Try again.');
+              }
+            }}
+            style={[styles.syncButton, { backgroundColor: colors.primary, marginTop: 8 }]}
+            disabled={paymentLoading}
+          >
+            {paymentLoading ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <Ionicons name="card-outline" size={20} color="#fff" />
+            )}
+            <Text style={styles.syncButtonText}>
+              {paymentLoading ? 'Setting up...' : 'Add Card / Setup payment'}
+            </Text>
+          </TouchableOpacity>
+        </Card>
+
+        <Card>
           <Text style={[styles.sectionTitle, { color: colors.text }]}>Data Sync</Text>
           <TouchableOpacity
             onPress={handleSync}
@@ -1190,6 +1229,14 @@ export default function ProfileScreen() {
           >
             <Ionicons name="list-outline" size={24} color={colors.primary} style={styles.menuIcon} />
             <Text style={[styles.menuText, { color: colors.text }]}>View Sessions</Text>
+            <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.menuItem, { borderBottomColor: colors.border }]}
+            onPress={() => router.push('/(parent)/meeting-requests')}
+          >
+            <Ionicons name="videocam-outline" size={24} color={colors.primary} style={styles.menuIcon} />
+            <Text style={[styles.menuText, { color: colors.text }]}>Meeting requests</Text>
             <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} />
           </TouchableOpacity>
         </Card>
@@ -1869,6 +1916,10 @@ const styles = StyleSheet.create({
   datePickerText: {
     flex: 1,
     fontSize: 16,
+  },
+  helperText: {
+    fontSize: 14,
+    marginBottom: 4,
   },
   syncButton: {
     flexDirection: 'row',

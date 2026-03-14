@@ -7,6 +7,7 @@ import { useTheme } from '@/src/components/ui/ThemeProvider';
 import { isSupabaseConfigured, supabase } from '@/src/config/supabase';
 import { useAuth } from '@/src/hooks/useAuth';
 import { getParentChildren } from '@/src/services/child.service';
+import { createMeetingRequest } from '@/src/services/meeting-request.service';
 import { createSessionRequest } from '@/src/services/session.service';
 import { getVerifiedSitters } from '@/src/services/user-api.service';
 import { getSitterVerification } from '@/src/services/verification.service';
@@ -36,6 +37,8 @@ import {
 } from 'react-native';
 // Platform-specific map imports - DO NOT load at module level
 // Will be loaded dynamically only when needed to avoid native module errors
+
+const MAPBOX_ACCESS_TOKEN = process.env.EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN || '';
 
 interface Sitter extends User {
   rating?: number;
@@ -77,6 +80,7 @@ export default function SearchScreen() {
   const creatingRef = useRef(false); // Guard against double execution
   const lastCallIdRef = useRef<string | null>(null); // Track last call to prevent duplicates
   const [menuVisible, setMenuVisible] = useState(false);
+  const [meetingRequesting, setMeetingRequesting] = useState(false);
   const [requestMode, setRequestMode] = useState<SessionSearchScope>('invite');
   const [maxDistanceKm, setMaxDistanceKm] = useState<number | undefined>(undefined);
   const [customDistance, setCustomDistance] = useState<string>('');
@@ -1368,12 +1372,12 @@ export default function SearchScreen() {
 
       if (successfulSessions > 0) {
         const successMessage = requestMode === 'invite'
-          ? `Your booking request${selectedChildren.length > 1 ? 's have' : ' has'} been sent to ${selected!.displayName}. They will be notified.`
+          ? `Your booking request${selectedChildren.length > 1 ? 's have' : ' has'} been sent to ${selected!.displayName}. They will be notified.\n\nOpen the session from Bookings to schedule a video call with the sitter before confirming (optional).`
           : requestMode === 'nearby'
-          ? `Your session request${selectedChildren.length > 1 ? 's have' : ' has'} been posted. Sitters within ${maxDistanceKm}km will be notified.`
+          ? `Your session request${selectedChildren.length > 1 ? 's have' : ' has'} been posted. Sitters within ${maxDistanceKm}km will be notified.\n\nWhen a sitter accepts, open the session from Bookings to schedule a video call (optional).`
           : requestMode === 'city'
-          ? `Your session request${selectedChildren.length > 1 ? 's have' : ' has'} been posted. Sitters in your city will be notified.`
-          : `Your session request${selectedChildren.length > 1 ? 's have' : ' has'} been posted. Sitters nationwide will be notified.`;
+          ? `Your session request${selectedChildren.length > 1 ? 's have' : ' has'} been posted. Sitters in your city will be notified.\n\nWhen a sitter accepts, open the session from Bookings to schedule a video call (optional).`
+          : `Your session request${selectedChildren.length > 1 ? 's have' : ' has'} been posted. Sitters nationwide will be notified.\n\nWhen a sitter accepts, open the session from Bookings to schedule a video call (optional).`;
 
         const failedDetails = sessionResults
           .map((result, index) => {
@@ -2175,7 +2179,7 @@ export default function SearchScreen() {
                     >
                       <Image
                         source={{
-                          uri: `https://api.mapbox.com/styles/v1/mapbox/streets-v11/static/pin-s+FF0000(${filterLocation.longitude},${filterLocation.latitude})/${filterLocation.longitude},${filterLocation.latitude},15/300x200@2x?access_token=pk.eyJ1IjoibWFwYm94IiwiYSI6ImNpejY4NXVycTA2emYycXBndHRqcmZ3N3gifQ.rJcFIG214AriISLbB6B5aw`
+                          uri: MAPBOX_ACCESS_TOKEN ? `https://api.mapbox.com/styles/v1/mapbox/streets-v11/static/pin-s+FF0000(${filterLocation.longitude},${filterLocation.latitude})/${filterLocation.longitude},${filterLocation.latitude},15/300x200@2x?access_token=${MAPBOX_ACCESS_TOKEN}` : ''
                         }}
                         style={styles.mapThumbnailImage}
                         onError={(error) => {
@@ -2904,7 +2908,7 @@ export default function SearchScreen() {
                   >
                     <Image
                       source={{
-                        uri: `https://api.mapbox.com/styles/v1/mapbox/streets-v11/static/pin-s+FF0000(${sessionLocation.longitude},${sessionLocation.latitude})/${sessionLocation.longitude},${sessionLocation.latitude},15/300x200@2x?access_token=pk.eyJ1IjoibWFwYm94IiwiYSI6ImNpejY4NXVycTA2emYycXBndHRqcmZ3N3gifQ.rJcFIG214AriISLbB6B5aw`
+                        uri: MAPBOX_ACCESS_TOKEN ? `https://api.mapbox.com/styles/v1/mapbox/streets-v11/static/pin-s+FF0000(${sessionLocation.longitude},${sessionLocation.latitude})/${sessionLocation.longitude},${sessionLocation.latitude},15/300x200@2x?access_token=${MAPBOX_ACCESS_TOKEN}` : ''
                       }}
                       style={styles.mapThumbnailImage}
                       onError={(error) => {
@@ -3307,6 +3311,40 @@ export default function SearchScreen() {
 
               {/* Action Buttons */}
               <View style={styles.profileActions}>
+                <Text style={[styles.videoCallHint, { color: colors.textSecondary }]}>
+                  Request a video call first to meet the sitter. When they accept, you can join from Profile → Meeting requests. If you're satisfied after the call, send the booking request below.
+                </Text>
+                <TouchableOpacity
+                  style={[styles.profileVideoCallButton, { borderColor: colors.primary }]}
+                  onPress={async () => {
+                    if (!selectedSitterProfile?.id || meetingRequesting) return;
+                    setMeetingRequesting(true);
+                    const res = await createMeetingRequest(selectedSitterProfile.id);
+                    setMeetingRequesting(false);
+                    if (res.success) {
+                      Alert.alert(
+                        'Request sent',
+                        'The sitter will be notified. When they accept, you will see the meeting in Profile → Meeting requests and can join the call.',
+                        [
+                          { text: 'OK' },
+                          { text: 'View meeting requests', onPress: () => { setProfileModalVisible(false); router.push('/(parent)/meeting-requests'); } },
+                        ]
+                      );
+                    } else {
+                      Alert.alert('Error', (res as any).error?.message || 'Failed to send meeting request.');
+                    }
+                  }}
+                  disabled={meetingRequesting}
+                >
+                  {meetingRequesting ? (
+                    <ActivityIndicator size="small" color={colors.primary} />
+                  ) : (
+                    <>
+                      <Ionicons name="videocam-outline" size={20} color={colors.primary} />
+                      <Text style={[styles.profileVideoCallButtonText, { color: colors.primary }]}>Request video call</Text>
+                    </>
+                  )}
+                </TouchableOpacity>
                 <TouchableOpacity
                   style={[styles.profileBookButton, { backgroundColor: colors.primary }]}
                   onPress={() => {
@@ -4670,9 +4708,28 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
   },
+  videoCallHint: {
+    fontSize: 13,
+    marginBottom: 12,
+    lineHeight: 18,
+  },
   profileActions: {
     marginTop: 8,
     marginBottom: 20,
+  },
+  profileVideoCallButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 14,
+    borderRadius: 12,
+    borderWidth: 2,
+    marginBottom: 10,
+    gap: 8,
+  },
+  profileVideoCallButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
   },
   profileBookButton: {
     flexDirection: 'row',

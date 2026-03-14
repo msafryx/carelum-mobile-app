@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 env_path = Path(__file__).parent.parent / '.env'
 load_dotenv(dotenv_path=env_path)
 
-from app.routes import predict, bot, users, admin, sessions, children, alerts, gps, messages
+from app.routes import predict, bot, users, admin, sessions, children, alerts, gps, messages, child_assistant, payments, sitters, interviews, meeting_requests
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -95,6 +95,11 @@ app.include_router(children.router, prefix="/api/children", tags=["children"])
 app.include_router(alerts.router, prefix="/api/alerts", tags=["alerts"])
 app.include_router(gps.router, prefix="/api/gps", tags=["gps"])
 app.include_router(messages.router, prefix="/api", tags=["messages"])
+app.include_router(child_assistant.router, prefix="/api/child-assistant", tags=["child-assistant"])
+app.include_router(payments.router, prefix="/api/payments", tags=["payments"])
+app.include_router(sitters.router, prefix="/api/sitters", tags=["sitters"])
+app.include_router(interviews.router, prefix="/api/interviews", tags=["interviews"])
+app.include_router(meeting_requests.router, prefix="/api/meeting-requests", tags=["meeting-requests"])
 
 # Health check endpoint
 @app.get("/health")

@@ -148,7 +148,7 @@ export default function AdminHomeScreen() {
               label="Active"
               value={stats.activeSessions}
               color={colors.success}
-              onPress={() => {}}
+              onPress={() => router.push('/(admin)/sessions')}
             />
           </View>
 
@@ -217,6 +217,14 @@ export default function AdminHomeScreen() {
 
           <Card>
             <Text style={[styles.sectionTitle, { color: colors.text }]}>Navigation</Text>
+            <TouchableOpacity
+              style={[styles.navItem, { borderBottomColor: colors.border }]}
+              onPress={() => router.push('/(admin)/notifications')}
+            >
+              <Ionicons name="notifications-outline" size={20} color={colors.primary} style={styles.navIcon} />
+              <Text style={[styles.navText, { color: colors.text }]}>Notifications</Text>
+              <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} />
+            </TouchableOpacity>
             <TouchableOpacity
               style={[styles.navItem, { borderBottomColor: colors.border }]}
               onPress={() => router.push('/(admin)/profile')}

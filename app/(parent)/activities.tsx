@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { View, StyleSheet, ScrollView, Text, TouchableOpacity, RefreshControl, ActivityIndicator } from 'react-native';
+import { View, StyleSheet, ScrollView, Text, TouchableOpacity, RefreshControl, ActivityIndicator, Image } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/src/components/ui/ThemeProvider';
 import Header from '@/src/components/ui/Header';
@@ -9,25 +9,26 @@ import HamburgerMenu from '@/src/components/ui/HamburgerMenu';
 import { useAuth } from '@/src/hooks/useAuth';
 import { useRouter } from 'expo-router';
 import { getUserSessions } from '@/src/services/session.service';
-import { getChildById } from '@/src/services/child.service';
+import { getParentChildren } from '@/src/services/child.service';
 import { getUserById } from '@/src/services/admin.service';
 import { Session } from '@/src/types/session.types';
+import { Child } from '@/src/types/child.types';
 import { format, formatDistanceToNow } from 'date-fns';
 import { SESSION_STATUS } from '@/src/config/constants';
 
 const tabs = ['Ongoing', 'Completed', 'Complaints', 'Cancelled'] as const;
 
-// Map tab to session status
-const getStatusForTab = (tab: string): Session['status'] | undefined => {
+// Map tab to session status (comma-separated = any of these)
+const getStatusForTab = (tab: string): string | undefined => {
   switch (tab) {
     case 'Ongoing':
-      return SESSION_STATUS.ACTIVE;
+      // Active, payment_pending (sitter accepted – parent pays), booked, accepted, requested, interview_*
+      return 'active,payment_pending,booked,accepted,requested,interview_scheduled,interview_completed';
     case 'Completed':
       return SESSION_STATUS.COMPLETED;
     case 'Cancelled':
       return SESSION_STATUS.CANCELLED;
     case 'Complaints':
-      // Show completed sessions (where complaints might be)
       return SESSION_STATUS.COMPLETED;
     default:
       return undefined;
@@ -37,6 +38,7 @@ const getStatusForTab = (tab: string): Session['status'] | undefined => {
 interface SessionWithDetails extends Session {
   childName?: string;
   sitterName?: string;
+  sitterPhotoUrl?: string;
 }
 
 export default function ActivitiesScreen() {
@@ -59,28 +61,32 @@ export default function ActivitiesScreen() {
     }
 
     try {
+      // Preload parent's children once (avoids 404s and shows names reliably)
+      const childrenResult = await getParentChildren(user.id, isRefresh);
+      const childrenList: Child[] = childrenResult.success && childrenResult.data ? childrenResult.data : [];
+      const childrenById: Record<string, Child> = {};
+      childrenList.forEach((c) => { childrenById[c.id] = c; });
+
       const status = getStatusForTab(activeTab);
       const result = await getUserSessions(user.id, 'parent', status);
 
       if (result.success && result.data) {
-        // Fetch child names for each session
+        // Resolve child/sitter names from preloaded data
         const sessionsWithDetails = await Promise.all(
           result.data.map(async (session) => {
             const details: SessionWithDetails = { ...session };
-            
-            // Get child name
-            if (session.childId) {
-              const childResult = await getChildById(session.childId);
-              if (childResult.success && childResult.data) {
-                details.childName = childResult.data.name;
-              }
-            }
+            const childIds = (session.childIds && session.childIds.length > 0)
+              ? session.childIds
+              : (session.childId ? [session.childId] : []);
+            const child = childIds.length > 0 ? childrenById[childIds[0]] : undefined;
+            if (child) details.childName = child.name;
 
-            // Get sitter name
             if (session.sitterId) {
               const sitterResult = await getUserById(session.sitterId);
               if (sitterResult.success && sitterResult.data) {
-                details.sitterName = sitterResult.data.displayName || 'Sitter';
+                const s = sitterResult.data;
+                details.sitterName = s.displayName || s.email?.split('@')[0] || 'Sitter';
+                details.sitterPhotoUrl = (s as any).profileImageUrl ?? undefined;
               }
             }
 
@@ -229,7 +235,13 @@ export default function ActivitiesScreen() {
                       </Text>
                     )}
                   </View>
-                  <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} />
+                  <View style={[styles.sitterAvatarWrap, { backgroundColor: colors.primary + '15' }]}>
+                    {session.sitterPhotoUrl ? (
+                      <Image source={{ uri: session.sitterPhotoUrl }} style={styles.sitterAvatar} />
+                    ) : (
+                      <Ionicons name="person-circle-outline" size={22} color={colors.primary} />
+                    )}
+                  </View>
                 </View>
 
                 <View style={styles.sessionDetails}>
@@ -251,7 +263,7 @@ export default function ActivitiesScreen() {
                     <Ionicons name="cash-outline" size={16} color={colors.textSecondary} />
                     <Text style={[styles.detailText, { color: colors.textSecondary }]}>
                       ${session.hourlyRate}/hr
-                      {session.totalAmount && ` • Total: $${session.totalAmount.toFixed(2)}`}
+                      {session.totalAmount && ` • Total: Rs. ${session.totalAmount.toFixed(2)}`}
                     </Text>
                   </View>
                 </View>
@@ -338,6 +350,19 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'flex-start',
     marginBottom: 12,
+  },
+  sitterAvatarWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  sitterAvatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
   },
   sessionInfo: {
     flex: 1,

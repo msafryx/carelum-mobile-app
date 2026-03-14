@@ -188,6 +188,13 @@ CREATE TABLE IF NOT EXISTS children (
   child_number TEXT UNIQUE, -- c1, c2, etc.
   parent_number TEXT, -- p1, p2, etc.
   sitter_number TEXT, -- b1, b2, etc.
+  medical_notes TEXT,
+  allergies TEXT,
+  emergency_contact_name TEXT,
+  emergency_contact_phone TEXT,
+  doctor_contact TEXT,
+  doctor_phone TEXT,
+  special_instructions TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -221,14 +228,15 @@ CREATE TABLE IF NOT EXISTS sessions (
   sitter_id UUID REFERENCES users(id) ON DELETE SET NULL,
   child_id UUID NOT NULL REFERENCES children(id) ON DELETE CASCADE, -- Primary child (for backward compatibility)
   child_ids JSONB DEFAULT '[]'::jsonb, -- Array of child IDs for sessions with multiple children. Stored as JSONB array. The child_id column remains as the primary child for backward compatibility.
-  -- Status: 'requested' (default), 'pending', 'accepted', 'active', 'completed', 'cancelled'
-  -- For existing databases: Run UPDATE_SESSIONS_STATUS.sql to add 'requested' status support
-  status TEXT NOT NULL DEFAULT 'requested' CHECK (status IN ('requested', 'pending', 'accepted', 'active', 'completed', 'cancelled')),
+  -- Status: requested | interview_scheduled | interview_completed | accepted | payment_pending | booked | active | completed | cancelled
+  status TEXT NOT NULL DEFAULT 'requested' CHECK (status IN ('requested', 'interview_scheduled', 'interview_completed', 'accepted', 'payment_pending', 'booked', 'active', 'completed', 'cancelled')),
   start_time TIMESTAMPTZ NOT NULL,
   end_time TIMESTAMPTZ,
   location TEXT,
   hourly_rate DECIMAL(10, 2),
   total_amount DECIMAL(10, 2),
+  payment_status TEXT DEFAULT NULL CHECK (payment_status IS NULL OR payment_status IN ('payment_pending', 'paid', 'refunded')),
+  estimated_amount DECIMAL(10, 2),
   notes TEXT,
   search_scope TEXT DEFAULT 'invite' CHECK (search_scope IN ('invite', 'nearby', 'city', 'nationwide')), -- Session request scope
   max_distance_km NUMERIC(5, 2), -- Maximum distance in km for nearby search scope (only used when search_scope = 'nearby')
@@ -240,12 +248,32 @@ CREATE TABLE IF NOT EXISTS sessions (
   cancellation_reason TEXT,
   -- Completion tracking
   completed_at TIMESTAMPTZ,
+  ended_at TIMESTAMPTZ,
+  -- Session start (when sitter starts session → LIVE)
+  started_at TIMESTAMPTZ,
+  -- Monitoring runtime health
+  last_location_at TIMESTAMPTZ,
+  last_audio_signal_at TIMESTAMPTZ,
+  -- Monitoring (separate from session start)
+  monitoring_enabled BOOLEAN DEFAULT FALSE,
+  monitoring_started_at TIMESTAMPTZ,
   -- Request expiration (for OPEN status requests)
   expires_at TIMESTAMPTZ, -- When the request expires (for OPEN status requests). Used to filter out expired requests in the babysitter requests feed.
   -- Timestamps
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Session timeline events (SESSION_STARTED, SESSION_COMPLETED, etc.)
+CREATE TABLE IF NOT EXISTS session_events (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  type TEXT NOT NULL CHECK (type IN ('session_requested', 'session_accepted', 'session_started', 'monitoring_enabled', 'monitoring_disabled', 'cry_detected', 'session_completed', 'session_cancelled', 'admin_action', 'sitter_requested_end', 'session_time_expired', 'session_extended', 'session_auto_completed', 'admin_force_end', 'emergency_contact_called')),
+  triggered_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_session_events_session_id ON session_events(session_id);
+CREATE INDEX IF NOT EXISTS idx_session_events_created_at ON session_events(created_at DESC);
 
 -- Indexes for users table (sitter availability and location)
 CREATE INDEX IF NOT EXISTS idx_users_is_active ON users(is_active) WHERE role = 'sitter' AND is_active = TRUE;
@@ -265,7 +293,7 @@ CREATE TABLE IF NOT EXISTS alerts (
   child_id UUID REFERENCES children(id) ON DELETE CASCADE,
   parent_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   sitter_id UUID REFERENCES users(id) ON DELETE SET NULL,
-  type TEXT NOT NULL CHECK (type IN ('cry_detection', 'emergency', 'gps_anomaly', 'session_reminder')),
+  type TEXT NOT NULL CHECK (type IN ('cry_detection', 'emergency', 'gps_anomaly', 'session_reminder', 'session_request', 'session_accepted', 'session_cancelled', 'session_started', 'session_completed', 'interview_scheduled', 'meeting_request', 'meeting_accepted', 'meeting_declined')),
   severity TEXT NOT NULL CHECK (severity IN ('low', 'medium', 'high', 'critical')),
   title TEXT NOT NULL,
   message TEXT NOT NULL,
@@ -348,6 +376,7 @@ CREATE INDEX IF NOT EXISTS idx_sessions_created_at ON sessions(created_at DESC);
 -- For existing databases: These indexes are created by ADD_SESSION_TRACKING_COLUMNS.sql
 CREATE INDEX IF NOT EXISTS idx_sessions_cancelled_at ON sessions(cancelled_at) WHERE cancelled_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_sessions_completed_at ON sessions(completed_at) WHERE completed_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_sessions_started_at ON sessions(started_at) WHERE started_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_sessions_cancelled_by ON sessions(cancelled_by) WHERE cancelled_by IS NOT NULL;
 
 -- Indexes for request expiration (for babysitter requests feed)
@@ -358,34 +387,19 @@ WHERE status = 'requested' AND (expires_at IS NULL OR expires_at > NOW());
 -- ============================================
 -- MIGRATION SCRIPTS FOR EXISTING DATABASES
 -- ============================================
--- If you have an existing database, run these scripts in order:
+-- This file is the single source of truth. For a NEW project, run this entire file once in Supabase SQL Editor.
 --
--- 1. UPDATE_SESSIONS_STATUS.sql
---    - Updates status constraint to include 'requested' status
---    - Sets default status to 'requested'
---    - Adds missing indexes (idx_sessions_child_id, idx_sessions_start_time, idx_sessions_created_at)
+-- For an EXISTING database that was created from an older version of this schema, you may need to:
+-- 1. Add any missing columns/tables (e.g. sessions.payment_status, sessions.estimated_amount,
+--    payment_methods, payments, sitter_accounts, payouts, interviews) by running the relevant
+--    CREATE TABLE / ALTER TABLE / ADD COLUMN statements from this file, and add any missing
+--    RLS policies. Payment and interview tables and session columns are defined above in this file.
+-- 2. Expand sessions status CHECK if needed to include: interview_scheduled, interview_completed,
+--    payment_pending, booked (see sessions table definition above).
+-- 3. Expand alerts type CHECK if needed to include: interview_scheduled (see alerts table above).
 --
--- 2. ADD_SESSION_TRACKING_COLUMNS.sql
---    - Adds cancellation tracking columns (cancelled_at, cancelled_by, cancellation_reason)
---    - Adds completion tracking column (completed_at)
---
--- 3. expires_at and indexes: Already in sessions table and indexes section above (no separate script).
---
--- 4. UPDATE_RLS_FOR_VERIFIED_SITTERS.sql (INTEGRATED)
---    - Updates RLS policy to allow parents to read verified sitter profiles
---    - Enables parents to browse and select verified sitters for session requests
---    - NOTE: Already integrated above in users table RLS policies (see line ~449)
---
--- 5. UPDATE_VERIFICATION_RLS_FOR_PARENTS.sql (INTEGRATED)
---    - Updates RLS policy to allow parents to read verification requests for verified sitters
---    - Enables parents to view sitter qualifications and certifications when browsing verified sitters
---    - NOTE: Already integrated above in verification_requests table RLS policies (see line ~573)
---    - Creates indexes for cancellation/completion queries
---    - Adds column comments for documentation
---
--- Sitter availability (is_active, last_active_at, latitude, longitude) and expires_at are already
--- in the users and sessions table definitions above; no separate migration scripts are used.
--- These migrations are already included in this schema file for new installations.
+-- Legacy migration scripts (UPDATE_SESSIONS_STATUS, ADD_SESSION_TRACKING_COLUMNS, etc.) are
+-- no longer maintained separately; all current schema is in this file.
 CREATE INDEX IF NOT EXISTS idx_alerts_parent_id ON alerts(parent_id);
 CREATE INDEX IF NOT EXISTS idx_alerts_status ON alerts(status);
 CREATE INDEX IF NOT EXISTS idx_alerts_created_at ON alerts(created_at DESC);
@@ -395,6 +409,115 @@ CREATE INDEX IF NOT EXISTS idx_chat_messages_receiver_id ON chat_messages(receiv
 CREATE INDEX IF NOT EXISTS idx_chat_messages_created_at ON chat_messages(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_gps_tracking_session_id ON gps_tracking(session_id);
 CREATE INDEX IF NOT EXISTS idx_gps_tracking_created_at ON gps_tracking(created_at DESC);
+
+-- Child care instructions (optional structured instructions for assistant)
+CREATE TABLE IF NOT EXISTS child_care_instructions (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  child_id UUID NOT NULL REFERENCES children(id) ON DELETE CASCADE,
+  instruction_type TEXT NOT NULL CHECK (instruction_type IN ('feeding', 'sleep', 'medicine', 'behavior', 'safety', 'general')),
+  instruction_text TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_child_care_instructions_child_id ON child_care_instructions(child_id);
+
+-- Assistant query logs (for admin audit)
+CREATE TABLE IF NOT EXISTS assistant_query_logs (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  child_id UUID NOT NULL REFERENCES children(id) ON DELETE CASCADE,
+  question TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_assistant_query_logs_session_id ON assistant_query_logs(session_id);
+CREATE INDEX IF NOT EXISTS idx_assistant_query_logs_created_at ON assistant_query_logs(created_at DESC);
+
+-- ============================================
+-- PAYMENT & INTERVIEW (Prompts 4.5, 4.6)
+-- ============================================
+
+-- Parent Stripe customer and default payment method
+CREATE TABLE IF NOT EXISTS payment_methods (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  parent_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE UNIQUE,
+  stripe_customer_id TEXT,
+  default_payment_method TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_payment_methods_parent_id ON payment_methods(parent_id);
+
+-- Per-session payment (Stripe Payment Intent, manual capture)
+CREATE TABLE IF NOT EXISTS payments (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE UNIQUE,
+  parent_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  amount_estimated DECIMAL(10, 2) NOT NULL,
+  amount_final DECIMAL(10, 2),
+  currency TEXT NOT NULL DEFAULT 'usd',
+  stripe_payment_intent_id TEXT,
+  payment_status TEXT NOT NULL DEFAULT 'pending' CHECK (payment_status IN ('pending', 'authorized', 'captured', 'refunded', 'failed')),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_payments_session_id ON payments(session_id);
+CREATE INDEX IF NOT EXISTS idx_payments_parent_id ON payments(parent_id);
+
+-- Sitter Stripe Connect (payout) account
+CREATE TABLE IF NOT EXISTS sitter_accounts (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  sitter_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE UNIQUE,
+  stripe_account_id TEXT,
+  onboarding_status TEXT NOT NULL DEFAULT 'not_started' CHECK (onboarding_status IN ('not_started', 'pending', 'completed', 'rejected')),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_sitter_accounts_sitter_id ON sitter_accounts(sitter_id);
+
+-- Sitter payouts (after session completion)
+CREATE TABLE IF NOT EXISTS payouts (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  sitter_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  amount DECIMAL(10, 2) NOT NULL,
+  stripe_transfer_id TEXT,
+  payout_status TEXT NOT NULL DEFAULT 'pending' CHECK (payout_status IN ('pending', 'processing', 'paid', 'failed')),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_payouts_session_id ON payouts(session_id);
+CREATE INDEX IF NOT EXISTS idx_payouts_sitter_id ON payouts(sitter_id);
+
+-- Parent–sitter interview (video call before booking)
+CREATE TABLE IF NOT EXISTS interviews (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  parent_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  sitter_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  scheduled_time TIMESTAMPTZ NOT NULL,
+  meeting_link TEXT,
+  status TEXT NOT NULL DEFAULT 'scheduled' CHECK (status IN ('scheduled', 'started', 'completed', 'cancelled')),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_interviews_session_id ON interviews(session_id);
+CREATE INDEX IF NOT EXISTS idx_interviews_scheduled_time ON interviews(scheduled_time);
+
+-- Pre-booking video call (parent requests to meet sitter before sending a session request)
+CREATE TABLE IF NOT EXISTS meeting_requests (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  parent_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  sitter_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  preferred_time TIMESTAMPTZ,
+  scheduled_time TIMESTAMPTZ,
+  meeting_link TEXT,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'declined', 'completed', 'cancelled')),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_meeting_requests_parent_id ON meeting_requests(parent_id);
+CREATE INDEX IF NOT EXISTS idx_meeting_requests_sitter_id ON meeting_requests(sitter_id);
+CREATE INDEX IF NOT EXISTS idx_meeting_requests_status ON meeting_requests(status);
 
 -- Function to update updated_at timestamp
 CREATE OR REPLACE FUNCTION update_updated_at_column()
@@ -419,6 +542,9 @@ CREATE TRIGGER update_sessions_updated_at BEFORE UPDATE ON sessions
   FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 CREATE TRIGGER update_verification_requests_updated_at BEFORE UPDATE ON verification_requests
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_meeting_requests_updated_at BEFORE UPDATE ON meeting_requests
   FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 -- Row Level Security (RLS) Policies
@@ -458,7 +584,8 @@ $$;
 GRANT EXECUTE ON FUNCTION get_user_role(UUID) TO authenticated;
 GRANT EXECUTE ON FUNCTION get_user_role(UUID) TO anon;
 
--- Users: Users can read their own profile, admins can read all, parents can read verified sitters
+-- Users: Users can read their own profile, admins can read all, parents can read verified sitters,
+--        sitters can read parent display_name/email for parents of sessions they can see
 DROP POLICY IF EXISTS "Users can read own profile" ON users;
 CREATE POLICY "Users can read own profile" ON users
   FOR SELECT USING (
@@ -469,6 +596,21 @@ CREATE POLICY "Users can read own profile" ON users
       get_user_role(auth.uid()) = 'parent'
       AND users.role = 'sitter'
       AND users.is_verified = true
+    )
+    OR (
+      -- Sitters can read parent profile (e.g. display_name) when parent has a session the sitter can see
+      get_user_role(auth.uid()) = 'sitter'
+      AND users.role = 'parent'
+      AND (
+        EXISTS (
+          SELECT 1 FROM sessions s
+          WHERE s.parent_id = users.id AND s.status = 'requested'
+        )
+        OR EXISTS (
+          SELECT 1 FROM sessions s
+          WHERE s.parent_id = users.id AND s.sitter_id = auth.uid()
+        )
+      )
     )
   );
 
@@ -512,12 +654,19 @@ CREATE POLICY "Parents can manage own child instructions" ON child_instructions
     SELECT 1 FROM users WHERE id = auth.uid() AND role = 'admin'
   ));
 
--- Sessions: Parents and sitters can read their sessions
+-- Sessions: Parents and sitters can read their sessions; sitters can read broadcast requests (city/nearby/nationwide)
 CREATE POLICY "Users can read own sessions" ON sessions
   FOR SELECT USING (
     parent_id = auth.uid() OR 
     sitter_id = auth.uid() OR
     EXISTS (SELECT 1 FROM users WHERE id = auth.uid() AND role = 'admin')
+  );
+CREATE POLICY "Sitters can read broadcast session requests" ON sessions
+  FOR SELECT USING (
+    get_user_role(auth.uid()) = 'sitter'
+    AND status = 'requested'
+    AND search_scope IN ('nearby', 'city', 'nationwide')
+    AND sitter_id IS NULL
   );
 
 CREATE POLICY "Users can create own sessions" ON sessions
@@ -528,6 +677,36 @@ CREATE POLICY "Users can update own sessions" ON sessions
     parent_id = auth.uid() OR 
     sitter_id = auth.uid() OR
     EXISTS (SELECT 1 FROM users WHERE id = auth.uid() AND role = 'admin')
+  );
+
+-- Session events: read/insert for users who have access to the session
+ALTER TABLE session_events ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Users can read session events for own sessions" ON session_events
+  FOR SELECT USING (
+    EXISTS (
+      SELECT 1 FROM sessions s
+      WHERE s.id = session_events.session_id
+      AND (s.parent_id = auth.uid() OR s.sitter_id = auth.uid())
+    ) OR EXISTS (SELECT 1 FROM users WHERE id = auth.uid() AND role = 'admin')
+  );
+CREATE POLICY "Sitter can insert session_started for assigned session" ON session_events
+  FOR INSERT WITH CHECK (
+    type = 'session_started' AND triggered_by = auth.uid()
+    AND EXISTS (SELECT 1 FROM sessions s WHERE s.id = session_events.session_id AND s.sitter_id = auth.uid())
+  );
+CREATE POLICY "Users can insert session_completed_cancelled for own sessions" ON session_events
+  FOR INSERT WITH CHECK (
+    type IN ('session_completed', 'session_cancelled')
+    AND (triggered_by = auth.uid())
+    AND EXISTS (SELECT 1 FROM sessions s WHERE s.id = session_events.session_id AND (s.parent_id = auth.uid() OR s.sitter_id = auth.uid()))
+  );
+CREATE POLICY "Session participants and admin can insert timeline events" ON session_events
+  FOR INSERT WITH CHECK (
+    triggered_by = auth.uid()
+    AND (
+      EXISTS (SELECT 1 FROM sessions s WHERE s.id = session_events.session_id AND (s.parent_id = auth.uid() OR s.sitter_id = auth.uid()))
+      OR EXISTS (SELECT 1 FROM users u WHERE u.id = auth.uid() AND u.role = 'admin')
+    )
   );
 
 -- Alerts: Users can read their own alerts
@@ -626,6 +805,93 @@ CREATE POLICY "Users can read session reviews" ON reviews
 
 CREATE POLICY "Users can create reviews" ON reviews
   FOR INSERT WITH CHECK (reviewer_id = auth.uid());
+
+-- Admins can delete abusive/inappropriate reviews
+CREATE POLICY "Admin can delete reviews" ON reviews
+  FOR DELETE USING (
+    EXISTS (SELECT 1 FROM users WHERE id = auth.uid() AND role = 'admin')
+  );
+
+-- Child care instructions: parent can manage; parent and sitter (with session) can read
+ALTER TABLE child_care_instructions ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Read child_care_instructions for own or session child" ON child_care_instructions
+  FOR SELECT USING (
+    EXISTS (SELECT 1 FROM children c WHERE c.id = child_care_instructions.child_id AND c.parent_id = auth.uid())
+    OR EXISTS (SELECT 1 FROM sessions s WHERE s.child_id = child_care_instructions.child_id AND (s.parent_id = auth.uid() OR s.sitter_id = auth.uid()))
+  );
+CREATE POLICY "Parent can manage child_care_instructions" ON child_care_instructions
+  FOR ALL USING (
+    EXISTS (SELECT 1 FROM children c WHERE c.id = child_care_instructions.child_id AND c.parent_id = auth.uid())
+  );
+
+-- Assistant query logs: session participants can insert; admin and participants can read
+ALTER TABLE assistant_query_logs ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Session participants can insert assistant logs" ON assistant_query_logs
+  FOR INSERT WITH CHECK (
+    user_id = auth.uid()
+    AND EXISTS (SELECT 1 FROM sessions s WHERE s.id = assistant_query_logs.session_id AND (s.parent_id = auth.uid() OR s.sitter_id = auth.uid()))
+  );
+CREATE POLICY "Participants and admin can read assistant logs" ON assistant_query_logs
+  FOR SELECT USING (
+    EXISTS (SELECT 1 FROM sessions s WHERE s.id = assistant_query_logs.session_id AND (s.parent_id = auth.uid() OR s.sitter_id = auth.uid()))
+    OR EXISTS (SELECT 1 FROM users WHERE id = auth.uid() AND role = 'admin')
+  );
+
+-- Payment methods: parent owns; admin read
+ALTER TABLE payment_methods ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Parent can manage own payment_methods" ON payment_methods
+  FOR ALL USING (parent_id = auth.uid());
+CREATE POLICY "Admin can read payment_methods" ON payment_methods
+  FOR SELECT USING (EXISTS (SELECT 1 FROM users WHERE id = auth.uid() AND role = 'admin'));
+
+-- Payments: parent/sitter see own session payments; admin all
+ALTER TABLE payments ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Users can read payments for own sessions" ON payments
+  FOR SELECT USING (
+    parent_id = auth.uid()
+    OR EXISTS (SELECT 1 FROM sessions s WHERE s.id = payments.session_id AND s.sitter_id = auth.uid())
+    OR EXISTS (SELECT 1 FROM users WHERE id = auth.uid() AND role = 'admin')
+  );
+-- INSERT/UPDATE/DELETE on payments are done by backend only (service role bypasses RLS)
+
+-- Sitter accounts: sitter owns; admin read
+ALTER TABLE sitter_accounts ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Sitter can manage own sitter_accounts" ON sitter_accounts
+  FOR ALL USING (sitter_id = auth.uid());
+CREATE POLICY "Admin can read sitter_accounts" ON sitter_accounts
+  FOR SELECT USING (EXISTS (SELECT 1 FROM users WHERE id = auth.uid() AND role = 'admin'));
+
+-- Payouts: sitter sees own; admin all
+ALTER TABLE payouts ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Sitter and admin can read payouts" ON payouts
+  FOR SELECT USING (
+    sitter_id = auth.uid()
+    OR EXISTS (SELECT 1 FROM users WHERE id = auth.uid() AND role = 'admin')
+  );
+
+-- Interviews: parent and sitter see own; admin all
+ALTER TABLE interviews ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Participants and admin can read interviews" ON interviews
+  FOR SELECT USING (
+    parent_id = auth.uid() OR sitter_id = auth.uid()
+    OR EXISTS (SELECT 1 FROM users WHERE id = auth.uid() AND role = 'admin')
+  );
+CREATE POLICY "Parent can create interview for own session" ON interviews
+  FOR INSERT WITH CHECK (
+    parent_id = auth.uid()
+    AND EXISTS (SELECT 1 FROM sessions s WHERE s.id = session_id AND s.parent_id = auth.uid())
+  );
+CREATE POLICY "Participants can update own interviews" ON interviews
+  FOR UPDATE USING (parent_id = auth.uid() OR sitter_id = auth.uid());
+
+-- Meeting requests (pre-booking video calls): parent creates, sitter accepts/declines
+ALTER TABLE meeting_requests ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Parent and sitter can read own meeting requests" ON meeting_requests
+  FOR SELECT USING (parent_id = auth.uid() OR sitter_id = auth.uid());
+CREATE POLICY "Parent can create meeting request" ON meeting_requests
+  FOR INSERT WITH CHECK (parent_id = auth.uid());
+CREATE POLICY "Participants can update meeting request" ON meeting_requests
+  FOR UPDATE USING (parent_id = auth.uid() OR sitter_id = auth.uid());
 
 -- Views for readable date formats (optional, for easier querying)
 CREATE OR REPLACE VIEW users_readable AS

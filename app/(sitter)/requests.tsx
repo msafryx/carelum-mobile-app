@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { View, StyleSheet, ScrollView, Text, TouchableOpacity, ActivityIndicator, RefreshControl, Alert } from 'react-native';
+import { View, StyleSheet, ScrollView, Text, TouchableOpacity, ActivityIndicator, RefreshControl, Alert, Image } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/src/components/ui/ThemeProvider';
 import Header from '@/src/components/ui/Header';
@@ -9,7 +9,8 @@ import SitterHamburgerMenu from '@/src/components/ui/SitterHamburgerMenu';
 import Badge from '@/src/components/ui/Badge';
 import { useRouter } from 'expo-router';
 import { useAuth } from '@/src/hooks/useAuth';
-import { discoverAvailableSessions, acceptSessionRequest, cancelSession, subscribeToUserSessions } from '@/src/services/session.service';
+import { useSitterTabBadges } from '@/src/contexts/SitterTabBadgesContext';
+import { discoverAvailableSessions, acceptSessionRequest, cancelSession, subscribeToAvailableRequests } from '@/src/services/session.service';
 import { getChildById } from '@/src/services/child.service';
 import { getUserById } from '@/src/services/admin.service';
 import { Session, getRequestMode, getRequestStatus, RequestMode, RequestStatus } from '@/src/types/session.types';
@@ -23,6 +24,7 @@ interface SessionWithDetails extends Session {
   childAge?: number;
   parentName?: string;
   parentCity?: string;
+  parentPhotoUrl?: string;
   requestMode?: RequestMode;
   requestStatus?: RequestStatus;
   children?: Array<{ id: string; name: string; age?: number; photoUrl?: string }>;
@@ -32,6 +34,7 @@ export default function SitterRequestsScreen() {
   const { colors, spacing } = useTheme();
   const router = useRouter();
   const { user, userProfile } = useAuth();
+  const tabBadges = useSitterTabBadges();
   const [menuVisible, setMenuVisible] = useState(false);
   const [requests, setRequests] = useState<SessionWithDetails[]>([]);
   const [loading, setLoading] = useState(false);
@@ -60,7 +63,8 @@ export default function SitterRequestsScreen() {
       if (result.success && result.data) {
         // Filter out ignored requests
         const filteredSessions = result.data.filter(s => !ignoredIds.has(s.id));
-        
+        tabBadges?.setRequestCount(filteredSessions.length);
+
         // Fetch child and parent details for each request
         const requestsWithDetails = await Promise.all(
           filteredSessions.map(async (session) => {
@@ -112,12 +116,17 @@ export default function SitterRequestsScreen() {
             
             details.children = children;
             
-            // Get parent name and city
+            // Get parent name, city, and photo
             if (session.parentId) {
               const parentResult = await getUserById(session.parentId);
               if (parentResult.success && parentResult.data) {
-                details.parentName = parentResult.data.displayName || 'Parent';
-                details.parentCity = parentResult.data.city || undefined;
+                const p = parentResult.data;
+                details.parentName =
+                  (p.displayName && p.displayName.trim()) ||
+                  p.email?.split('@')[0] ||
+                  'Parent';
+                details.parentCity = p.city ?? undefined;
+                details.parentPhotoUrl = (p as any).profileImageUrl ?? undefined;
               }
             }
 
@@ -157,16 +166,11 @@ export default function SitterRequestsScreen() {
   useEffect(() => {
     loadRequests();
     
-    // Subscribe to real-time updates
+    // Subscribe to available requests (status = requested); filter client-side by eligibility
     if (user) {
-      subscriptionRef.current = subscribeToUserSessions(
-        user.id,
-        'sitter',
-        () => {
-          // Reload requests when sessions change
-          loadRequests();
-        }
-      );
+      subscriptionRef.current = subscribeToAvailableRequests(() => {
+        loadRequests();
+      });
     }
     
     return () => {
@@ -229,8 +233,12 @@ export default function SitterRequestsScreen() {
 
   const handleIgnore = (sessionId: string) => {
     setIgnoredIds(prev => new Set([...prev, sessionId]));
-    // Remove from requests immediately
-    setRequests(prev => prev.filter(r => r.id !== sessionId));
+    // Remove from requests immediately and update tab badge
+    setRequests(prev => {
+      const next = prev.filter(r => r.id !== sessionId);
+      tabBadges?.setRequestCount(next.length);
+      return next;
+    });
   };
 
   const handleViewDetails = (sessionId: string) => {
@@ -475,36 +483,45 @@ function RequestCard({
   const primaryChild = children[0] || { name: request.childName || 'Child', age: request.childAge };
 
   return (
+    <TouchableOpacity
+      activeOpacity={0.95}
+      onPress={() => onViewDetails(request.id)}
+      style={styles.requestCardWrap}
+    >
     <Card 
       style={[
         styles.requestCard,
         isInvite && { borderLeftWidth: 4, borderLeftColor: colors.primary },
       ]}
-      // Remove any onPress from Card - only buttons should be clickable
     >
       <View style={styles.requestHeader}>
         <View style={styles.requestInfo}>
           <View style={styles.childInfo}>
             <Text style={[styles.requestTitle, { color: colors.text }]}>
-              {primaryChild.name}
-              {primaryChild.age && `, ${primaryChild.age} ${primaryChild.age === 1 ? 'year' : 'years'} old`}
+              {request.parentName || 'Parent'}
             </Text>
-            {children.length > 1 && (
-              <Text style={[styles.multipleChildren, { color: colors.textSecondary }]}>
-                +{children.length - 1} more {children.length === 2 ? 'child' : 'children'}
-              </Text>
-            )}
-          </View>
-          {request.parentName && (
             <Text style={[styles.parentName, { color: colors.textSecondary }]}>
-              from {request.parentName}
+              {children.length === 0
+                ? '1 child'
+                : children.length === 1
+                  ? `${primaryChild.name}${primaryChild.age != null ? `, ${primaryChild.age} ${primaryChild.age === 1 ? 'year' : 'years'} old` : ''}`
+                  : `${children.length} children: ${children.map(c => c.name).join(', ')}`}
             </Text>
-          )}
+          </View>
         </View>
-        <Badge
-          label={getModeLabel(request.requestMode || 'INVITE')}
-          color={getModeBadgeColor(request.requestMode || 'INVITE')}
-        />
+        <View style={styles.requestHeaderRight}>
+          {request.parentPhotoUrl ? (
+            <Image source={{ uri: request.parentPhotoUrl }} style={styles.requestParentAvatar} />
+          ) : (
+            <View style={[styles.requestParentAvatarPlaceholder, { backgroundColor: colors.primary + '20' }]}>
+              <Ionicons name="person" size={20} color={colors.primary} />
+            </View>
+          )}
+          <Badge
+            label={getModeLabel(request.requestMode || 'INVITE')}
+            color={getModeBadgeColor(request.requestMode || 'INVITE')}
+          />
+        </View>
       </View>
 
       <View style={styles.requestDetails}>
@@ -553,6 +570,15 @@ function RequestCard({
       </View>
 
       <View style={styles.requestActions}>
+        <TouchableOpacity
+          style={[styles.actionButton, styles.viewButton, { borderColor: colors.primary }]}
+          onPress={() => onViewDetails(request.id)}
+        >
+          <Ionicons name="open-outline" size={18} color={colors.primary} />
+          <Text style={[styles.actionButtonText, { color: colors.primary }]}>
+            View
+          </Text>
+        </TouchableOpacity>
         {isInvite ? (
           <>
             <TouchableOpacity
@@ -620,10 +646,13 @@ function RequestCard({
         )}
       </View>
     </Card>
+    </TouchableOpacity>
   );
 }
 
 const styles = StyleSheet.create({
+  requestCardWrap: {
+  },
   container: {
     flex: 1,
   },
@@ -672,6 +701,22 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'flex-start',
     marginBottom: 14,
+  },
+  requestHeaderRight: {
+    alignItems: 'flex-end',
+    gap: 8,
+  },
+  requestParentAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+  },
+  requestParentAvatarPlaceholder: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   requestInfo: {
     flex: 1,
@@ -734,6 +779,11 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     gap: 6,
     minHeight: 48,
+  },
+  viewButton: {
+    borderWidth: 2,
+    backgroundColor: 'transparent',
+    // borderColor set inline
   },
   acceptButton: {
     // backgroundColor set inline

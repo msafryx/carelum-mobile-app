@@ -7,7 +7,9 @@ import EnhancedGPSMap from '@/src/components/gps/EnhancedGPSMap';
 import CancelSessionModal from '@/src/components/session/CancelSessionModal';
 import CryDetectionIndicator from '@/src/components/session/CryDetectionIndicator';
 import SessionControls from '@/src/components/session/SessionControls';
+import EmergencyCallButton from '@/src/components/session/EmergencyCallButton';
 import SessionTimeline from '@/src/components/session/SessionTimeline';
+import { createReview } from '@/src/services/review.service';
 import Card from '@/src/components/ui/Card';
 import ErrorDisplay from '@/src/components/ui/ErrorDisplay';
 import HamburgerMenu from '@/src/components/ui/HamburgerMenu';
@@ -26,6 +28,8 @@ import {
     getSessionGPSTracking,
     subscribeToGPSUpdates,
 } from '@/src/services/monitoring.service';
+import { createPaymentIntent } from '@/src/services/payment.service';
+import { getInterviewBySession, scheduleInterview } from '@/src/services/interview.service';
 import {
     cancelSession,
     completeSession,
@@ -43,6 +47,7 @@ import {
     Alert,
     Animated,
     Image,
+    Linking,
     RefreshControl,
     ScrollView,
     StyleSheet,
@@ -61,6 +66,25 @@ function formatDuration(startTime: Date): string {
   if (hours > 0) {
     return `${hours}h ${minutes}m`;
   }
+  return `${minutes}m`;
+}
+
+function formatMonitoringDuration(startTime?: Date): string {
+  if (!startTime) return '0m';
+  const now = new Date();
+  const diff = now.getTime() - startTime.getTime();
+  const hours = Math.floor(diff / (1000 * 60 * 60));
+  const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  return `${minutes}m`;
+}
+
+function formatDurationBetween(start: Date, end: Date): string {
+  const diff = end.getTime() - start.getTime();
+  if (diff <= 0) return '0m';
+  const hours = Math.floor(diff / (1000 * 60 * 60));
+  const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+  if (hours > 0) return `${hours}h ${minutes}m`;
   return `${minutes}m`;
 }
 
@@ -120,9 +144,25 @@ export default function SessionDetailScreen() {
   const [actionLoading, setActionLoading] = useState(false);
   const [menuVisible, setMenuVisible] = useState(false);
   const [cancelModalVisible, setCancelModalVisible] = useState(false);
+  const [interview, setInterview] = useState<{ meeting_link: string; scheduled_time: string; status: string } | null>(null);
   const [searchDuration, setSearchDuration] = useState<string>('');
   const searchDurationIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const sessionRef = useRef<Session | null>(null);
+
+  const monitoringEnabled = session?.monitoringEnabled || false;
+  const lastSignal =
+    session?.lastLocationAt && session.lastAudioSignalAt
+      ? new Date(Math.max(session.lastLocationAt.getTime(), session.lastAudioSignalAt.getTime()))
+      : session?.lastLocationAt || session?.lastAudioSignalAt || null;
+  const monitoringUnstable =
+    monitoringEnabled &&
+    lastSignal &&
+    (Date.now() - lastSignal.getTime() > 2 * 60 * 1000);
+  const monitoringStatusLabel = !monitoringEnabled
+    ? 'Monitoring OFF'
+    : monitoringUnstable
+      ? 'Monitoring UNSTABLE'
+      : 'Monitoring ACTIVE';
 
   // Load session data
   const loadSessionData = useCallback(async () => {
@@ -148,6 +188,21 @@ export default function SessionDetailScreen() {
       }
       console.log('📅 Session loaded - createdAt:', sessionData.createdAt, 'type:', typeof sessionData.createdAt, 'isDate:', sessionData.createdAt instanceof Date);
       setSession(sessionData);
+
+      if (sessionData.status === 'interview_scheduled' || sessionData.status === 'interview_completed') {
+        const interviewRes = await getInterviewBySession(id!);
+        if (interviewRes.success && interviewRes.data) {
+          setInterview({
+            meeting_link: interviewRes.data.meeting_link,
+            scheduled_time: interviewRes.data.scheduled_time,
+            status: interviewRes.data.status,
+          });
+        } else {
+          setInterview(null);
+        }
+      } else {
+        setInterview(null);
+      }
 
       // Load child data - handle multiple children if childIds exists
       console.log('📝 Session childIds:', sessionData.childIds, 'childId:', sessionData.childId);
@@ -362,7 +417,11 @@ export default function SessionDetailScreen() {
             setActionLoading(true);
             const result = await completeSession(id);
             if (result.success) {
-              Alert.alert('Success', 'Session ended successfully');
+              const amount = result.data?.totalAmount;
+              const message = amount != null && amount > 0
+                ? `Session ended. You were charged Rs. ${amount.toFixed(2)} for the time used.`
+                : 'Session ended successfully.';
+              Alert.alert('Success', message);
               router.back();
             } else {
               Alert.alert('Error', result.error?.message || 'Failed to end session');
@@ -501,7 +560,7 @@ export default function SessionDetailScreen() {
             <View style={styles.sessionHeaderLeft}>
               <View style={[styles.statusBadge, { backgroundColor: getStatusColor(session.status, colors) }]}>
                 <Text style={[styles.statusText, { color: colors.white }]}>
-                  {session.status.toUpperCase()}
+                  {session.status === 'active' ? 'LIVE' : session.status === 'accepted' || session.status === 'booked' ? 'BOOKED' : session.status === 'payment_pending' ? 'PAYMENT REQUIRED' : session.status.toUpperCase().replace(/_/g, ' ')}
                 </Text>
               </View>
               {children.length > 1 ? (
@@ -535,7 +594,7 @@ export default function SessionDetailScreen() {
               <View style={styles.infoRow}>
                 <Ionicons name="hourglass-outline" size={16} color={colors.textSecondary} />
                 <Text style={[styles.infoText, { color: colors.textSecondary }]}>
-                  Duration: {formatDuration(session.startTime)}
+                  Duration: {formatDuration(session.startedAt ?? session.startTime)}
                 </Text>
               </View>
             )}
@@ -580,6 +639,82 @@ export default function SessionDetailScreen() {
                     </Text>
                   </View>
                 )}
+                {session.status === 'requested' && !session.sitterId && (
+                  <Text style={[styles.helperText, { color: colors.textSecondary, marginTop: 8 }]}>
+                    When a sitter accepts, you can schedule an online video call here before confirming the booking.
+                  </Text>
+                )}
+              </View>
+            )}
+            {session.status === 'requested' && session.sitterId && (
+              <View style={styles.interviewSection}>
+                <Text style={[styles.paymentSectionTitle, { color: colors.text }]}>
+                  Video call before booking
+                </Text>
+                <Text style={[styles.helperText, { color: colors.textSecondary }]}>
+                  Meet your sitter in a short online video call before you confirm. Schedule the call and both of you can join when it's time.
+                </Text>
+                <TouchableOpacity
+                  style={[styles.confirmPayButton, { backgroundColor: colors.primary }]}
+                  onPress={async () => {
+                    const preferredTime = session.startTime ? session.startTime.toISOString() : new Date(Date.now() + 86400000).toISOString();
+                    const res = await scheduleInterview(session.id, preferredTime);
+                    if (res.success && res.data) {
+                      Alert.alert('Interview scheduled', 'Sitter has been notified. You can join when it\'s time.');
+                      loadSessionData();
+                    } else {
+                      Alert.alert('Error', res.error?.message || 'Could not schedule interview.');
+                    }
+                  }}
+                >
+                  <Ionicons name="videocam-outline" size={20} color="#fff" />
+                  <Text style={styles.confirmPayButtonText}>Schedule video call</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+            {session.status === 'interview_scheduled' && interview && (
+              <View style={styles.interviewSection}>
+                <Text style={[styles.paymentSectionTitle, { color: colors.text }]}>Upcoming Interview</Text>
+                <Text style={[styles.helperText, { color: colors.textSecondary }]}>
+                  {new Date(interview.scheduled_time).toLocaleString()}
+                </Text>
+                <TouchableOpacity
+                  style={[styles.confirmPayButton, { backgroundColor: colors.primary }]}
+                  onPress={() => interview.meeting_link && Linking.openURL(interview.meeting_link)}
+                >
+                  <Ionicons name="videocam" size={20} color="#fff" />
+                  <Text style={styles.confirmPayButtonText}>Join Video Call</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+            {session.status === 'payment_pending' && (
+              <View style={styles.paymentSection}>
+                <Text style={[styles.paymentSectionTitle, { color: colors.text }]}>Session cost</Text>
+                <Text style={[styles.estimatedAmount, { color: colors.text }]}>
+                  Rs. {(session.estimatedAmount ?? session.totalAmount ?? 0).toFixed(2)} (estimated)
+                </Text>
+                <Text style={[styles.helperText, { color: colors.textSecondary }]}>
+                  Add a payment method in Profile if you have not. You will be charged (Rs. for time used) when you end the session. Sitter can start once you have added an account.
+                </Text>
+                <TouchableOpacity
+                  style={[styles.confirmPayButton, { backgroundColor: colors.primary }]}
+                  onPress={async () => {
+                    const res = await createPaymentIntent(session.id);
+                    if (res.success && res.data?.clientSecret) {
+                      Alert.alert(
+                        'Complete payment',
+                        'Use the Stripe payment sheet in the app to complete payment (integrate @stripe/stripe-react-native for full flow). Client secret is ready.',
+                        [{ text: 'OK' }]
+                      );
+                      loadSessionData();
+                    } else {
+                      Alert.alert('Error', res.error?.message || 'Could not start payment.');
+                    }
+                  }}
+                >
+                  <Ionicons name="card" size={20} color="#fff" />
+                  <Text style={styles.confirmPayButtonText}>Confirm and Pay</Text>
+                </TouchableOpacity>
               </View>
             )}
             {session.status === 'accepted' && session.createdAt && (
@@ -755,7 +890,7 @@ export default function SessionDetailScreen() {
               <View style={styles.infoRow}>
                 <Ionicons name="cash-outline" size={16} color={colors.textSecondary} />
                 <Text style={[styles.infoText, { color: colors.textSecondary }]}>
-                  Rate: ${session.hourlyRate.toFixed(2)}/hour
+                  Rate: Rs. {session.hourlyRate.toFixed(2)}/hour
                 </Text>
               </View>
             )}
@@ -770,8 +905,40 @@ export default function SessionDetailScreen() {
           </View>
         </Card>
 
-        {/* Enhanced GPS Tracking */}
+        {/* Session Controls - placed high so End Session / Cancel are visible without scrolling */}
         {session.status === 'active' && (
+          <Text style={[styles.helperText, { color: colors.textSecondary, marginBottom: 8 }]}>
+            When you end the session, you'll be charged only for the time used (prorated).
+          </Text>
+        )}
+        <SessionControls
+          sessionStatus={session.status}
+          onEndSession={handleEndSession}
+          onEmergency={handleEmergency}
+          onCancel={() => setCancelModalVisible(true)}
+          isLoading={actionLoading}
+          canEndSession={session.status === 'active'}
+        />
+
+        {/* Monitoring Status */}
+        {session.status === 'active' && (
+          <Card style={styles.infoCard}>
+            <View style={styles.infoRow}>
+              <Ionicons
+                name={!monitoringEnabled ? 'power' : monitoringUnstable ? 'warning' : 'radio'}
+                size={16}
+                color={!monitoringEnabled ? colors.textSecondary : monitoringUnstable ? (colors.warning || colors.textSecondary) : (colors.success || colors.primary)}
+              />
+              <Text style={[styles.infoText, { color: colors.textSecondary }]}>
+                {monitoringStatusLabel}
+                {monitoringEnabled ? ` • ${formatMonitoringDuration(session.monitoringStartedAt)}` : ''}
+              </Text>
+            </View>
+          </Card>
+        )}
+
+        {/* Enhanced GPS Tracking */}
+        {session.status === 'active' && monitoringEnabled && (
           <EnhancedGPSMap
             sessionId={id!}
             currentLocation={currentLocation || undefined}
@@ -820,7 +987,7 @@ export default function SessionDetailScreen() {
         )}
 
         {/* Cry Detection */}
-        {session.status === 'active' && (
+        {session.status === 'active' && monitoringEnabled && (
           <CryDetectionIndicator
             isEnabled={session.cryDetectionEnabled || false}
             isActive={session.monitoringEnabled || false}
@@ -859,28 +1026,80 @@ export default function SessionDetailScreen() {
                 router.push(`/(parent)/chatbot?sessionId=${id}&childId=${child.id}&sitterId=${session.sitterId}`);
               }}
             >
-              <Ionicons name="chatbubbles" size={24} color={colors.white} />
+              <Ionicons name="reader-outline" size={24} color={colors.white} />
               <Text style={[styles.chatbotButtonText, { color: colors.white }]}>
-                Ask AI Assistant
+                Child Assistant
               </Text>
               <Ionicons name="chevron-forward" size={20} color={colors.white} />
             </TouchableOpacity>
           </Card>
         )}
 
-        {/* Session Controls */}
-        <SessionControls
-          sessionStatus={session.status}
-          onEndSession={handleEndSession}
-          onEmergency={handleEmergency}
-          onCancel={() => setCancelModalVisible(true)}
-          isLoading={actionLoading}
-          canEndSession={session.status === 'active'}
-        />
+        {/* Parent: Completed session summary + rate sitter */}
+        {session.status === 'completed' && (
+          <Card style={styles.infoCard}>
+            <Text style={[styles.sectionTitle, { color: colors.text, marginBottom: 12 }]}>
+              Session completed
+            </Text>
+            <View style={styles.sessionInfo}>
+              <View style={styles.infoRow}>
+                <Ionicons name="time-outline" size={16} color={colors.textSecondary} />
+                <Text style={[styles.infoText, { color: colors.textSecondary }]}>
+                  Total duration: {session.startedAt && session.completedAt
+                    ? formatDurationBetween(session.startedAt, session.completedAt)
+                    : session.startTime && (session.completedAt ?? session.endTime)
+                      ? formatDurationBetween(session.startTime, session.completedAt ?? session.endTime!)
+                      : '—'}
+                </Text>
+              </View>
+              <View style={styles.infoRow}>
+                <Ionicons name="radio-outline" size={16} color={colors.textSecondary} />
+                <Text style={[styles.infoText, { color: colors.textSecondary }]}>
+                  Monitoring ended
+                </Text>
+              </View>
+            </View>
+            <TouchableOpacity
+              style={[styles.rateButton, { backgroundColor: colors.primary }]}
+              onPress={async () => {
+                if (!session.sitterId) {
+                  Alert.alert('Unavailable', 'Sitter information is missing for this session.');
+                  return;
+                }
+
+                const { getSessionReport } = await import('@/src/services/session.service');
+                const reportRes = await getSessionReport(session.id);
+                if (!reportRes.success || !reportRes.data) {
+                  Alert.alert('Error', reportRes.error?.message || 'Failed to load session report.');
+                  return;
+                }
+
+                const report = reportRes.data;
+                const lines = [
+                  `Session: ${report.sessionId}`,
+                  report.startedAt ? `Started: ${report.startedAt}` : null,
+                  report.endedAt ? `Ended: ${report.endedAt}` : null,
+                  report.monitoringDurationMinutes != null
+                    ? `Monitoring: ${report.monitoringDurationMinutes} min`
+                    : null,
+                  `Cry alerts: ${report.cryAlertCount}`,
+                  `GPS points: ${report.gpsPointCount}`,
+                ].filter(Boolean);
+
+                Alert.alert('Session report', lines.join('\n'));
+              }}
+            >
+              <Ionicons name="document-text" size={20} color={colors.white} />
+              <Text style={[styles.rateButtonText, { color: colors.white }]}>Download report</Text>
+            </TouchableOpacity>
+          </Card>
+        )}
 
         {/* Session Timeline */}
-        <SessionTimeline session={session} />
+        <SessionTimeline session={session} role="parent" />
       </ScrollView>
+
+      <EmergencyCallButton session={session} role="parent" />
 
       {/* Cancel Session Modal */}
       {cancelModalVisible && session && (
@@ -914,9 +1133,16 @@ function getStatusColor(status: Session['status'], colors: any): string {
       return colors.success;
     case 'completed':
       return colors.success;
+    case 'booked':
+      return colors.info;
     case 'cancelled':
       return colors.textSecondary;
     case 'accepted':
+      return colors.info;
+    case 'payment_pending':
+      return colors.warning;
+    case 'interview_scheduled':
+    case 'interview_completed':
       return colors.info;
     default:
       return colors.warning;
@@ -944,6 +1170,20 @@ const styles = StyleSheet.create({
   },
   chatbotCard: {
     marginBottom: 0,
+  },
+  rateButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+    borderRadius: 12,
+    marginTop: 16,
+  },
+  rateButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
   },
   chatbotButton: {
     flexDirection: 'row',
@@ -1057,6 +1297,46 @@ const styles = StyleSheet.create({
   searchingTimeText: {
     fontSize: 13,
     fontStyle: 'italic',
+  },
+  paymentSection: {
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#e0e0e0',
+  },
+  interviewSection: {
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#e0e0e0',
+  },
+  paymentSectionTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  estimatedAmount: {
+    fontSize: 20,
+    fontWeight: '700',
+    marginBottom: 8,
+  },
+  helperText: {
+    fontSize: 13,
+    marginBottom: 12,
+  },
+  confirmPayButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+    borderRadius: 12,
+  },
+  confirmPayButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
   },
   acceptedSection: {
     marginTop: 8,

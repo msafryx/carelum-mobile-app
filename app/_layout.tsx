@@ -57,6 +57,10 @@ export default function RootLayout() {
     }
   }, [error]);
 
+  // NOTE: StripeProvider is NOT wrapped here so the app can still run in Expo Go
+  // without a custom dev client. When you are ready to integrate full Stripe
+  // Payment Sheet UI (requires native module support), wrap the app with
+  // StripeProvider here and run in a dev client / standalone build.
   return (
     <ThemeProvider>
       <ErrorBoundary>

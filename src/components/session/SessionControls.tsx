@@ -122,7 +122,14 @@ export default function SessionControls({
           </>
         )}
 
-        {(sessionStatus === 'requested' || sessionStatus === 'accepted') && onCancel && (
+        {(
+          sessionStatus === 'requested' ||
+          sessionStatus === 'accepted' ||
+          sessionStatus === 'interview_scheduled' ||
+          sessionStatus === 'interview_completed' ||
+          sessionStatus === 'payment_pending' ||
+          sessionStatus === 'booked'
+        ) && onCancel && (
           <Button
             title={sessionStatus === 'requested' ? 'Cancel Request' : 'Cancel Session'}
             onPress={onCancel}

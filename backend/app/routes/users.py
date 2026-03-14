@@ -153,11 +153,11 @@ async def get_current_user_profile(
                 status_code=404
             )
         
-        # Convert database format to API response format
+        # Convert database format to API response format (coerce None to "" for required string fields)
         return UserProfileResponse(
             id=user_data["id"],
-            email=user_data["email"],
-            displayName=user_data.get("display_name", ""),
+            email=user_data.get("email") or "",
+            displayName=user_data.get("display_name") or "",
             role=user_data.get("role", "parent"),
             preferredLanguage=user_data.get("preferred_language", "en"),
             userNumber=user_data.get("user_number"),
@@ -350,7 +350,7 @@ async def update_current_user_profile(
             return UserProfileResponse(
                 id=user_data["id"],
                 email=user_data["email"],
-                displayName=user_data.get("display_name", ""),
+                displayName=user_data.get("display_name") or "",
                 role=user_data.get("role", "parent"),
                 preferredLanguage=user_data.get("preferred_language", "en"),
                 userNumber=user_data.get("user_number"),
@@ -535,7 +535,7 @@ async def get_verified_sitters(
             sitters.append(UserProfileResponse(
                 id=user_data["id"],
                 email=user_data["email"],
-                displayName=user_data.get("display_name", ""),
+                displayName=user_data.get("display_name") or "",
                 role=user_data.get("role", "sitter"),
                 preferredLanguage=user_data.get("preferred_language", "en"),
                 userNumber=user_data.get("user_number"),

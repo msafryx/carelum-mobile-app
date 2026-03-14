@@ -88,6 +88,14 @@ export default function EnhancedAlertsView({
   const [filter, setFilter] = useState<'all' | 'new' | 'critical' | 'cry_detection'>('all');
   const [notificationPermission, setNotificationPermission] = useState<boolean>(false);
 
+  // Alerts relevant to current role: parents don't see "session_request" (that's for sitters)
+  const filterAlertsByRole = useCallback((list: AlertType[]) => {
+    if (role === 'parent') {
+      return list.filter((a) => a.type !== 'session_request');
+    }
+    return list;
+  }, [role]);
+
   useEffect(() => {
     loadAlerts();
     checkNotificationPermission();
@@ -95,16 +103,17 @@ export default function EnhancedAlertsView({
     
     // Subscribe to real-time alerts
     const unsubscribe = subscribeToSessionAlerts(sessionId, (alertsList) => {
-      setAlerts(alertsList);
-      // Show notification for new alerts
-      const newAlerts = alertsList.filter((a) => a.status === 'new');
+      const filtered = filterAlertsByRole(alertsList);
+      setAlerts(filtered);
+      // Show push only for new alerts relevant to this role (parents don't get session_request toasts)
+      const newAlerts = filtered.filter((a) => a.status === 'new');
       if (newAlerts.length > 0) {
         newAlerts.forEach((alert) => showPushNotification(alert));
       }
     });
 
     return unsubscribe;
-  }, [sessionId]);
+  }, [sessionId, filterAlertsByRole]);
 
   const checkNotificationPermission = async () => {
     const Notifs = loadNotificationsModule();
@@ -174,7 +183,7 @@ export default function EnhancedAlertsView({
     try {
       const result = await getSessionAlerts(sessionId);
       if (result.success && result.data) {
-        setAlerts(result.data);
+        setAlerts(filterAlertsByRole(result.data));
       }
     } catch (err) {
       console.error('Failed to load alerts:', err);

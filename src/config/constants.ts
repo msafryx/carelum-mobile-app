@@ -2,6 +2,10 @@
 
 export const APP_NAME = 'Carelum';
 
+/** Display currency (Sri Lankan Rupees) */
+export const CURRENCY_SYMBOL = 'Rs.';
+export const CURRENCY_CODE = 'LKR';
+
 export const USER_ROLES = {
   PARENT: 'parent',
   BABYSITTER: 'babysitter',
@@ -28,7 +32,11 @@ export type VerificationStatus = typeof VERIFICATION_STATUS[keyof typeof VERIFIC
 
 export const SESSION_STATUS = {
   REQUESTED: 'requested',
+  INTERVIEW_SCHEDULED: 'interview_scheduled',
+  INTERVIEW_COMPLETED: 'interview_completed',
   ACCEPTED: 'accepted',
+  PAYMENT_PENDING: 'payment_pending',
+  BOOKED: 'booked',
   ACTIVE: 'active',
   COMPLETED: 'completed',
   CANCELLED: 'cancelled',
@@ -73,6 +81,14 @@ export const API_ENDPOINTS = {
   // Sessions
   SESSIONS: '/api/sessions',
   SESSION_BY_ID: (id: string) => `/api/sessions/${id}`,
+  SESSION_REPORT: (id: string) => `/api/sessions/${id}/report`,
+  SESSION_EMERGENCY_INFO: (id: string) => `/api/sessions/${id}/emergency-info`,
+  SESSION_EMERGENCY_CALL: (id: string) => `/api/sessions/${id}/emergency-call`,
+  SESSION_START: (id: string) => `/api/sessions/${id}/start`,
+  SESSION_MONITORING: (id: string) => `/api/sessions/${id}/monitoring`,
+  SESSION_END: (id: string) => `/api/sessions/${id}/end`,
+  SESSION_EVENTS: (id: string) => `/api/sessions/${id}/events`,
+  SESSION_REQUEST_END: (id: string) => `/api/sessions/${id}/request-end`,
   SESSION_ALERTS: (id: string) => `/api/sessions/${id}/alerts`,
   SESSION_GPS: (id: string) => `/api/gps/sessions/${id}/gps`,
   SESSION_GPS_LATEST: (id: string) => `/api/gps/sessions/${id}/gps/latest`,
@@ -80,6 +96,7 @@ export const API_ENDPOINTS = {
   CHILDREN: '/api/children',
   CHILD_BY_ID: (id: string) => `/api/children/${id}`,
   CHILD_INSTRUCTIONS: (id: string) => `/api/children/${id}/instructions`,
+  CHILD_ASSISTANT: '/api/child-assistant',
   // Alerts
   ALERTS: '/api/alerts',
   ALERT_BY_ID: (id: string) => `/api/alerts/${id}`,
@@ -91,6 +108,24 @@ export const API_ENDPOINTS = {
   // Messages
   SESSION_MESSAGES: (id: string) => `/api/sessions/${id}/messages`,
   MESSAGE_READ: (id: string) => `/api/messages/${id}/read`,
+  // Payments (Stripe)
+  PAYMENTS_CREATE_CUSTOMER: '/api/payments/create-customer',
+  PAYMENTS_CREATE_INTENT: '/api/payments/create-intent',
+  PAYMENTS_CAPTURE: '/api/payments/capture',
+  // Sitter payout (Stripe Connect)
+  SITTERS_CREATE_STRIPE_ACCOUNT: '/api/sitters/create-stripe-account',
+  SITTERS_ONBOARDING_LINK: '/api/sitters/onboarding-link',
+  // Interviews (video call)
+  INTERVIEWS_SCHEDULE: '/api/interviews/schedule',
+  INTERVIEWS_BY_SESSION: (sessionId: string) => `/api/interviews/session/${sessionId}`,
+  INTERVIEW_BY_ID: (id: string) => `/api/interviews/${id}`,
+  INTERVIEW_COMPLETE: (id: string) => `/api/interviews/${id}/complete`,
+  // Pre-booking meeting requests (video call before sending session request)
+  MEETING_REQUESTS: '/api/meeting-requests',
+  MEETING_REQUEST_BY_ID: (id: string) => `/api/meeting-requests/${id}`,
+  MEETING_REQUEST_ACCEPT: (id: string) => `/api/meeting-requests/${id}/accept`,
+  MEETING_REQUEST_DECLINE: (id: string) => `/api/meeting-requests/${id}/decline`,
+  MEETING_REQUEST_COMPLETE: (id: string) => `/api/meeting-requests/${id}/complete`,
 } as const;
 
 // Audio monitoring constants

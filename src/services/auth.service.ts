@@ -128,13 +128,6 @@ export async function signUp(data: SignUpData): Promise<ServiceResult<any>> {
     // Create profile in Supabase in BACKGROUND (IIFE - runs async, never blocks)
     (async () => {
       try {
-        // Check supabase is available and store in const for type narrowing
-        if (!isSupabaseConfigured() || !supabase) {
-          console.warn('⚠️ Supabase not configured, skipping background profile sync');
-          return;
-        }
-        const supabaseClient = supabase; // TypeScript now knows this is non-null
-
         // Always call create_user_profile to ensure display_name and all fields are set
         // Even if profile exists (from trigger), we need to update it with the actual display_name
         const rpcParams = {
@@ -160,57 +153,76 @@ export async function signUp(data: SignUpData): Promise<ServiceResult<any>> {
           p_phone_number: rpcParams.p_phone_number,
         });
         
-        const rpcRes = await executeWrite(async () => {
-          const result = await supabaseClient.rpc('create_user_profile', rpcParams);
-          return result;
-        }, 'create_user_profile');
+        const rpcRes = await executeWrite(() => supabase.rpc('create_user_profile', rpcParams), 'create_user_profile');
         const rpcData = rpcRes.data;
         const rpcError = rpcRes.error;
 
         if (rpcError) {
+          const code = rpcError?.code;
+          const msg = [rpcError?.message, rpcError?.details].filter(Boolean).join(' ');
+          const isDuplicateUserNumber =
+            code === '23505' || code === 23505 ||
+            (typeof msg === 'string' && (msg.includes('users_user_number_key') || msg.includes('user_number')));
           console.error('❌ RPC create_user_profile failed:', rpcError);
           console.error('❌ Error details:', JSON.stringify(rpcError, null, 2));
-          
-          // Try upsert as fallback (non-blocking)
-          const upsertData = {
-            id: authData.user!.id,
-            email: data.email,
-            display_name: data.displayName.trim(),
-            role: dbRole,
-            preferred_language: data.preferredLanguage || LANGUAGES.ENGLISH,
-            user_number: userNumber,
-            phone_number: data.phoneNumber && data.phoneNumber.trim() ? data.phoneNumber.trim() : null,
-            photo_url: null,
-            theme: 'auto',
-            is_verified: false,
-            verification_status: null,
-            hourly_rate: null,
-            bio: null,
-            address: null,
-            city: null,
-            country: 'Sri Lanka',
-          };
-          
-          console.log('📤 Trying upsert fallback with:', {
-            ...upsertData,
-            display_name: upsertData.display_name,
-            user_number: upsertData.user_number,
-            phone_number: upsertData.phone_number,
-          });
-          
-          const upsertRes = await executeWrite(async () => {
-            const result = await supabaseClient
-              .from('users')
-              .upsert(upsertData, { onConflict: 'id' });
-            return result;
-          }, 'users_upsert');
 
-          const upsertError = upsertRes.error;
-          if (upsertError) {
-            console.error('❌ Upsert fallback also failed:', upsertError);
-            console.error('❌ Upsert error details:', JSON.stringify(upsertError, null, 2));
+          if (isDuplicateUserNumber) {
+            // Same auth user already has a row (e.g. registered as parent, now signing up as sitter).
+            // Update existing row by id only; do NOT set user_number to avoid unique violation.
+            const updateData = {
+              display_name: data.displayName.trim(),
+              role: dbRole,
+              preferred_language: data.preferredLanguage || LANGUAGES.ENGLISH,
+              phone_number: data.phoneNumber && data.phoneNumber.trim() ? data.phoneNumber.trim() : null,
+              photo_url: null,
+              theme: 'auto',
+              is_verified: false,
+              verification_status: null,
+              hourly_rate: null,
+              bio: null,
+              address: null,
+              city: null,
+              country: 'Sri Lanka',
+            };
+            console.log('📤 Updating existing profile by id (duplicate user_number):', { id: authData.user!.id, role: dbRole, display_name: updateData.display_name });
+            const updateRes = await executeWrite(() => supabase
+              .from('users')
+              .update(updateData)
+              .eq('id', authData.user!.id), 'users_update_existing');
+            if (updateRes.error) {
+              console.error('❌ Update existing profile failed:', updateRes.error);
+            } else {
+              console.log('✅ Profile updated in Supabase (role/display_name)');
+            }
           } else {
-            console.log('✅ Profile created in Supabase via upsert fallback');
+            // Try upsert as fallback for other errors (non-blocking)
+            const upsertData = {
+              id: authData.user!.id,
+              email: data.email,
+              display_name: data.displayName.trim(),
+              role: dbRole,
+              preferred_language: data.preferredLanguage || LANGUAGES.ENGLISH,
+              user_number: userNumber,
+              phone_number: data.phoneNumber && data.phoneNumber.trim() ? data.phoneNumber.trim() : null,
+              photo_url: null,
+              theme: 'auto',
+              is_verified: false,
+              verification_status: null,
+              hourly_rate: null,
+              bio: null,
+              address: null,
+              city: null,
+              country: 'Sri Lanka',
+            };
+            console.log('📤 Trying upsert fallback with:', { display_name: upsertData.display_name, user_number: upsertData.user_number });
+            const upsertRes = await executeWrite(() => supabase
+              .from('users')
+              .upsert(upsertData, { onConflict: 'id' }), 'users_upsert');
+            if (upsertRes.error) {
+              console.error('❌ Upsert fallback also failed:', upsertRes.error);
+            } else {
+              console.log('✅ Profile created in Supabase via upsert fallback');
+            }
           }
         } else {
           console.log('✅ Profile created in Supabase via RPC');
@@ -321,10 +333,6 @@ export async function signIn(
  */
 export async function signOut(): Promise<ServiceResult<void>> {
   try {
-    // Note: We do NOT set isActive to false on logout
-    // Sitters remain active/online until they manually toggle the switch
-    // This allows them to stay available even when not actively using the app
-
     // Clear session manager FIRST
     try {
       sessionManager.clearSession();
@@ -459,30 +467,23 @@ async function syncProfileFromSupabase(userId: string): Promise<void> {
  */
 async function createProfileInSupabase(profile: User): Promise<void> {
   try {
-    if (!isSupabaseConfigured() || !supabase) {
-      console.warn('⚠️ Supabase not configured, skipping profile creation');
-      return;
-    }
-    const supabaseClient = supabase; // TypeScript now knows this is non-null
+    if (!supabase) return;
     const dbRole = profile.role === 'babysitter' ? 'sitter' : profile.role;
-    await executeWrite(async () => {
-      const result = await supabaseClient.from('users').upsert({
-        id: profile.id,
-        email: profile.email,
-        display_name: profile.displayName,
-        role: dbRole,
-        preferred_language: profile.preferredLanguage,
-        user_number: profile.userNumber,
-        phone_number: profile.phoneNumber ?? null,
-        photo_url: profile.profileImageUrl ?? null,
-        theme: profile.theme ?? 'auto',
-        is_verified: profile.isVerified ?? false,
-        verification_status: profile.verificationStatus ?? null,
-        hourly_rate: profile.hourlyRate ?? null,
-        bio: profile.bio ?? null,
-      });
-      return result;
-    }, 'create_profile_upsert');
+    await executeWrite(() => supabase.from('users').upsert({
+      id: profile.id,
+      email: profile.email,
+      display_name: profile.displayName,
+      role: dbRole,
+      preferred_language: profile.preferredLanguage,
+      user_number: profile.userNumber,
+      phone_number: profile.phoneNumber ?? null,
+      photo_url: profile.profileImageUrl ?? null,
+      theme: profile.theme ?? 'auto',
+      is_verified: profile.isVerified ?? false,
+      verification_status: profile.verificationStatus ?? null,
+      hourly_rate: profile.hourlyRate ?? null,
+      bio: profile.bio ?? null,
+    }), 'create_profile_upsert');
     console.log('✅ Profile created in Supabase');
   } catch (error) {
     console.warn('⚠️ Failed to create profile in Supabase:', error);

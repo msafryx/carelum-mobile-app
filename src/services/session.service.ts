@@ -4,7 +4,7 @@
  */
 import { isSupabaseConfigured, supabase } from '@/src/config/supabase';
 import { ErrorCode, ServiceResult } from '@/src/types/error.types';
-import { Session } from '@/src/types/session.types';
+import { Session, SessionEvent } from '@/src/types/session.types';
 import { handleUnexpectedError } from '@/src/utils/errorHandler';
 import { apiRequest } from './api-base.service';
 import { API_ENDPOINTS } from '@/src/config/constants';
@@ -106,6 +106,8 @@ export async function createSessionRequest(
       location: apiSession.location,
       hourlyRate: apiSession.hourlyRate,
       totalAmount: apiSession.totalAmount,
+      paymentStatus: apiSession.paymentStatus ?? apiSession.payment_status,
+      estimatedAmount: apiSession.estimatedAmount ?? apiSession.estimated_amount,
       notes: apiSession.notes,
       searchScope: apiSession.searchScope || apiSession.search_scope,
       maxDistanceKm: apiSession.maxDistanceKm || apiSession.max_distance_km,
@@ -114,6 +116,14 @@ export async function createSessionRequest(
       cancelledBy: apiSession.cancelledBy,
       cancellationReason: apiSession.cancellationReason,
       completedAt: apiSession.completedAt ? new Date(apiSession.completedAt) : undefined,
+      endedAt: apiSession.endedAt ? new Date(apiSession.endedAt) : undefined,
+      endedAt: apiSession.endedAt ? new Date(apiSession.endedAt) : undefined,
+      endedAt: apiSession.endedAt ? new Date(apiSession.endedAt) : undefined,
+      startedAt: (apiSession.startedAt ?? apiSession.started_at) ? new Date(apiSession.startedAt ?? apiSession.started_at) : undefined,
+      monitoringEnabled: (apiSession.monitoringEnabled ?? apiSession.monitoring_enabled) ?? undefined,
+      monitoringStartedAt: (apiSession.monitoringStartedAt ?? apiSession.monitoring_started_at) ? new Date(apiSession.monitoringStartedAt ?? apiSession.monitoring_started_at) : undefined,
+      lastLocationAt: (apiSession.lastLocationAt ?? apiSession.last_location_at) ? new Date(apiSession.lastLocationAt ?? apiSession.last_location_at) : undefined,
+      lastAudioSignalAt: (apiSession.lastAudioSignalAt ?? apiSession.last_audio_signal_at) ? new Date(apiSession.lastAudioSignalAt ?? apiSession.last_audio_signal_at) : undefined,
       createdAt: new Date(apiSession.createdAt),
       updatedAt: new Date(apiSession.updatedAt),
     };
@@ -131,6 +141,135 @@ export async function createSessionRequest(
  * Get session by ID
  * INSTANT: Loads from AsyncStorage first, syncs from API in background
  */
+/**
+ * Get timeline events for a session (parent/sitter see same; admin sees admin actions too).
+ */
+export async function getSessionEvents(sessionId: string): Promise<ServiceResult<SessionEvent[]>> {
+  try {
+    const result = await apiRequest<any[]>(API_ENDPOINTS.SESSION_EVENTS(sessionId));
+    if (!result.success) return result;
+    const list = Array.isArray(result.data) ? result.data : [];
+    const events: SessionEvent[] = list.map((e: any) => ({
+      id: e.id,
+      sessionId: e.sessionId ?? e.session_id,
+      type: e.type,
+      triggeredBy: e.triggeredBy ?? e.triggered_by,
+      createdAt: e.createdAt ?? e.created_at ?? '',
+    }));
+    return { success: true, data: events };
+  } catch (error: any) {
+    return {
+      success: false,
+      error: handleUnexpectedError(error),
+    };
+  }
+}
+
+export interface SessionReport {
+  sessionId: string;
+  parentId: string;
+  sitterId?: string | null;
+  childId: string;
+  status: string;
+  startedAt?: string | null;
+  endedAt?: string | null;
+  monitoringStartedAt?: string | null;
+  monitoringEnabled?: boolean | null;
+  lastLocationAt?: string | null;
+  lastAudioSignalAt?: string | null;
+  monitoringDurationMinutes?: number | null;
+  cryAlertCount: number;
+  gpsPointCount: number;
+  parentName?: string | null;
+  sitterName?: string | null;
+  childName?: string | null;
+}
+
+export async function getSessionReport(sessionId: string): Promise<ServiceResult<SessionReport>> {
+  try {
+    const result = await apiRequest<any>(API_ENDPOINTS.SESSION_REPORT(sessionId));
+    if (!result.success) return result;
+    const data = result.data;
+    return {
+      success: true,
+      data: {
+        sessionId: data.sessionId,
+        parentId: data.parentId,
+        sitterId: data.sitterId,
+        childId: data.childId,
+        status: data.status,
+        startedAt: data.startedAt,
+        endedAt: data.endedAt,
+        monitoringStartedAt: data.monitoringStartedAt,
+        monitoringEnabled: data.monitoringEnabled,
+        lastLocationAt: data.lastLocationAt,
+        lastAudioSignalAt: data.lastAudioSignalAt,
+        monitoringDurationMinutes: data.monitoringDurationMinutes,
+        cryAlertCount: data.cryAlertCount,
+        gpsPointCount: data.gpsPointCount,
+        parentName: data.parentName,
+        sitterName: data.sitterName,
+        childName: data.childName,
+      },
+    };
+  } catch (error: any) {
+    return {
+      success: false,
+      error: handleUnexpectedError(error),
+    };
+  }
+}
+
+export interface EmergencyInfo {
+  emergencyNumber: string;
+  sitterPhone?: string | null;
+  parentPhone?: string | null;
+  childEmergencyContactName?: string | null;
+  childEmergencyContactPhone?: string | null;
+  doctorContact?: string | null;
+  doctorPhone?: string | null;
+}
+
+export async function getSessionEmergencyInfo(sessionId: string): Promise<ServiceResult<EmergencyInfo>> {
+  try {
+    const result = await apiRequest<any>(API_ENDPOINTS.SESSION_EMERGENCY_INFO(sessionId));
+    if (!result.success) return result;
+    const d = result.data;
+    return {
+      success: true,
+      data: {
+        emergencyNumber: d.emergencyNumber ?? '911',
+        sitterPhone: d.sitterPhone,
+        parentPhone: d.parentPhone,
+        childEmergencyContactName: d.childEmergencyContactName,
+        childEmergencyContactPhone: d.childEmergencyContactPhone,
+        doctorContact: d.doctorContact,
+        doctorPhone: d.doctorPhone,
+      },
+    };
+  } catch (error: any) {
+    return {
+      success: false,
+      error: handleUnexpectedError(error),
+    };
+  }
+}
+
+export async function logEmergencyCall(sessionId: string, action: string): Promise<ServiceResult<{ success: boolean; action: string }>> {
+  try {
+    const result = await apiRequest<{ success: boolean; action: string }>(
+      API_ENDPOINTS.SESSION_EMERGENCY_CALL(sessionId),
+      { method: 'POST', body: JSON.stringify({ action }) }
+    );
+    return result;
+  } catch (error: any) {
+    return {
+      success: false,
+      error: handleUnexpectedError(error),
+    };
+  }
+}
+
 export async function getSessionById(sessionId: string): Promise<ServiceResult<Session>> {
   try {
     // Try AsyncStorage first (instant UI)
@@ -151,6 +290,8 @@ export async function getSessionById(sessionId: string): Promise<ServiceResult<S
           location: s.location,
           hourlyRate: s.hourlyRate,
           totalAmount: s.totalAmount,
+          paymentStatus: s.paymentStatus ?? s.payment_status,
+          estimatedAmount: s.estimatedAmount ?? s.estimated_amount,
           notes: s.notes,
           searchScope: s.searchScope || s.search_scope,
           maxDistanceKm: s.maxDistanceKm || s.max_distance_km,
@@ -159,6 +300,9 @@ export async function getSessionById(sessionId: string): Promise<ServiceResult<S
           cancelledBy: s.cancelledBy,
           cancellationReason: s.cancellationReason,
           completedAt: s.completedAt ? new Date(s.completedAt) : undefined,
+          startedAt: (s.startedAt ?? s.started_at) ? new Date(s.startedAt ?? s.started_at) : undefined,
+          monitoringEnabled: (s.monitoringEnabled ?? s.monitoring_enabled) ?? undefined,
+          monitoringStartedAt: (s.monitoringStartedAt ?? s.monitoring_started_at) ? new Date(s.monitoringStartedAt ?? s.monitoring_started_at) : undefined,
           createdAt: new Date(s.createdAt || Date.now()),
           updatedAt: new Date(s.updatedAt || Date.now()),
         };
@@ -207,6 +351,8 @@ async function syncSessionFromAPI(sessionId: string): Promise<ServiceResult<Sess
       location: apiSession.location,
       hourlyRate: apiSession.hourlyRate,
       totalAmount: apiSession.totalAmount,
+      paymentStatus: apiSession.paymentStatus ?? apiSession.payment_status,
+      estimatedAmount: apiSession.estimatedAmount ?? apiSession.estimated_amount,
       notes: apiSession.notes,
       searchScope: apiSession.searchScope || apiSession.search_scope,
       maxDistanceKm: apiSession.maxDistanceKm || apiSession.max_distance_km,
@@ -215,6 +361,8 @@ async function syncSessionFromAPI(sessionId: string): Promise<ServiceResult<Sess
       cancelledBy: apiSession.cancelledBy,
       cancellationReason: apiSession.cancellationReason,
       completedAt: apiSession.completedAt ? new Date(apiSession.completedAt) : undefined,
+      endedAt: apiSession.endedAt ? new Date(apiSession.endedAt) : undefined,
+      startedAt: (apiSession.startedAt ?? apiSession.started_at) ? new Date(apiSession.startedAt ?? apiSession.started_at) : undefined,
       createdAt: new Date(apiSession.createdAt),
       updatedAt: new Date(apiSession.updatedAt),
     };
@@ -247,10 +395,13 @@ async function syncSessionFromAPI(sessionId: string): Promise<ServiceResult<Sess
  * Get sessions for a user (parent or sitter)
  * INSTANT: Loads from AsyncStorage first, syncs from API in background
  */
+/** Single status or comma-separated list for API filter (e.g. "accepted,payment_pending,booked") */
+export type SessionStatusFilter = Session['status'] | string;
+
 export async function getUserSessions(
   userId: string,
   role: 'parent' | 'sitter',
-  status?: Session['status']
+  status?: SessionStatusFilter
 ): Promise<ServiceResult<Session[]>> {
   try {
     // Try AsyncStorage first (instant UI)
@@ -258,13 +409,16 @@ export async function getUserSessions(
       const { getAll, STORAGE_KEYS } = await import('./local-storage.service');
       const result = await getAll(STORAGE_KEYS.SESSIONS);
       if (result.success && result.data) {
-        let userSessions = result.data.filter((s: any) => 
+        let userSessions = result.data.filter((s: any) =>
           role === 'parent' ? s.parentId === userId : s.sitterId === userId
         );
-        
-        // Apply status filter if provided
+
+        // Apply status filter if provided (comma-separated = any of)
         if (status) {
-          userSessions = userSessions.filter((s: any) => s.status === status);
+          const statusList = typeof status === 'string' && status.includes(',')
+            ? status.split(',').map((s) => s.trim())
+            : [status];
+          userSessions = userSessions.filter((s: any) => statusList.includes(s.status));
         }
         
         if (userSessions.length > 0) {
@@ -280,6 +434,8 @@ export async function getUserSessions(
             location: s.location,
             hourlyRate: s.hourlyRate,
             totalAmount: s.totalAmount,
+            paymentStatus: s.paymentStatus ?? s.payment_status,
+            estimatedAmount: s.estimatedAmount ?? s.estimated_amount,
             notes: s.notes,
             searchScope: s.searchScope || s.search_scope,
             maxDistanceKm: s.maxDistanceKm || s.max_distance_km,
@@ -315,11 +471,11 @@ export async function getUserSessions(
 async function syncSessionsFromAPI(
   userId: string,
   role: 'parent' | 'sitter',
-  status?: Session['status']
+  status?: SessionStatusFilter
 ): Promise<ServiceResult<Session[]>> {
   try {
-    const endpoint = status 
-      ? `${API_ENDPOINTS.SESSIONS}?status=${status}`
+    const endpoint = status
+      ? `${API_ENDPOINTS.SESSIONS}?status=${encodeURIComponent(status)}`
       : API_ENDPOINTS.SESSIONS;
 
     const result = await apiRequest<any[]>(endpoint);
@@ -340,6 +496,8 @@ async function syncSessionsFromAPI(
       location: apiSession.location,
       hourlyRate: apiSession.hourlyRate,
       totalAmount: apiSession.totalAmount,
+      paymentStatus: apiSession.paymentStatus ?? apiSession.payment_status,
+      estimatedAmount: apiSession.estimatedAmount ?? apiSession.estimated_amount,
       notes: apiSession.notes,
       searchScope: apiSession.searchScope || apiSession.search_scope,
       maxDistanceKm: apiSession.maxDistanceKm || apiSession.max_distance_km,
@@ -348,6 +506,12 @@ async function syncSessionsFromAPI(
       cancelledBy: apiSession.cancelledBy,
       cancellationReason: apiSession.cancellationReason,
       completedAt: apiSession.completedAt ? new Date(apiSession.completedAt) : undefined,
+      endedAt: apiSession.endedAt ? new Date(apiSession.endedAt) : undefined,
+      startedAt: (apiSession.startedAt ?? apiSession.started_at) ? new Date(apiSession.startedAt ?? apiSession.started_at) : undefined,
+      monitoringEnabled: (apiSession.monitoringEnabled ?? apiSession.monitoring_enabled) ?? undefined,
+      monitoringStartedAt: (apiSession.monitoringStartedAt ?? apiSession.monitoring_started_at) ? new Date(apiSession.monitoringStartedAt ?? apiSession.monitoring_started_at) : undefined,
+      lastLocationAt: (apiSession.lastLocationAt ?? apiSession.last_location_at) ? new Date(apiSession.lastLocationAt ?? apiSession.last_location_at) : undefined,
+      lastAudioSignalAt: (apiSession.lastAudioSignalAt ?? apiSession.last_audio_signal_at) ? new Date(apiSession.lastAudioSignalAt ?? apiSession.last_audio_signal_at) : undefined,
       createdAt: new Date(apiSession.createdAt),
       updatedAt: new Date(apiSession.updatedAt),
     }));
@@ -468,24 +632,185 @@ export async function declineSessionRequest(
 }
 
 /**
- * Start session (mark as active)
+ * Start session (sitter only). Transitions BOOKED → LIVE. Idempotent.
+ * Uses dedicated POST /sessions/:id/start for started_at and timeline event.
  */
-export async function startSession(sessionId: string): Promise<ServiceResult<void>> {
-  return updateSessionStatus(sessionId, 'active');
+export async function startSession(sessionId: string): Promise<ServiceResult<Session>> {
+  try {
+    const result = await apiRequest<any>(API_ENDPOINTS.SESSION_START(sessionId), {
+      method: 'POST',
+    });
+    if (!result.success) {
+      return result;
+    }
+    const apiSession = result.data;
+    const session: Session = {
+      id: apiSession.id,
+      parentId: apiSession.parentId,
+      sitterId: apiSession.sitterId || '',
+      childId: apiSession.childId,
+      childIds: parseChildIds(apiSession),
+      status: apiSession.status,
+      startTime: new Date(apiSession.startTime),
+      endTime: apiSession.endTime ? new Date(apiSession.endTime) : undefined,
+      location: apiSession.location,
+      hourlyRate: apiSession.hourlyRate,
+      totalAmount: apiSession.totalAmount,
+      paymentStatus: apiSession.paymentStatus ?? apiSession.payment_status,
+      estimatedAmount: apiSession.estimatedAmount ?? apiSession.estimated_amount,
+      notes: apiSession.notes,
+      searchScope: apiSession.searchScope || apiSession.search_scope,
+      maxDistanceKm: apiSession.maxDistanceKm || apiSession.max_distance_km,
+      timeSlots: parseTimeSlots(apiSession),
+      expiresAt: apiSession.expiresAt ? new Date(apiSession.expiresAt) : undefined,
+      cancelledAt: apiSession.cancelledAt ? new Date(apiSession.cancelledAt) : undefined,
+      cancelledBy: apiSession.cancelledBy,
+      cancellationReason: apiSession.cancellationReason,
+      completedAt: apiSession.completedAt ? new Date(apiSession.completedAt) : undefined,
+      startedAt: (apiSession.startedAt ?? apiSession.started_at) ? new Date(apiSession.startedAt ?? apiSession.started_at) : undefined,
+      monitoringEnabled: (apiSession.monitoringEnabled ?? apiSession.monitoring_enabled) ?? undefined,
+      monitoringStartedAt: (apiSession.monitoringStartedAt ?? apiSession.monitoring_started_at) ? new Date(apiSession.monitoringStartedAt ?? apiSession.monitoring_started_at) : undefined,
+      lastLocationAt: (apiSession.lastLocationAt ?? apiSession.last_location_at) ? new Date(apiSession.lastLocationAt ?? apiSession.last_location_at) : undefined,
+      lastAudioSignalAt: (apiSession.lastAudioSignalAt ?? apiSession.last_audio_signal_at) ? new Date(apiSession.lastAudioSignalAt ?? apiSession.last_audio_signal_at) : undefined,
+      createdAt: new Date(apiSession.createdAt),
+      updatedAt: new Date(apiSession.updatedAt),
+    };
+    return { success: true, data: session };
+  } catch (error: any) {
+    return {
+      success: false,
+      error: handleUnexpectedError(error),
+    };
+  }
 }
 
 /**
- * Complete session
+ * Enable/disable monitoring (separate from session start).
+ * Backend enforces: session must be active; sitter-only (admin can only disable).
+ */
+export async function setSessionMonitoringEnabled(
+  sessionId: string,
+  enabled: boolean
+): Promise<ServiceResult<Session>> {
+  try {
+    const result = await apiRequest<any>(API_ENDPOINTS.SESSION_MONITORING(sessionId), {
+      method: 'PUT',
+      body: JSON.stringify({ enabled }),
+    });
+
+    if (!result.success) return result;
+
+    const apiSession = result.data;
+    const session: Session = {
+      id: apiSession.id,
+      parentId: apiSession.parentId,
+      sitterId: apiSession.sitterId || '',
+      childId: apiSession.childId,
+      childIds: parseChildIds(apiSession),
+      status: apiSession.status,
+      startTime: new Date(apiSession.startTime),
+      endTime: apiSession.endTime ? new Date(apiSession.endTime) : undefined,
+      location: apiSession.location,
+      hourlyRate: apiSession.hourlyRate,
+      totalAmount: apiSession.totalAmount,
+      paymentStatus: apiSession.paymentStatus ?? apiSession.payment_status,
+      estimatedAmount: apiSession.estimatedAmount ?? apiSession.estimated_amount,
+      notes: apiSession.notes,
+      searchScope: apiSession.searchScope || apiSession.search_scope,
+      maxDistanceKm: apiSession.maxDistanceKm || apiSession.max_distance_km,
+      timeSlots: parseTimeSlots(apiSession),
+      expiresAt: apiSession.expiresAt ? new Date(apiSession.expiresAt) : undefined,
+      cancelledAt: apiSession.cancelledAt ? new Date(apiSession.cancelledAt) : undefined,
+      cancelledBy: apiSession.cancelledBy,
+      cancellationReason: apiSession.cancellationReason,
+      completedAt: apiSession.completedAt ? new Date(apiSession.completedAt) : undefined,
+      startedAt: (apiSession.startedAt ?? apiSession.started_at) ? new Date(apiSession.startedAt ?? apiSession.started_at) : undefined,
+      monitoringEnabled: (apiSession.monitoringEnabled ?? apiSession.monitoring_enabled) ?? undefined,
+      monitoringStartedAt: (apiSession.monitoringStartedAt ?? apiSession.monitoring_started_at) ? new Date(apiSession.monitoringStartedAt ?? apiSession.monitoring_started_at) : undefined,
+      lastLocationAt: (apiSession.lastLocationAt ?? apiSession.last_location_at) ? new Date(apiSession.lastLocationAt ?? apiSession.last_location_at) : undefined,
+      lastAudioSignalAt: (apiSession.lastAudioSignalAt ?? apiSession.last_audio_signal_at) ? new Date(apiSession.lastAudioSignalAt ?? apiSession.last_audio_signal_at) : undefined,
+      createdAt: new Date(apiSession.createdAt),
+      updatedAt: new Date(apiSession.updatedAt),
+    };
+
+    return { success: true, data: session };
+  } catch (error: any) {
+    return { success: false, error: handleUnexpectedError(error) };
+  }
+}
+
+/**
+ * End session (sitter or admin). POST /api/sessions/{id}/end.
+ * Returns updated session. Parent cannot end (backend returns 403).
+ */
+export async function endSession(sessionId: string): Promise<ServiceResult<Session>> {
+  try {
+    const result = await apiRequest<any>(API_ENDPOINTS.SESSION_END(sessionId), {
+      method: 'POST',
+    });
+    if (!result.success) return result;
+    const apiSession = result.data;
+    const session: Session = {
+      id: apiSession.id,
+      parentId: apiSession.parentId,
+      sitterId: apiSession.sitterId || '',
+      childId: apiSession.childId,
+      childIds: parseChildIds(apiSession),
+      status: apiSession.status,
+      startTime: new Date(apiSession.startTime),
+      endTime: apiSession.endTime ? new Date(apiSession.endTime) : undefined,
+      location: apiSession.location,
+      hourlyRate: apiSession.hourlyRate,
+      totalAmount: apiSession.totalAmount,
+      paymentStatus: apiSession.paymentStatus ?? apiSession.payment_status,
+      estimatedAmount: apiSession.estimatedAmount ?? apiSession.estimated_amount,
+      notes: apiSession.notes,
+      searchScope: apiSession.searchScope || apiSession.search_scope,
+      maxDistanceKm: apiSession.maxDistanceKm || apiSession.max_distance_km,
+      timeSlots: parseTimeSlots(apiSession),
+      expiresAt: apiSession.expiresAt ? new Date(apiSession.expiresAt) : undefined,
+      cancelledAt: apiSession.cancelledAt ? new Date(apiSession.cancelledAt) : undefined,
+      cancelledBy: apiSession.cancelledBy,
+      cancellationReason: apiSession.cancellationReason,
+      completedAt: apiSession.completedAt ? new Date(apiSession.completedAt) : undefined,
+      startedAt: (apiSession.startedAt ?? apiSession.started_at) ? new Date(apiSession.startedAt ?? apiSession.started_at) : undefined,
+      monitoringEnabled: (apiSession.monitoringEnabled ?? apiSession.monitoring_enabled) ?? undefined,
+      monitoringStartedAt: (apiSession.monitoringStartedAt ?? apiSession.monitoring_started_at) ? new Date(apiSession.monitoringStartedAt ?? apiSession.monitoring_started_at) : undefined,
+      lastLocationAt: (apiSession.lastLocationAt ?? apiSession.last_location_at) ? new Date(apiSession.lastLocationAt ?? apiSession.last_location_at) : undefined,
+      lastAudioSignalAt: (apiSession.lastAudioSignalAt ?? apiSession.last_audio_signal_at) ? new Date(apiSession.lastAudioSignalAt ?? apiSession.last_audio_signal_at) : undefined,
+      createdAt: new Date(apiSession.createdAt),
+      updatedAt: new Date(apiSession.updatedAt),
+    };
+    return { success: true, data: session };
+  } catch (error: any) {
+    return { success: false, error: handleUnexpectedError(error) };
+  }
+}
+
+/**
+ * Complete session (alias for endSession). Returns updated session so caller can show charged amount.
  */
 export async function completeSession(
   sessionId: string,
-  rating?: number,
-  review?: string
-): Promise<ServiceResult<void>> {
-  return updateSessionStatus(sessionId, 'completed', {
-    endTime: new Date(),
-    notes: review,
-  } as any);
+  _rating?: number,
+  _review?: string
+): Promise<ServiceResult<Session>> {
+  return endSession(sessionId);
+}
+
+/**
+ * Sitter request to end session (no status change; notifies parent).
+ */
+export async function requestSessionEnd(sessionId: string): Promise<ServiceResult<void>> {
+  try {
+    const result = await apiRequest<any>(API_ENDPOINTS.SESSION_REQUEST_END(sessionId), {
+      method: 'POST',
+    });
+    if (!result.success) return result;
+    return { success: true };
+  } catch (error: any) {
+    return { success: false, error: handleUnexpectedError(error) };
+  }
 }
 
 /**
@@ -561,6 +886,8 @@ export async function discoverAvailableSessions(
       location: apiSession.location,
       hourlyRate: apiSession.hourlyRate,
       totalAmount: apiSession.totalAmount,
+      paymentStatus: apiSession.paymentStatus ?? apiSession.payment_status,
+      estimatedAmount: apiSession.estimatedAmount ?? apiSession.estimated_amount,
       notes: apiSession.notes,
       searchScope: apiSession.searchScope || apiSession.search_scope,
       maxDistanceKm: apiSession.maxDistanceKm || apiSession.max_distance_km,
@@ -570,6 +897,7 @@ export async function discoverAvailableSessions(
       cancelledBy: apiSession.cancelledBy,
       cancellationReason: apiSession.cancellationReason,
       completedAt: apiSession.completedAt ? new Date(apiSession.completedAt) : undefined,
+      startedAt: (apiSession.startedAt ?? apiSession.started_at) ? new Date(apiSession.startedAt ?? apiSession.started_at) : undefined,
       createdAt: new Date(apiSession.createdAt),
       updatedAt: new Date(apiSession.updatedAt),
     }));
@@ -656,6 +984,39 @@ export function subscribeToUserSessions(
         if (result.success && result.data) {
           callback(result.data);
         }
+      }
+    )
+    .subscribe();
+
+  return () => {
+    supabase.removeChannel(channel);
+  };
+}
+
+/**
+ * Subscribe to available session requests (status = 'requested') for sitter feed.
+ * Do NOT filter by distance/city at DB level; filter client-side after refetch.
+ * Callback is called on INSERT/UPDATE/DELETE so the feed can refetch and filter
+ * (INVITED → sitter_id match, NEARBY/CITY/NATIONWIDE filtered client-side).
+ */
+export function subscribeToAvailableRequests(callback: () => void): () => void {
+  if (!isSupabaseConfigured() || !supabase) {
+    console.warn('⚠️ Supabase not configured, cannot subscribe to available requests');
+    return () => {};
+  }
+
+  const channel = supabase
+    .channel('available-requests-changes')
+    .on(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        table: 'sessions',
+        filter: 'status=eq.requested',
+      },
+      () => {
+        callback();
       }
     )
     .subscribe();

@@ -42,6 +42,7 @@ export default function AlertsScreen() {
         <AlertsList
           userId={user.id}
           sessionId={params.sessionId}
+          role="parent"
           onAlertPress={(alert: AlertType) => {
             // Handle alert press - could navigate to session detail or show alert details
             console.log('Alert pressed:', alert);

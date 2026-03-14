@@ -1,14 +1,15 @@
 /**
- * Chatbot Screen for Sitter
- * Full-screen chatbot interface for asking questions about child care
+ * Child Assistant Screen for Sitter
+ * Instruction-based Q&A about the child (allergies, feeding, sleep, medicine, emergency).
  */
-import React from 'react';
-import { View, StyleSheet, Text } from 'react-native';
+import React, { useState } from 'react';
+import { View, StyleSheet, Text, TouchableOpacity } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useTheme } from '@/src/components/ui/ThemeProvider';
 import { useAuth } from '@/src/hooks/useAuth';
 import ChatbotInterface from '@/src/components/chatbot/ChatbotInterface';
 import Header from '@/src/components/ui/Header';
+import SitterHamburgerMenu from '@/src/components/ui/SitterHamburgerMenu';
 import { Ionicons } from '@expo/vector-icons';
 
 export default function SitterChatbotScreen() {
@@ -21,13 +22,12 @@ export default function SitterChatbotScreen() {
   const { user } = useAuth();
   const [menuVisible, setMenuVisible] = useState(false);
 
-  // If no session context, show empty state
   if (!sessionId || !childId || !user) {
     return (
       <View style={[styles.container, { backgroundColor: colors.background }]}>
-        <Header 
-          showLogo={true} 
-          title="AI Assistant" 
+        <Header
+          showLogo={true}
+          title="Child Assistant"
           showBack={true}
           rightComponent={
             <TouchableOpacity
@@ -40,9 +40,9 @@ export default function SitterChatbotScreen() {
           }
         />
         <View style={styles.emptyContainer}>
-          <Ionicons name="chatbubbles-outline" size={64} color={colors.textSecondary} />
+          <Ionicons name="reader-outline" size={64} color={colors.textSecondary} />
           <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
-            Please access the chatbot from an active session
+            Please open the Child Assistant from an active session.
           </Text>
         </View>
         <SitterHamburgerMenu visible={menuVisible} onClose={() => setMenuVisible(false)} />

@@ -1,4 +1,13 @@
-export type SessionStatus = 'requested' | 'accepted' | 'active' | 'completed' | 'cancelled';
+export type SessionStatus =
+  | 'requested'
+  | 'interview_scheduled'
+  | 'interview_completed'
+  | 'accepted'
+  | 'payment_pending'
+  | 'booked'
+  | 'active'
+  | 'completed'
+  | 'cancelled';
 
 export type SessionSearchScope = 'invite' | 'nearby' | 'city' | 'nationwide';
 
@@ -47,7 +56,8 @@ export interface Session {
   // Payment
   hourlyRate: number;
   totalAmount?: number;
-  paymentStatus?: 'pending' | 'paid' | 'refunded';
+  paymentStatus?: 'payment_pending' | 'paid' | 'refunded';
+  estimatedAmount?: number;
   
   // Session Data
   instructions?: string;
@@ -65,12 +75,18 @@ export interface Session {
   
   // AI Monitoring
   monitoringEnabled?: boolean;
+  monitoringStartedAt?: Date;
+  lastLocationAt?: Date;
+  lastAudioSignalAt?: Date;
   cryDetectionEnabled?: boolean;
   lastCryDetection?: Date;
   cryAlertsCount?: number;
   
   // Completion
   completedAt?: Date;
+  endedAt?: Date;
+  /** When sitter started the session (LIVE). Used for session timer. */
+  startedAt?: Date;
   parentRating?: number;
   parentReview?: string;
   sitterRating?: number;
@@ -86,6 +102,15 @@ export interface Session {
   
   createdAt: Date;
   updatedAt: Date;
+}
+
+/** Session timeline event from API (GET /api/sessions/:id/events) */
+export interface SessionEvent {
+  id: string;
+  sessionId: string;
+  type: string;
+  triggeredBy?: string;
+  createdAt: string;
 }
 
 /**
