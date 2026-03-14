@@ -126,6 +126,12 @@ function SitterLayoutTabs() {
           href: null, // Hide from tabs
         }}
       />
+      <Tabs.Screen
+        name="meeting-requests"
+        options={{
+          href: null, // Hide from tabs
+        }}
+      />
     </Tabs>
   );
 }

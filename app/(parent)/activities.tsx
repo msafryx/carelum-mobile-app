@@ -18,17 +18,17 @@ import { SESSION_STATUS } from '@/src/config/constants';
 
 const tabs = ['Ongoing', 'Completed', 'Complaints', 'Cancelled'] as const;
 
-// Map tab to session status
-const getStatusForTab = (tab: string): Session['status'] | undefined => {
+// Map tab to session status (comma-separated = any of these)
+const getStatusForTab = (tab: string): string | undefined => {
   switch (tab) {
     case 'Ongoing':
-      return SESSION_STATUS.ACTIVE;
+      // Active, payment_pending (sitter accepted – parent pays), booked, accepted, requested, interview_*
+      return 'active,payment_pending,booked,accepted,requested,interview_scheduled,interview_completed';
     case 'Completed':
       return SESSION_STATUS.COMPLETED;
     case 'Cancelled':
       return SESSION_STATUS.CANCELLED;
     case 'Complaints':
-      // Show completed sessions (where complaints might be)
       return SESSION_STATUS.COMPLETED;
     default:
       return undefined;
@@ -263,7 +263,7 @@ export default function ActivitiesScreen() {
                     <Ionicons name="cash-outline" size={16} color={colors.textSecondary} />
                     <Text style={[styles.detailText, { color: colors.textSecondary }]}>
                       ${session.hourlyRate}/hr
-                      {session.totalAmount && ` • Total: $${session.totalAmount.toFixed(2)}`}
+                      {session.totalAmount && ` • Total: Rs. ${session.totalAmount.toFixed(2)}`}
                     </Text>
                   </View>
                 </View>

@@ -18,8 +18,7 @@ This file is the authority on which documentation to **keep** vs **remove**.
 - **DB_VERIFICATION_PLAN.md** – Database verification and schema checks
 
 ### Testing
-- **TESTING_GUIDE.md** – Complete testing (UI, API, requests feed, sessions)
-- **QUICK_START_TESTING.md** – Quick testing reference
+- **TESTING_GUIDE.md** – Complete testing (setup, auth, sessions, LIVE, payments, interviews, admin)
 
 ### Features & planning
 - **APP_FEATURES_STATUS.md** – Features, UI screens, implementation status

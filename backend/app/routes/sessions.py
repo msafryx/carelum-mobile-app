@@ -14,6 +14,37 @@ from app.utils.error_handler import handle_error, AppError
 from app.utils.database import get_supabase, get_supabase_with_auth
 
 
+def _session_scheduled_duration_hours(session_data: dict) -> float:
+    """Compute scheduled duration in hours from time_slots or start_time/end_time."""
+    time_slots = session_data.get("time_slots")
+    if time_slots:
+        if isinstance(time_slots, str):
+            try:
+                time_slots = json.loads(time_slots)
+            except Exception:
+                time_slots = []
+        if isinstance(time_slots, list) and len(time_slots) > 0:
+            total = 0.0
+            for slot in time_slots:
+                if isinstance(slot, dict) and slot.get("hours") is not None:
+                    total += float(slot["hours"])
+                elif isinstance(slot, dict) and slot.get("startTime") and slot.get("endTime"):
+                    # Approximate
+                    total += 1.0
+            return total if total > 0 else 1.0
+    start_time = session_data.get("start_time")
+    end_time = session_data.get("end_time")
+    if start_time and end_time:
+        try:
+            start = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
+            end = datetime.fromisoformat(end_time.replace("Z", "+00:00"))
+            delta = (end - start).total_seconds() / 3600.0
+            return max(0.1, delta)
+        except Exception:
+            pass
+    return 1.0
+
+
 def _extract_session_city(location) -> Optional[str]:
     """Extract city from session location (string or dict)."""
     if not location:
@@ -160,6 +191,8 @@ class SessionResponse(BaseModel):
     monitoringStartedAt: Optional[str] = None
     createdAt: str
     updatedAt: str
+    paymentStatus: Optional[str] = None  # payment_pending | paid | refunded
+    estimatedAmount: Optional[float] = None
 
 
 class SessionEventResponse(BaseModel):
@@ -293,7 +326,9 @@ def db_to_session_response(session_data: dict) -> SessionResponse:
         lastAudioSignalAt=session_data.get("last_audio_signal_at"),
         monitoringStartedAt=session_data.get("monitoring_started_at"),
         createdAt=session_data["created_at"],
-        updatedAt=session_data.get("updated_at", session_data["created_at"])
+        updatedAt=session_data.get("updated_at", session_data["created_at"]),
+        paymentStatus=session_data.get("payment_status"),
+        estimatedAmount=float(session_data["estimated_amount"]) if session_data.get("estimated_amount") is not None else None,
     )
 
 
@@ -309,52 +344,50 @@ def verify_session_access(session_data: dict, user: CurrentUser) -> bool:
 
 def validate_status_transition(current_status: str, new_status: str, user_role: str, session_data: dict) -> tuple[bool, str]:
     """
-    Validate session status transition (Uber-like state machine)
-    Returns: (is_valid, error_message)
+    Validate session status transition (Uber-like state machine).
+    Flow: requested -> [interview_scheduled | accepted] -> ... -> payment_pending -> booked -> active -> completed.
     """
-    # Define valid transitions
     valid_transitions = {
-        'requested': ['accepted', 'cancelled'],  # Can be accepted by sitter or cancelled by anyone
-        'accepted': ['active', 'cancelled'],     # Can start (active) or cancel
-        'active': ['completed', 'cancelled'],    # Can complete or cancel
-        'completed': [],                          # Terminal state
-        'cancelled': [],                          # Terminal state
-        'pending': ['accepted', 'cancelled']     # Legacy support
+        'requested': ['interview_scheduled', 'accepted', 'cancelled'],
+        'interview_scheduled': ['interview_completed', 'cancelled'],
+        'interview_completed': ['accepted', 'cancelled'],
+        'accepted': ['payment_pending', 'active', 'cancelled'],  # payment_pending set by backend when sitter accepts
+        'payment_pending': ['booked', 'cancelled'],  # booked set by payment webhook
+        'booked': ['active', 'cancelled'],
+        'active': ['completed', 'cancelled'],
+        'completed': [],
+        'cancelled': [],
+        'pending': ['accepted', 'cancelled'],
     }
-    
-    # Terminal states cannot be changed
+
     if current_status in ['completed', 'cancelled']:
         return False, f"Cannot change status from {current_status} (terminal state)"
-    
-    # Check if transition is valid
+
     if new_status not in valid_transitions.get(current_status, []):
         return False, f"Invalid status transition from {current_status} to {new_status}"
-    
-    # Role-based validation
+
     if new_status == 'accepted':
-        # Only sitters can accept, and only if they're assigned or it's an open request
         if user_role != 'sitter':
             return False, "Only sitters can accept session requests"
-        # For 'invite' scope, sitter_id must match
         if session_data.get('search_scope') == 'invite' and session_data.get('sitter_id') != session_data.get('current_user_id'):
             return False, "This session was not invited to you"
-    
+
+    if new_status == 'payment_pending':
+        if user_role != 'sitter':
+            return False, "Only sitters can accept (payment_pending is set when sitter accepts)"
+
     if new_status == 'active':
-        # Only sitter can start the session
         if user_role != 'sitter':
             return False, "Only sitters can start sessions"
-        # Must be accepted first
-        if current_status != 'accepted':
-            return False, "Session must be accepted before it can be started"
-    
+        if current_status not in ('accepted', 'booked'):
+            return False, "Session must be accepted and paid (booked) before it can be started"
+
     if new_status == 'completed':
-        # Only sitter can complete
         if user_role != 'sitter':
             return False, "Only sitters can complete sessions"
-        # Must be active first
         if current_status != 'active':
             return False, "Session must be active before it can be completed"
-    
+
     return True, ""
 
 
@@ -388,9 +421,13 @@ async def get_user_sessions(
             # Admin can see all, or return empty for other roles
             query = supabase.table("sessions").select("*")
         
-        # Apply status filter if provided
+        # Apply status filter if provided (comma-separated = any of)
         if status:
-            query = query.eq("status", status)
+            statuses = [s.strip() for s in status.split(",") if s.strip()]
+            if len(statuses) == 1:
+                query = query.eq("status", statuses[0])
+            elif len(statuses) > 1:
+                query = query.in_("status", statuses)
         
         # Order by start_time descending
         query = query.order("start_time", desc=True).limit(100)
@@ -805,12 +842,22 @@ async def start_session(
         if current_status == "active":
             return db_to_session_response(session_data)
 
-        if current_status != "accepted":
+        if current_status not in ("accepted", "booked", "payment_pending"):
             raise AppError(
                 code="INVALID_STATUS",
                 message="Session is not ready to start",
                 status_code=400
             )
+        # When payment_pending: parent and sitter must have added accounts (parent: payment method, sitter: Connect already checked on accept)
+        parent_id = session_data.get("parent_id")
+        if current_status == "payment_pending" and parent_id:
+            pm = supabase.table("payment_methods").select("stripe_customer_id").eq("parent_id", parent_id).execute()
+            if not pm.data or not pm.data[0].get("stripe_customer_id"):
+                raise AppError(
+                    code="PAYMENT_REQUIRED",
+                    message="Parent must add a payment method in Profile before the session can start. You will be charged when the parent ends the session.",
+                    status_code=400
+                )
 
         now_iso = datetime.utcnow().isoformat()
         update_data = {
@@ -952,6 +999,7 @@ async def end_session(
             )
 
         now_iso = datetime.utcnow().isoformat()
+        now_dt = datetime.utcnow()
         update_data = {
             "status": "completed",
             "completed_at": now_iso,
@@ -962,7 +1010,37 @@ async def end_session(
         if not session_data.get("end_time"):
             update_data["end_time"] = now_iso
 
+        # Prorated amount: charge only for time actually used (started_at → now)
+        hourly_rate = session_data.get("hourly_rate")
+        started_at = session_data.get("started_at")
+        estimated = session_data.get("estimated_amount")
+        if hourly_rate is not None and started_at:
+            try:
+                start_dt = datetime.fromisoformat(str(started_at).replace("Z", "+00:00"))
+                hours_used = max(0.0, (now_dt - start_dt).total_seconds() / 3600.0)
+                # Minimum charge 15 minutes; cap at estimated (authorized) amount
+                hours_used = max(0.25, round(hours_used, 2))
+                total_amount = round(float(hourly_rate) * hours_used, 2)
+                if estimated is not None:
+                    total_amount = min(total_amount, float(estimated))
+                if total_amount < 0.50:
+                    total_amount = 0.50
+                update_data["total_amount"] = total_amount
+            except Exception:
+                if estimated is not None:
+                    update_data["total_amount"] = float(estimated)
+        elif estimated is not None:
+            update_data["total_amount"] = float(estimated)
+
         supabase.table("sessions").update(update_data).eq("id", session_id).execute()
+
+        # Auto-capture payment for actual time used (prorated); sitter payout is created inside
+        try:
+            from app.routes.payments import do_capture_after_session_end
+            do_capture_after_session_end(session_id)
+        except Exception as cap_err:
+            import logging
+            logging.getLogger(__name__).warning("Auto-capture after end_session failed: %s", cap_err)
 
         # Timeline event: session_completed (triggered_by parent/admin)
         _create_session_event(supabase, session_id, "session_completed", current_user.id)
@@ -1512,29 +1590,42 @@ async def update_session(
         # Build update data
         update_data = {}
         if updates.status is not None:
-            update_data["status"] = updates.status
+            new_status = updates.status
+            # When sitter accepts, transition to payment_pending and set estimated amount
+            if updates.status == "accepted" and current_user.role == "sitter":
+                # Sitter must have completed Stripe Connect onboarding to accept
+                sa = supabase.table("sitter_accounts").select("onboarding_status").eq("sitter_id", current_user.id).execute()
+                if sa.data and len(sa.data) > 0 and sa.data[0].get("onboarding_status") != "completed":
+                    raise AppError(
+                        code="ONBOARDING_INCOMPLETE",
+                        message="Complete payout account setup (Connect Bank Account) before accepting sessions",
+                        status_code=400,
+                    )
+                new_status = "payment_pending"
+                update_data["status"] = new_status
+                update_data["payment_status"] = "payment_pending"
+                if not session_data.get("sitter_id"):
+                    update_data["sitter_id"] = current_user.id
+                hours = _session_scheduled_duration_hours(session_data)
+                hourly_rate = session_data.get("hourly_rate") or 0
+                if hourly_rate and hours:
+                    update_data["estimated_amount"] = round(float(hourly_rate) * hours, 2)
+            else:
+                update_data["status"] = new_status
             
             # Handle status-specific updates (Uber-like tracking)
-            if updates.status == "accepted":
-                # When sitter accepts, assign them to the session
-                if current_user.role == "sitter" and not session_data.get("sitter_id"):
-                    update_data["sitter_id"] = current_user.id
-            elif updates.status == "cancelled":
-                # Track who cancelled and when
+            if new_status == "cancelled":
                 update_data["cancelled_at"] = datetime.utcnow().isoformat()
                 update_data["cancelled_by"] = current_user.role
                 if updates.cancellationReason:
                     update_data["cancellation_reason"] = updates.cancellationReason
-            elif updates.status == "completed":
-                # Track completion time
+            elif new_status == "completed":
                 update_data["completed_at"] = datetime.utcnow().isoformat()
                 if not updates.endTime:
                     update_data["end_time"] = datetime.utcnow().isoformat()
-            elif updates.status == "active":
-                # Session start: set started_at and create timeline event
+            elif new_status == "active":
                 if not session_data.get("started_at"):
                     update_data["started_at"] = datetime.utcnow().isoformat()
-                # Timeline event created after update (below) so we have updated session
         
         if updates.endTime is not None:
             update_data["end_time"] = updates.endTime
@@ -1578,8 +1669,8 @@ async def update_session(
                     message="Your sitter has started the session.",
                     child_id=session_data.get("child_id"),
                 )
-        # Timeline event + notify parent when sitter accepts
-        if updates.status == "accepted":
+        # Timeline event + notify parent when sitter accepts (we set status to payment_pending)
+        if updates.status == "accepted" and current_user.role == "sitter":
             _create_session_event(supabase, session_id, "session_accepted", current_user.id)
             if session_data.get("parent_id"):
                 _create_alert(
@@ -1589,7 +1680,7 @@ async def update_session(
                     sitter_id=updated.get("sitter_id"),
                     alert_type="session_accepted",
                     title="Session accepted",
-                    message="A sitter accepted your session.",
+                    message="Payment required to confirm booking.",
                     child_id=session_data.get("child_id"),
                 )
 

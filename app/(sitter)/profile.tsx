@@ -27,6 +27,7 @@ import { updateUserProfile } from '@/src/services/auth.service';
 import { uploadFile } from '@/src/services/storage.service';
 import { ensureUserRowExists } from '@/src/services/user-api.service';
 import { getSitterVerification } from '@/src/services/verification.service';
+import { createStripeAccount, getOnboardingLink } from '@/src/services/sitter-payout.service';
 import { supabase } from '@/src/config/supabase';
 import { useFocusEffect } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
@@ -65,6 +66,7 @@ export default function SitterProfileScreen() {
   const [saving, setSaving] = useState(false);
   const [verification, setVerification] = useState<VerificationRequest | null>(null);
   const [loadingVerification, setLoadingVerification] = useState(false);
+  const [payoutLoading, setPayoutLoading] = useState(false);
   const fetchingRef = useRef(false);
   const hasFetchedRef = useRef(false);
 
@@ -737,6 +739,47 @@ export default function SitterProfileScreen() {
         )}
 
         <Card>
+          <Text style={[styles.sectionTitle, { color: colors.text }]}>Payout Account</Text>
+          <Text style={[styles.helperText, { color: colors.textSecondary }]}>
+            Connect your bank account to receive payments after sessions. Required before accepting sessions.
+          </Text>
+          <TouchableOpacity
+            onPress={async () => {
+              setPayoutLoading(true);
+              try {
+                const createRes = await createStripeAccount();
+                if (!createRes.success) {
+                  Alert.alert('Error', createRes.error?.message || 'Could not create payout account.');
+                  setPayoutLoading(false);
+                  return;
+                }
+                const linkRes = await getOnboardingLink();
+                setPayoutLoading(false);
+                if (linkRes.success && linkRes.data?.url) {
+                  Linking.openURL(linkRes.data.url);
+                } else {
+                  Alert.alert('Error', linkRes.error?.message || 'Could not get onboarding link.');
+                }
+              } catch (e: any) {
+                setPayoutLoading(false);
+                Alert.alert('Error', e?.message || 'Something went wrong.');
+              }
+            }}
+            style={[styles.payoutButton, { backgroundColor: colors.primary }]}
+            disabled={payoutLoading}
+          >
+            {payoutLoading ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <Ionicons name="card-outline" size={20} color="#fff" />
+            )}
+            <Text style={styles.payoutButtonText}>
+              {payoutLoading ? 'Loading...' : 'Connect Bank Account'}
+            </Text>
+          </TouchableOpacity>
+        </Card>
+
+        <Card>
           <Text style={[styles.sectionTitle, { color: colors.text }]}>Appearance</Text>
           <View style={styles.switchRow}>
             <Text style={[styles.switchLabel, { color: colors.text }]}>Dark Mode</Text>
@@ -796,6 +839,14 @@ export default function SitterProfileScreen() {
           >
             <Ionicons name="list-outline" size={24} color={colors.primary} style={styles.menuIcon} />
             <Text style={[styles.menuText, { color: colors.text }]}>View Sessions</Text>
+            <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.menuItem, { borderBottomColor: colors.border }]}
+            onPress={() => router.push('/(sitter)/meeting-requests')}
+          >
+            <Ionicons name="videocam-outline" size={24} color={colors.primary} style={styles.menuIcon} />
+            <Text style={[styles.menuText, { color: colors.text }]}>Meeting requests</Text>
             <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} />
           </TouchableOpacity>
         </Card>
@@ -928,6 +979,25 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginBottom: 10,
     fontSize: 16,
+  },
+  helperText: {
+    fontSize: 14,
+    marginBottom: 8,
+  },
+  payoutButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    gap: 8,
+    marginTop: 8,
+  },
+  payoutButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
   },
   switchRow: {
     flexDirection: 'row',

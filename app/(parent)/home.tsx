@@ -101,10 +101,10 @@ export default function ParentHomeScreen() {
       const childrenById: Record<string, Child> = {};
       childrenList.forEach((c) => { childrenById[c.id] = c; });
 
-      // Load active sessions
+      // Load active sessions (LIVE)
       const activeResult = await getUserSessions(user.id, 'parent', SESSION_STATUS.ACTIVE);
-      // Load upcoming sessions (accepted but not yet active)
-      const upcomingResult = await getUserSessions(user.id, 'parent', SESSION_STATUS.ACCEPTED);
+      // Load upcoming: accepted, payment_pending (sitter accepted – parent pays), booked (paid – not yet started)
+      const upcomingResult = await getUserSessions(user.id, 'parent', 'accepted,payment_pending,booked');
       // Load requested sessions (newly created, waiting for sitter acceptance)
       const requestedResult = await getUserSessions(user.id, 'parent', SESSION_STATUS.REQUESTED);
 

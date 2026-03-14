@@ -9,6 +9,7 @@ import Card from '@/src/components/ui/Card';
 import { Ionicons } from '@expo/vector-icons';
 import { Session } from '@/src/types/session.types';
 import { getSessionEvents } from '@/src/services/session.service';
+import { format } from 'date-fns';
 
 const EVENT_LABELS: Record<string, string> = {
   session_requested: 'Session requested',
@@ -60,12 +61,11 @@ interface SessionTimelineProps {
   role?: 'parent' | 'sitter' | 'admin';
 }
 
-function formatTimeOnly(iso: string): string {
+/** Format for session timeline: 12hr with AM/PM and date (e.g. Jan 26, 2026, 2:30 PM). */
+function formatTimelineTime(iso: string): string {
   try {
     const d = new Date(iso);
-    const h = d.getHours();
-    const m = d.getMinutes();
-    return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
+    return format(d, 'MMM d, yyyy, h:mm a');
   } catch {
     return iso;
   }
@@ -99,7 +99,7 @@ export default function SessionTimeline({ session, role = 'parent' }: SessionTim
         id: e.id,
         type: e.type,
         title: EVENT_LABELS[e.type] ?? e.type,
-        timeLabel: formatTimeOnly(e.createdAt),
+        timeLabel: formatTimelineTime(e.createdAt),
         icon: EVENT_ICONS[e.type] ?? 'ellipse-outline',
       }));
       setEvents(display);

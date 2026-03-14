@@ -106,6 +106,8 @@ export async function createSessionRequest(
       location: apiSession.location,
       hourlyRate: apiSession.hourlyRate,
       totalAmount: apiSession.totalAmount,
+      paymentStatus: apiSession.paymentStatus ?? apiSession.payment_status,
+      estimatedAmount: apiSession.estimatedAmount ?? apiSession.estimated_amount,
       notes: apiSession.notes,
       searchScope: apiSession.searchScope || apiSession.search_scope,
       maxDistanceKm: apiSession.maxDistanceKm || apiSession.max_distance_km,
@@ -288,6 +290,8 @@ export async function getSessionById(sessionId: string): Promise<ServiceResult<S
           location: s.location,
           hourlyRate: s.hourlyRate,
           totalAmount: s.totalAmount,
+          paymentStatus: s.paymentStatus ?? s.payment_status,
+          estimatedAmount: s.estimatedAmount ?? s.estimated_amount,
           notes: s.notes,
           searchScope: s.searchScope || s.search_scope,
           maxDistanceKm: s.maxDistanceKm || s.max_distance_km,
@@ -347,6 +351,8 @@ async function syncSessionFromAPI(sessionId: string): Promise<ServiceResult<Sess
       location: apiSession.location,
       hourlyRate: apiSession.hourlyRate,
       totalAmount: apiSession.totalAmount,
+      paymentStatus: apiSession.paymentStatus ?? apiSession.payment_status,
+      estimatedAmount: apiSession.estimatedAmount ?? apiSession.estimated_amount,
       notes: apiSession.notes,
       searchScope: apiSession.searchScope || apiSession.search_scope,
       maxDistanceKm: apiSession.maxDistanceKm || apiSession.max_distance_km,
@@ -389,10 +395,13 @@ async function syncSessionFromAPI(sessionId: string): Promise<ServiceResult<Sess
  * Get sessions for a user (parent or sitter)
  * INSTANT: Loads from AsyncStorage first, syncs from API in background
  */
+/** Single status or comma-separated list for API filter (e.g. "accepted,payment_pending,booked") */
+export type SessionStatusFilter = Session['status'] | string;
+
 export async function getUserSessions(
   userId: string,
   role: 'parent' | 'sitter',
-  status?: Session['status']
+  status?: SessionStatusFilter
 ): Promise<ServiceResult<Session[]>> {
   try {
     // Try AsyncStorage first (instant UI)
@@ -400,13 +409,16 @@ export async function getUserSessions(
       const { getAll, STORAGE_KEYS } = await import('./local-storage.service');
       const result = await getAll(STORAGE_KEYS.SESSIONS);
       if (result.success && result.data) {
-        let userSessions = result.data.filter((s: any) => 
+        let userSessions = result.data.filter((s: any) =>
           role === 'parent' ? s.parentId === userId : s.sitterId === userId
         );
-        
-        // Apply status filter if provided
+
+        // Apply status filter if provided (comma-separated = any of)
         if (status) {
-          userSessions = userSessions.filter((s: any) => s.status === status);
+          const statusList = typeof status === 'string' && status.includes(',')
+            ? status.split(',').map((s) => s.trim())
+            : [status];
+          userSessions = userSessions.filter((s: any) => statusList.includes(s.status));
         }
         
         if (userSessions.length > 0) {
@@ -422,6 +434,8 @@ export async function getUserSessions(
             location: s.location,
             hourlyRate: s.hourlyRate,
             totalAmount: s.totalAmount,
+            paymentStatus: s.paymentStatus ?? s.payment_status,
+            estimatedAmount: s.estimatedAmount ?? s.estimated_amount,
             notes: s.notes,
             searchScope: s.searchScope || s.search_scope,
             maxDistanceKm: s.maxDistanceKm || s.max_distance_km,
@@ -457,11 +471,11 @@ export async function getUserSessions(
 async function syncSessionsFromAPI(
   userId: string,
   role: 'parent' | 'sitter',
-  status?: Session['status']
+  status?: SessionStatusFilter
 ): Promise<ServiceResult<Session[]>> {
   try {
-    const endpoint = status 
-      ? `${API_ENDPOINTS.SESSIONS}?status=${status}`
+    const endpoint = status
+      ? `${API_ENDPOINTS.SESSIONS}?status=${encodeURIComponent(status)}`
       : API_ENDPOINTS.SESSIONS;
 
     const result = await apiRequest<any[]>(endpoint);
@@ -482,6 +496,8 @@ async function syncSessionsFromAPI(
       location: apiSession.location,
       hourlyRate: apiSession.hourlyRate,
       totalAmount: apiSession.totalAmount,
+      paymentStatus: apiSession.paymentStatus ?? apiSession.payment_status,
+      estimatedAmount: apiSession.estimatedAmount ?? apiSession.estimated_amount,
       notes: apiSession.notes,
       searchScope: apiSession.searchScope || apiSession.search_scope,
       maxDistanceKm: apiSession.maxDistanceKm || apiSession.max_distance_km,
@@ -640,6 +656,8 @@ export async function startSession(sessionId: string): Promise<ServiceResult<Ses
       location: apiSession.location,
       hourlyRate: apiSession.hourlyRate,
       totalAmount: apiSession.totalAmount,
+      paymentStatus: apiSession.paymentStatus ?? apiSession.payment_status,
+      estimatedAmount: apiSession.estimatedAmount ?? apiSession.estimated_amount,
       notes: apiSession.notes,
       searchScope: apiSession.searchScope || apiSession.search_scope,
       maxDistanceKm: apiSession.maxDistanceKm || apiSession.max_distance_km,
@@ -695,6 +713,8 @@ export async function setSessionMonitoringEnabled(
       location: apiSession.location,
       hourlyRate: apiSession.hourlyRate,
       totalAmount: apiSession.totalAmount,
+      paymentStatus: apiSession.paymentStatus ?? apiSession.payment_status,
+      estimatedAmount: apiSession.estimatedAmount ?? apiSession.estimated_amount,
       notes: apiSession.notes,
       searchScope: apiSession.searchScope || apiSession.search_scope,
       maxDistanceKm: apiSession.maxDistanceKm || apiSession.max_distance_km,
@@ -742,6 +762,8 @@ export async function endSession(sessionId: string): Promise<ServiceResult<Sessi
       location: apiSession.location,
       hourlyRate: apiSession.hourlyRate,
       totalAmount: apiSession.totalAmount,
+      paymentStatus: apiSession.paymentStatus ?? apiSession.payment_status,
+      estimatedAmount: apiSession.estimatedAmount ?? apiSession.estimated_amount,
       notes: apiSession.notes,
       searchScope: apiSession.searchScope || apiSession.search_scope,
       maxDistanceKm: apiSession.maxDistanceKm || apiSession.max_distance_km,
@@ -766,16 +788,14 @@ export async function endSession(sessionId: string): Promise<ServiceResult<Sessi
 }
 
 /**
- * Complete session (alias for endSession; returns void for backward compatibility).
+ * Complete session (alias for endSession). Returns updated session so caller can show charged amount.
  */
 export async function completeSession(
   sessionId: string,
   _rating?: number,
   _review?: string
-): Promise<ServiceResult<void>> {
-  const result = await endSession(sessionId);
-  if (!result.success) return result;
-  return { success: true };
+): Promise<ServiceResult<Session>> {
+  return endSession(sessionId);
 }
 
 /**
@@ -866,6 +886,8 @@ export async function discoverAvailableSessions(
       location: apiSession.location,
       hourlyRate: apiSession.hourlyRate,
       totalAmount: apiSession.totalAmount,
+      paymentStatus: apiSession.paymentStatus ?? apiSession.payment_status,
+      estimatedAmount: apiSession.estimatedAmount ?? apiSession.estimated_amount,
       notes: apiSession.notes,
       searchScope: apiSession.searchScope || apiSession.search_scope,
       maxDistanceKm: apiSession.maxDistanceKm || apiSession.max_distance_km,

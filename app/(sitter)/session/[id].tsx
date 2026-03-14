@@ -12,6 +12,7 @@ import {
   ActivityIndicator,
   Text,
   TouchableOpacity,
+  Linking,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useTheme } from '@/src/components/ui/ThemeProvider';
@@ -49,6 +50,7 @@ import {
   getSessionAlerts,
   subscribeToSessionAlerts,
 } from '@/src/services/alert.service';
+import { getInterviewBySession } from '@/src/services/interview.service';
 import {
   startLocationTracking,
   getCurrentLocation,
@@ -136,6 +138,7 @@ export default function SitterSessionDetailScreen() {
   const [loadingSitterLocation, setLoadingSitterLocation] = useState(false);
   const [geocodedParentCoords, setGeocodedParentCoords] = useState<{ latitude: number; longitude: number } | null>(null);
   const [geocodingAddress, setGeocodingAddress] = useState(false);
+  const [interview, setInterview] = useState<{ meeting_link: string; scheduled_time: string } | null>(null);
 
   // Load session data
   const loadSessionData = useCallback(async () => {
@@ -156,6 +159,16 @@ export default function SitterSessionDetailScreen() {
 
       const sessionData = sessionResult.data;
       setSession(sessionData);
+      if (sessionData.status === 'interview_scheduled' || sessionData.status === 'interview_completed') {
+        const interviewRes = await getInterviewBySession(id);
+        if (interviewRes.success && interviewRes.data) {
+          setInterview({ meeting_link: interviewRes.data.meeting_link, scheduled_time: interviewRes.data.scheduled_time });
+        } else {
+          setInterview(null);
+        }
+      } else {
+        setInterview(null);
+      }
       setGpsTrackingEnabled(sessionData.gpsTrackingEnabled || false);
       setCryDetectionEnabled(sessionData.cryDetectionEnabled || false);
       setIsMonitoringActive(sessionData.monitoringEnabled || false);
@@ -583,11 +596,13 @@ export default function SitterSessionDetailScreen() {
     ? cryAlerts.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0].createdAt
     : undefined;
 
-  const canStartSession = session.status === 'accepted';
+  const canStartSession = session.status === 'accepted' || session.status === 'booked';
   const isActive = session.status === 'active';
   const isRequested = session.status === 'requested';
+  const isInterviewCompleted = session.status === 'interview_completed';
+  const canAcceptSession = isRequested || isInterviewCompleted;
 
-  // Handle accept (invite or broadcast request)
+  // Handle accept (invite or broadcast request, or after interview)
   const handleAcceptRequest = async () => {
     if (!session || !id) return;
     setActionLoading(true);
@@ -632,7 +647,7 @@ export default function SitterSessionDetailScreen() {
           <View style={styles.sessionHeader}>
             <View style={[styles.statusBadge, { backgroundColor: getStatusColor(session.status, colors) }]}>
               <Text style={[styles.statusText, { color: colors.white }]}>
-                {session.status === 'active' ? 'LIVE' : session.status === 'accepted' ? 'BOOKED' : session.status.toUpperCase()}
+                {session.status === 'active' ? 'LIVE' : session.status === 'accepted' || session.status === 'booked' ? 'BOOKED' : session.status === 'payment_pending' ? 'PAYMENT PENDING' : session.status.toUpperCase().replace(/_/g, ' ')}
               </Text>
             </View>
             {session.location && (() => {
@@ -706,6 +721,23 @@ export default function SitterSessionDetailScreen() {
             )}
           </View>
         </Card>
+
+        {/* Upcoming Interview: Join video call */}
+        {session.status === 'interview_scheduled' && interview && (
+          <Card style={styles.infoCard}>
+            <Text style={[styles.sectionTitle, { color: colors.text }]}>Upcoming Interview</Text>
+            <Text style={[styles.infoText, { color: colors.textSecondary, marginBottom: 8 }]}>
+              {new Date(interview.scheduled_time).toLocaleString()}
+            </Text>
+            <TouchableOpacity
+              style={[styles.startButton, { backgroundColor: colors.primary }]}
+              onPress={() => interview.meeting_link && Linking.openURL(interview.meeting_link)}
+            >
+              <Ionicons name="videocam" size={22} color={colors.white} />
+              <Text style={[styles.startButtonText, { color: colors.white }]}>Join Video Call</Text>
+            </TouchableOpacity>
+          </Card>
+        )}
 
         {/* Session details: booking mode, duration, time slots (when requested) */}
         {isRequested && (
@@ -807,14 +839,16 @@ export default function SitterSessionDetailScreen() {
           </Card>
         )}
 
-        {/* Accept / Decline (when status = requested: invite or broadcast) */}
-        {isRequested && (
+        {/* Accept / Decline (when status = requested or after interview) */}
+        {canAcceptSession && (
           <Card style={styles.actionCard}>
             <Text style={[styles.actionTitle, { color: colors.text }]}>
               Session request
             </Text>
             <Text style={[styles.actionDescription, { color: colors.textSecondary }]}>
-              Review the details above. Accept to book this session or decline if you're not available.
+              {isInterviewCompleted
+                ? 'Interview completed. Accept to confirm booking — parent will then pay to secure the session.'
+                : 'Review the details above. Accept to book this session or decline if you\'re not available.'}
             </Text>
             <View style={styles.actionButtonRow}>
               <TouchableOpacity
@@ -1141,7 +1175,10 @@ function getStatusColor(status: Session['status'], colors: any): string {
     case 'cancelled':
       return colors.textSecondary;
     case 'accepted':
+    case 'booked':
       return colors.info;
+    case 'payment_pending':
+      return colors.warning;
     default:
       return colors.warning;
   }

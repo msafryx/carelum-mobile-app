@@ -86,8 +86,7 @@ A cross-platform mobile app and API for connecting parents with verified babysit
 - **[README_SUPABASE.md](./README_SUPABASE.md)** - Complete Supabase setup and configuration guide
 - **[SUPABASE_STORAGE_SETUP.md](./SUPABASE_STORAGE_SETUP.md)** - Supabase Storage setup for profile images
 - **[SECURITY.md](./SECURITY.md)** - Security best practices and guidelines
-- **[TESTING_GUIDE.md](./TESTING_GUIDE.md)** - Complete testing guide
-- **[QUICK_START_TESTING.md](./QUICK_START_TESTING.md)** - Quick testing reference
+- **[TESTING_GUIDE.md](./TESTING_GUIDE.md)** - Complete testing guide (setup, auth, sessions, LIVE, payments, interviews, admin)
 - **[backend/API_GUIDE.md](./backend/API_GUIDE.md)** - Complete REST API documentation with setup, testing, and usage
 - **[backend/README_SETUP.md](./backend/README_SETUP.md)** - Backend setup and quick start guide
 

@@ -28,6 +28,8 @@ import {
     getSessionGPSTracking,
     subscribeToGPSUpdates,
 } from '@/src/services/monitoring.service';
+import { createPaymentIntent } from '@/src/services/payment.service';
+import { getInterviewBySession, scheduleInterview } from '@/src/services/interview.service';
 import {
     cancelSession,
     completeSession,
@@ -45,6 +47,7 @@ import {
     Alert,
     Animated,
     Image,
+    Linking,
     RefreshControl,
     ScrollView,
     StyleSheet,
@@ -141,6 +144,7 @@ export default function SessionDetailScreen() {
   const [actionLoading, setActionLoading] = useState(false);
   const [menuVisible, setMenuVisible] = useState(false);
   const [cancelModalVisible, setCancelModalVisible] = useState(false);
+  const [interview, setInterview] = useState<{ meeting_link: string; scheduled_time: string; status: string } | null>(null);
   const [searchDuration, setSearchDuration] = useState<string>('');
   const searchDurationIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const sessionRef = useRef<Session | null>(null);
@@ -184,6 +188,21 @@ export default function SessionDetailScreen() {
       }
       console.log('📅 Session loaded - createdAt:', sessionData.createdAt, 'type:', typeof sessionData.createdAt, 'isDate:', sessionData.createdAt instanceof Date);
       setSession(sessionData);
+
+      if (sessionData.status === 'interview_scheduled' || sessionData.status === 'interview_completed') {
+        const interviewRes = await getInterviewBySession(id!);
+        if (interviewRes.success && interviewRes.data) {
+          setInterview({
+            meeting_link: interviewRes.data.meeting_link,
+            scheduled_time: interviewRes.data.scheduled_time,
+            status: interviewRes.data.status,
+          });
+        } else {
+          setInterview(null);
+        }
+      } else {
+        setInterview(null);
+      }
 
       // Load child data - handle multiple children if childIds exists
       console.log('📝 Session childIds:', sessionData.childIds, 'childId:', sessionData.childId);
@@ -398,7 +417,11 @@ export default function SessionDetailScreen() {
             setActionLoading(true);
             const result = await completeSession(id);
             if (result.success) {
-              Alert.alert('Success', 'Session ended successfully');
+              const amount = result.data?.totalAmount;
+              const message = amount != null && amount > 0
+                ? `Session ended. You were charged Rs. ${amount.toFixed(2)} for the time used.`
+                : 'Session ended successfully.';
+              Alert.alert('Success', message);
               router.back();
             } else {
               Alert.alert('Error', result.error?.message || 'Failed to end session');
@@ -537,7 +560,7 @@ export default function SessionDetailScreen() {
             <View style={styles.sessionHeaderLeft}>
               <View style={[styles.statusBadge, { backgroundColor: getStatusColor(session.status, colors) }]}>
                 <Text style={[styles.statusText, { color: colors.white }]}>
-                  {session.status === 'active' ? 'LIVE' : session.status === 'accepted' ? 'BOOKED' : session.status.toUpperCase()}
+                  {session.status === 'active' ? 'LIVE' : session.status === 'accepted' || session.status === 'booked' ? 'BOOKED' : session.status === 'payment_pending' ? 'PAYMENT REQUIRED' : session.status.toUpperCase().replace(/_/g, ' ')}
                 </Text>
               </View>
               {children.length > 1 ? (
@@ -616,6 +639,82 @@ export default function SessionDetailScreen() {
                     </Text>
                   </View>
                 )}
+                {session.status === 'requested' && !session.sitterId && (
+                  <Text style={[styles.helperText, { color: colors.textSecondary, marginTop: 8 }]}>
+                    When a sitter accepts, you can schedule an online video call here before confirming the booking.
+                  </Text>
+                )}
+              </View>
+            )}
+            {session.status === 'requested' && session.sitterId && (
+              <View style={styles.interviewSection}>
+                <Text style={[styles.paymentSectionTitle, { color: colors.text }]}>
+                  Video call before booking
+                </Text>
+                <Text style={[styles.helperText, { color: colors.textSecondary }]}>
+                  Meet your sitter in a short online video call before you confirm. Schedule the call and both of you can join when it's time.
+                </Text>
+                <TouchableOpacity
+                  style={[styles.confirmPayButton, { backgroundColor: colors.primary }]}
+                  onPress={async () => {
+                    const preferredTime = session.startTime ? session.startTime.toISOString() : new Date(Date.now() + 86400000).toISOString();
+                    const res = await scheduleInterview(session.id, preferredTime);
+                    if (res.success && res.data) {
+                      Alert.alert('Interview scheduled', 'Sitter has been notified. You can join when it\'s time.');
+                      loadSessionData();
+                    } else {
+                      Alert.alert('Error', res.error?.message || 'Could not schedule interview.');
+                    }
+                  }}
+                >
+                  <Ionicons name="videocam-outline" size={20} color="#fff" />
+                  <Text style={styles.confirmPayButtonText}>Schedule video call</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+            {session.status === 'interview_scheduled' && interview && (
+              <View style={styles.interviewSection}>
+                <Text style={[styles.paymentSectionTitle, { color: colors.text }]}>Upcoming Interview</Text>
+                <Text style={[styles.helperText, { color: colors.textSecondary }]}>
+                  {new Date(interview.scheduled_time).toLocaleString()}
+                </Text>
+                <TouchableOpacity
+                  style={[styles.confirmPayButton, { backgroundColor: colors.primary }]}
+                  onPress={() => interview.meeting_link && Linking.openURL(interview.meeting_link)}
+                >
+                  <Ionicons name="videocam" size={20} color="#fff" />
+                  <Text style={styles.confirmPayButtonText}>Join Video Call</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+            {session.status === 'payment_pending' && (
+              <View style={styles.paymentSection}>
+                <Text style={[styles.paymentSectionTitle, { color: colors.text }]}>Session cost</Text>
+                <Text style={[styles.estimatedAmount, { color: colors.text }]}>
+                  Rs. {(session.estimatedAmount ?? session.totalAmount ?? 0).toFixed(2)} (estimated)
+                </Text>
+                <Text style={[styles.helperText, { color: colors.textSecondary }]}>
+                  Add a payment method in Profile if you have not. You will be charged (Rs. for time used) when you end the session. Sitter can start once you have added an account.
+                </Text>
+                <TouchableOpacity
+                  style={[styles.confirmPayButton, { backgroundColor: colors.primary }]}
+                  onPress={async () => {
+                    const res = await createPaymentIntent(session.id);
+                    if (res.success && res.data?.clientSecret) {
+                      Alert.alert(
+                        'Complete payment',
+                        'Use the Stripe payment sheet in the app to complete payment (integrate @stripe/stripe-react-native for full flow). Client secret is ready.',
+                        [{ text: 'OK' }]
+                      );
+                      loadSessionData();
+                    } else {
+                      Alert.alert('Error', res.error?.message || 'Could not start payment.');
+                    }
+                  }}
+                >
+                  <Ionicons name="card" size={20} color="#fff" />
+                  <Text style={styles.confirmPayButtonText}>Confirm and Pay</Text>
+                </TouchableOpacity>
               </View>
             )}
             {session.status === 'accepted' && session.createdAt && (
@@ -791,7 +890,7 @@ export default function SessionDetailScreen() {
               <View style={styles.infoRow}>
                 <Ionicons name="cash-outline" size={16} color={colors.textSecondary} />
                 <Text style={[styles.infoText, { color: colors.textSecondary }]}>
-                  Rate: ${session.hourlyRate.toFixed(2)}/hour
+                  Rate: Rs. {session.hourlyRate.toFixed(2)}/hour
                 </Text>
               </View>
             )}
@@ -805,6 +904,21 @@ export default function SessionDetailScreen() {
             )}
           </View>
         </Card>
+
+        {/* Session Controls - placed high so End Session / Cancel are visible without scrolling */}
+        {session.status === 'active' && (
+          <Text style={[styles.helperText, { color: colors.textSecondary, marginBottom: 8 }]}>
+            When you end the session, you'll be charged only for the time used (prorated).
+          </Text>
+        )}
+        <SessionControls
+          sessionStatus={session.status}
+          onEndSession={handleEndSession}
+          onEmergency={handleEmergency}
+          onCancel={() => setCancelModalVisible(true)}
+          isLoading={actionLoading}
+          canEndSession={session.status === 'active'}
+        />
 
         {/* Monitoring Status */}
         {session.status === 'active' && (
@@ -921,16 +1035,6 @@ export default function SessionDetailScreen() {
           </Card>
         )}
 
-        {/* Session Controls */}
-        <SessionControls
-          sessionStatus={session.status}
-          onEndSession={handleEndSession}
-          onEmergency={handleEmergency}
-          onCancel={() => setCancelModalVisible(true)}
-          isLoading={actionLoading}
-          canEndSession={false}
-        />
-
         {/* Parent: Completed session summary + rate sitter */}
         {session.status === 'completed' && (
           <Card style={styles.infoCard}>
@@ -1029,9 +1133,16 @@ function getStatusColor(status: Session['status'], colors: any): string {
       return colors.success;
     case 'completed':
       return colors.success;
+    case 'booked':
+      return colors.info;
     case 'cancelled':
       return colors.textSecondary;
     case 'accepted':
+      return colors.info;
+    case 'payment_pending':
+      return colors.warning;
+    case 'interview_scheduled':
+    case 'interview_completed':
       return colors.info;
     default:
       return colors.warning;
@@ -1186,6 +1297,46 @@ const styles = StyleSheet.create({
   searchingTimeText: {
     fontSize: 13,
     fontStyle: 'italic',
+  },
+  paymentSection: {
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#e0e0e0',
+  },
+  interviewSection: {
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#e0e0e0',
+  },
+  paymentSectionTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  estimatedAmount: {
+    fontSize: 20,
+    fontWeight: '700',
+    marginBottom: 8,
+  },
+  helperText: {
+    fontSize: 13,
+    marginBottom: 12,
+  },
+  confirmPayButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+    borderRadius: 12,
+  },
+  confirmPayButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
   },
   acceptedSection: {
     marginTop: 8,

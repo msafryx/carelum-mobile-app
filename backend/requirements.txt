@@ -8,6 +8,7 @@ supabase>=2.27.0
 pyjwt>=2.10.0
 httpx>=0.26.0,<0.29.0
 websockets>=15.0.0
+stripe>=8.0.0
 
 # Audio processing (uncomment when implementing)
 # librosa==0.10.1

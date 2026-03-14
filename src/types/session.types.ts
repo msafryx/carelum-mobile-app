@@ -1,4 +1,13 @@
-export type SessionStatus = 'requested' | 'accepted' | 'active' | 'completed' | 'cancelled';
+export type SessionStatus =
+  | 'requested'
+  | 'interview_scheduled'
+  | 'interview_completed'
+  | 'accepted'
+  | 'payment_pending'
+  | 'booked'
+  | 'active'
+  | 'completed'
+  | 'cancelled';
 
 export type SessionSearchScope = 'invite' | 'nearby' | 'city' | 'nationwide';
 
@@ -47,7 +56,8 @@ export interface Session {
   // Payment
   hourlyRate: number;
   totalAmount?: number;
-  paymentStatus?: 'pending' | 'paid' | 'refunded';
+  paymentStatus?: 'payment_pending' | 'paid' | 'refunded';
+  estimatedAmount?: number;
   
   // Session Data
   instructions?: string;
