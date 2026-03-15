@@ -388,6 +388,9 @@ WHERE status = 'requested' AND (expires_at IS NULL OR expires_at > NOW());
 -- MIGRATION SCRIPTS FOR EXISTING DATABASES
 -- ============================================
 -- This file is the single source of truth. For a NEW project, run this entire file once in Supabase SQL Editor.
+-- Sessions: monitoring columns (monitoring_enabled, monitoring_started_at, last_location_at, last_audio_signal_at),
+--   ended_at, meeting_requests table, and alerts types (meeting_request, meeting_accepted, meeting_declined) are
+--   included in this file; no separate migration files are needed.
 --
 -- For an EXISTING database that was created from an older version of this schema, you may need to:
 -- 1. Add any missing columns/tables (e.g. sessions.payment_status, sessions.estimated_amount,
@@ -544,6 +547,7 @@ CREATE TRIGGER update_sessions_updated_at BEFORE UPDATE ON sessions
 CREATE TRIGGER update_verification_requests_updated_at BEFORE UPDATE ON verification_requests
   FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+DROP TRIGGER IF EXISTS update_meeting_requests_updated_at ON meeting_requests;
 CREATE TRIGGER update_meeting_requests_updated_at BEFORE UPDATE ON meeting_requests
   FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
@@ -886,10 +890,13 @@ CREATE POLICY "Participants can update own interviews" ON interviews
 
 -- Meeting requests (pre-booking video calls): parent creates, sitter accepts/declines
 ALTER TABLE meeting_requests ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Parent and sitter can read own meeting requests" ON meeting_requests;
 CREATE POLICY "Parent and sitter can read own meeting requests" ON meeting_requests
   FOR SELECT USING (parent_id = auth.uid() OR sitter_id = auth.uid());
+DROP POLICY IF EXISTS "Parent can create meeting request" ON meeting_requests;
 CREATE POLICY "Parent can create meeting request" ON meeting_requests
   FOR INSERT WITH CHECK (parent_id = auth.uid());
+DROP POLICY IF EXISTS "Participants can update meeting request" ON meeting_requests;
 CREATE POLICY "Participants can update meeting request" ON meeting_requests
   FOR UPDATE USING (parent_id = auth.uid() OR sitter_id = auth.uid());
 
