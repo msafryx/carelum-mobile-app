@@ -5,9 +5,20 @@
 import { isSupabaseConfigured, supabase } from '@/src/config/supabase';
 import { ErrorCode, ServiceResult } from '@/src/types/error.types';
 import { handleUnexpectedError } from '@/src/utils/errorHandler';
-import { predictCry } from './api.service';
+import { predictCry, predictCryFromUri } from './api.service';
 import { createCryDetectionAlert } from './alert.service';
-import { uploadFile } from './storage.service';
+
+/** Cry types that warrant an alert. Other baby sounds (e.g. burping) go to history only. */
+const DISTRESS_CRY_TYPES = new Set([
+  'hungry', 'tired', 'discomfort', 'belly_pain', 'belly pain',
+  'cold_hot', 'cold hot', 'lonely', 'scared',
+]);
+export function isDistressCryType(cryType: string | undefined): boolean {
+  if (!cryType || typeof cryType !== 'string') return false;
+  const n = cryType.toLowerCase().trim().replace(/\s+/g, '_');
+  return DISTRESS_CRY_TYPES.has(n);
+}
+import { uploadFile, uploadFileFromUri } from './storage.service';
 import { executeWrite } from './supabase-write.service';
 
 export interface AudioLog {
@@ -21,6 +32,8 @@ export interface AudioLog {
     label: 'crying' | 'normal';
     confidence: number;
     processedAt: Date;
+    /** AI cry reason when crying: hungry, tired, discomfort, belly pain, burping */
+    cryType?: string;
   };
   alertSent?: boolean;
   alertSentAt?: Date;
@@ -44,55 +57,92 @@ export interface GPSTracking {
   createdAt: Date;
 }
 
+/** Audio input: Blob (web) or file URI (React Native – avoids Blob from ArrayBuffer) */
+export type CryDetectionAudioInput = Blob | { uri: string; mimeType: string };
+
 /**
- * Record audio and detect crying
+ * Record audio and detect crying.
+ * Accepts Blob or { uri, mimeType } so RN can send from file URI without creating a Blob from bytes.
  */
 export async function recordAndDetectCry(
   sessionId: string,
   childId: string,
   parentId: string,
   sitterId: string,
-  audioBlob: Blob
+  audio: CryDetectionAudioInput
 ): Promise<ServiceResult<AudioLog>> {
+  const isUri = typeof audio === 'object' && 'uri' in audio && typeof (audio as { uri: string }).uri === 'string';
+  const uri = isUri ? (audio as { uri: string; mimeType: string }).uri : null;
+  const mimeType = isUri ? (audio as { uri: string; mimeType: string }).mimeType : 'audio/wav';
+
   try {
-    // 1. Upload audio to Storage
+    // 1. Upload audio to Storage (need a Blob; for URI we try fetch(uri).blob() to avoid new Blob([bytes]))
     let audioUrl: Awaited<ReturnType<typeof uploadFile>>;
-    try {
-      audioUrl = await uploadFile(
-        `audio/sessions/${sessionId}/${Date.now()}.wav`,
-        audioBlob,
-        'audio/wav'
-      );
-    } catch (e: any) {
-      return {
-        success: false,
-        error: {
-          code: ErrorCode.UPLOAD_FAILED,
-          message: `Upload failed: ${e?.message ?? 'Network or storage error'}`,
-        },
-      };
+    let durationSec = 5; // default chunk length when we don't have blob size
+
+    if (isUri && uri) {
+      const storagePath = `audio/sessions/${sessionId}/${Date.now()}.${/m4a|mp4/.test(mimeType) ? 'm4a' : 'wav'}`;
+      audioUrl = await uploadFileFromUri(storagePath, uri, mimeType);
+      if (audioUrl.success) durationSec = 5;
+    } else {
+      const blob = audio as Blob;
+      durationSec = blob.size / 16000;
+      try {
+        audioUrl = await uploadFile(
+          `audio/sessions/${sessionId}/${Date.now()}.wav`,
+          blob,
+          'audio/wav'
+        );
+      } catch (e: any) {
+        return {
+          success: false,
+          error: {
+            code: ErrorCode.UPLOAD_FAILED,
+            message: `Upload failed: ${e?.message ?? 'Network or storage error'}`,
+          },
+        };
+      }
     }
 
     if (!audioUrl.success || !audioUrl.data) {
-      return {
-        success: false,
-        error: {
-          code: ErrorCode.UPLOAD_FAILED,
-          message: audioUrl.error?.message ?? 'Failed to upload audio file',
-        },
-      };
+      // When using URI, we may skip storage and still run prediction
+      if (isUri && uri) {
+        // Continue with prediction; audioUrl will be empty
+      } else {
+        return {
+          success: false,
+          error: {
+            code: ErrorCode.UPLOAD_FAILED,
+            message: audioUrl.error?.message ?? 'Failed to upload audio file',
+          },
+        };
+      }
     }
 
-    // 2. Call AI prediction endpoint
+    // 2. Call AI prediction endpoint (from URI or Blob)
     let prediction: Awaited<ReturnType<typeof predictCry>>;
     try {
-      prediction = await predictCry(audioBlob);
+      if (isUri && uri) {
+        prediction = await predictCryFromUri(uri, mimeType);
+      } else {
+        prediction = await predictCry(audio as Blob);
+      }
     } catch (e: any) {
       return {
         success: false,
         error: {
-          code: ErrorCode.UPLOAD_FAILED, // reuse or add PREDICTION_FAILED
+          code: ErrorCode.UPLOAD_FAILED,
           message: `Prediction request failed: ${e?.message ?? 'Network request failed'}`,
+        },
+      };
+    }
+
+    if (!prediction.success || !prediction.data) {
+      return {
+        success: false,
+        error: {
+          code: ErrorCode.UPLOAD_FAILED,
+          message: prediction.error?.message ?? 'AI did not return a result. Check EXPO_PUBLIC_AI_SERVICE_URL (use your computer IP on phone).',
         },
       };
     }
@@ -100,28 +150,34 @@ export async function recordAndDetectCry(
     const audioLog: AudioLog = {
       sessionId,
       childId,
-      audioUrl: audioUrl.data,
-      duration: audioBlob.size / 16000, // Approximate duration
+      audioUrl: audioUrl.success && audioUrl.data ? audioUrl.data : '',
+      duration: durationSec,
       recordedAt: new Date(),
       createdAt: new Date(),
     };
 
-    if (prediction.success && prediction.data) {
+    if (prediction.data) {
       audioLog.prediction = {
         label: prediction.data.label,
         confidence: prediction.data.score,
         processedAt: new Date(),
+        cryType: prediction.data.cryType,
       };
 
-      // 3. If crying detected, create alert (stored in DB; parent & sitter see it in session + Notifications/Track)
-      if (prediction.data.label === 'crying' && prediction.data.score > 0.6) {
+      // 3. Only create alert for distress cry types (hungry, tired, etc.). Burping/normal → history only.
+      if (
+        prediction.data.label === 'crying' &&
+        prediction.data.score > 0.6 &&
+        isDistressCryType(prediction.data.cryType)
+      ) {
         const alertResult = await createCryDetectionAlert(
           sessionId,
           childId,
           parentId,
           sitterId,
           'audio-log-id', // Placeholder until audio_log table is used
-          prediction.data.score
+          prediction.data.score,
+          prediction.data.cryType
         );
 
         if (alertResult.success && alertResult.data) {

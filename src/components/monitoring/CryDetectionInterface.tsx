@@ -21,9 +21,9 @@ import {
   requestPermissionsAsync as requestAudioPermissionsAsync,
 } from 'expo-av/build/Audio/Recording';
 import Card from '@/src/components/ui/Card';
-import { recordAndDetectCry, AudioLog } from '@/src/services/monitoring.service';
+import { recordAndDetectCry, AudioLog, isDistressCryType } from '@/src/services/monitoring.service';
 import { Alert as AlertType, getSessionAlerts } from '@/src/services/alert.service';
-import { readFileUriToBlob } from '@/src/utils/audioFileUtils';
+import { findMostRecentRecordingUri } from '@/src/utils/audioFileUtils';
 import { stopCurrentRecordingIfAny, setCurrentRecording } from '@/src/utils/audioRecordingSingleton';
 import { format, formatDistanceToNow } from 'date-fns';
 
@@ -65,6 +65,7 @@ export default function CryDetectionInterface({
     label: 'crying' | 'normal';
     confidence: number;
     timestamp: Date;
+    cryType?: string;
   } | null>(null);
   const [recordingDuration, setRecordingDuration] = useState(0);
   const [hasPermission, setHasPermission] = useState<boolean | null>(null);
@@ -186,6 +187,10 @@ export default function CryDetectionInterface({
             uri = (status?.uri && typeof status.uri === 'string') ? status.uri : null;
           } catch (_) {}
           if (!uri) {
+            const r = chunkRecording as any;
+            uri = (r._uri && typeof r._uri === 'string') ? r._uri : (typeof r.getURI === 'function' ? r.getURI() : null) || null;
+          }
+          if (!uri) {
             uri = await new Promise<string | null>((resolve) => {
               let done = false;
               const tryResolve = (u: string | null) => {
@@ -213,56 +218,79 @@ export default function CryDetectionInterface({
                 }
               });
               chunkRecording.stopAndUnloadAsync().then(() => {
-                if (!done) tryResolve(null);
+                if (done) return;
+                try {
+                  const getUri = (chunkRecording as any).getURI;
+                  if (typeof getUri === 'function') {
+                    const u = getUri();
+                    if (u && typeof u === 'string') {
+                      tryResolve(u);
+                      return;
+                    }
+                  }
+                } catch (_) {}
+                tryResolve(null);
               });
             });
           } else {
             await chunkRecording.stopAndUnloadAsync();
           }
+          if (!uri) {
+            const r = chunkRecording as any;
+            if (r._uri && typeof r._uri === 'string') uri = r._uri;
+            else if (typeof r.getURI === 'function') {
+              const u = r.getURI();
+              if (u && typeof u === 'string') uri = u;
+            }
+          }
           setCurrentRecording(null);
           setRecording(null);
 
+          if (!uri) {
+            uri = await findMostRecentRecordingUri(15000);
+          }
           if (uri) {
-            const blob = await readFileUriToBlob(uri, 'audio/wav').catch(() => null);
-            if (blob) {
-              try {
-                const result = await recordAndDetectCry(
-                  sessionId,
-                  childId,
-                  parentId,
-                  sitterId,
-                  blob
-                );
-                if (result.success && result.data) {
-                  setLastSendError(null);
-                  setLastChunkSentAt(Date.now()); // only when actually sent and checked
-                  setChunksSentCount((n) => n + 1);
-                  const audioLog = result.data;
-                  setDetectionHistory((prev) => [audioLog, ...prev].slice(0, 20));
-                  if (audioLog.prediction) {
-                    setCurrentDetection({
-                      label: audioLog.prediction.label,
-                      confidence: audioLog.prediction.confidence,
-                      timestamp: audioLog.prediction.processedAt,
-                    });
-                    if (audioLog.prediction.label === 'crying' && audioLog.alertSent) {
+            const mime = uri.toLowerCase().endsWith('.m4a') ? 'audio/mp4' : 'audio/wav';
+            await new Promise((r) => setTimeout(r, 400));
+            try {
+              const result = await recordAndDetectCry(
+                sessionId,
+                childId,
+                parentId,
+                sitterId,
+                { uri, mimeType: mime }
+              );
+              if (result.success && result.data) {
+                setLastSendError(null);
+                setLastChunkSentAt(Date.now());
+                setChunksSentCount((n) => n + 1);
+                const audioLog = result.data;
+                setDetectionHistory((prev) => [audioLog, ...prev].slice(0, 20));
+                if (audioLog.prediction) {
+                  setCurrentDetection({
+                    label: audioLog.prediction.label,
+                    confidence: audioLog.prediction.confidence,
+                    timestamp: audioLog.prediction.processedAt,
+                    cryType: audioLog.prediction.cryType,
+                  });
+                    if (audioLog.alertSent) {
                       loadRecentAlerts();
+                      const reason = audioLog.prediction.cryType
+                        ? ` Possible reason: ${audioLog.prediction.cryType.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}.`
+                        : '';
                       Alert.alert(
                         'Crying Detected',
-                        `Crying detected with ${(audioLog.prediction.confidence * 100).toFixed(0)}% confidence.`,
+                        `Crying detected with ${(audioLog.prediction.confidence * 100).toFixed(0)}% confidence.${reason}`,
                         [{ text: 'OK' }]
                       );
                     }
-                  }
-                } else {
-                  setLastSendError(result.error?.message || 'Send failed');
                 }
-              } catch (err: any) {
-                console.error('Error sending clip:', err);
-                setLastSendError(err?.message || 'Network request failed');
+              } else {
+                setLastSendError(result.error?.message || 'Send failed');
               }
-            } else {
-              setLastSendError('Could not read audio file');
+            } catch (err: any) {
+              console.error('Error sending clip:', err);
+              setLastSendError(err?.message || 'Network request failed');
             }
           } else {
             setLastSendError('Could not get recording file');
@@ -297,6 +325,18 @@ export default function CryDetectionInterface({
     const secs = seconds % 60;
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
+
+  /** Display label and whether to show as alert (red). Only distress cry triggers alert. Show prediction with confidence; "Unclear" only when no prediction. */
+  function getDetectionDisplay(p: { label: 'crying' | 'normal'; cryType?: string; confidence: number } | null) {
+    if (!p) return { text: 'Unclear', isAlert: false };
+    const cap = (s: string) => s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+    if (p.label === 'normal') return { text: 'Normal', isAlert: false };
+    const ct = p.cryType?.trim();
+    if (!ct) return { text: 'Crying', isAlert: false };
+    const distress = isDistressCryType(ct);
+    if (distress) return { text: `Crying (${cap(ct)})`, isAlert: true };
+    return { text: cap(ct), isAlert: false }; // e.g. Burping
+  }
 
   if (!isEnabled) {
     return (
@@ -469,51 +509,48 @@ export default function CryDetectionInterface({
       </Card>
 
       {/* Current Detection */}
-      {currentDetection && (
-        <Card style={styles.detectionCard}>
-          <Text style={[styles.detectionTitle, { color: colors.text }]}>
-            Latest Detection
-          </Text>
-          <View style={styles.detectionContent}>
-            <View
-              style={[
-                styles.detectionBadge,
-                {
-                  backgroundColor:
-                    currentDetection.label === 'crying'
-                      ? colors.error + '20'
-                      : colors.success + '20',
-                },
-              ]}
-            >
-              <Ionicons
-                name={currentDetection.label === 'crying' ? 'alert-circle' : 'checkmark-circle'}
-                size={24}
-                color={currentDetection.label === 'crying' ? colors.error : colors.success}
-              />
-              <View style={styles.detectionInfo}>
-                <Text
-                  style={[
-                    styles.detectionLabel,
-                    {
-                      color:
-                        currentDetection.label === 'crying' ? colors.error : colors.success,
-                    },
-                  ]}
-                >
-                  {currentDetection.label === 'crying' ? 'Crying Detected' : 'Normal'}
-                </Text>
-                <Text style={[styles.detectionConfidence, { color: colors.textSecondary }]}>
-                  {(currentDetection.confidence * 100).toFixed(0)}% confidence
-                </Text>
-                <Text style={[styles.detectionTime, { color: colors.textSecondary }]}>
-                  {formatDistanceToNow(currentDetection.timestamp, { addSuffix: true })}
-                </Text>
+      {currentDetection && (() => {
+        const display = getDetectionDisplay(currentDetection);
+        return (
+          <Card style={styles.detectionCard}>
+            <Text style={[styles.detectionTitle, { color: colors.text }]}>
+              Latest Detection
+            </Text>
+            <View style={styles.detectionContent}>
+              <View
+                style={[
+                  styles.detectionBadge,
+                  {
+                    backgroundColor: display.isAlert ? colors.error + '20' : colors.success + '20',
+                  },
+                ]}
+              >
+                <Ionicons
+                  name={display.isAlert ? 'alert-circle' : 'checkmark-circle'}
+                  size={24}
+                  color={display.isAlert ? colors.error : colors.success}
+                />
+                <View style={styles.detectionInfo}>
+                  <Text
+                    style={[
+                      styles.detectionLabel,
+                      { color: display.isAlert ? colors.error : colors.success },
+                    ]}
+                  >
+                    {display.text}
+                  </Text>
+                  <Text style={[styles.detectionConfidence, { color: colors.textSecondary }]}>
+                    {(currentDetection.confidence * 100).toFixed(0)}% confidence
+                  </Text>
+                  <Text style={[styles.detectionTime, { color: colors.textSecondary }]}>
+                    {formatDistanceToNow(currentDetection.timestamp, { addSuffix: true })}
+                  </Text>
+                </View>
               </View>
             </View>
-          </View>
-        </Card>
-      )}
+          </Card>
+        );
+      })()}
 
       {/* Detection History */}
       {detectionHistory.length > 0 && (
@@ -522,7 +559,9 @@ export default function CryDetectionInterface({
             Detection History
           </Text>
           <ScrollView style={styles.historyList} nestedScrollEnabled>
-            {detectionHistory.slice(0, 10).map((log, index) => (
+            {detectionHistory.slice(0, 10).map((log, index) => {
+              const display = log.prediction ? getDetectionDisplay(log.prediction) : null;
+              return (
               <View
                 key={index}
                 style={[
@@ -531,24 +570,39 @@ export default function CryDetectionInterface({
                 ]}
               >
                 <Ionicons
-                  name={log.prediction?.label === 'crying' ? 'alert-circle' : 'checkmark-circle'}
+                  name={
+                    !log.prediction
+                      ? 'help-circle-outline'
+                      : display?.isAlert
+                        ? 'alert-circle'
+                        : 'checkmark-circle'
+                  }
                   size={20}
-                  color={log.prediction?.label === 'crying' ? colors.error : colors.success}
+                  color={
+                    !log.prediction
+                      ? colors.textSecondary
+                      : display?.isAlert
+                        ? colors.error
+                        : colors.success
+                  }
                 />
                 <View style={styles.historyItemContent}>
                   <Text style={[styles.historyItemLabel, { color: colors.text }]}>
-                    {log.prediction?.label === 'crying' ? 'Crying' : 'Normal'}
+                    {log.prediction ? display?.text : 'Unclear'}
                   </Text>
                   <Text style={[styles.historyItemTime, { color: colors.textSecondary }]}>
-                    {format(log.recordedAt, 'h:mm a')} •{' '}
-                    {(log.prediction?.confidence || 0) * 100}% confidence
+                    {format(log.recordedAt, 'h:mm a')}
+                    {log.prediction != null
+                      ? ` • ${(log.prediction.confidence * 100).toFixed(0)}% confidence`
+                      : ' • Clip sent; AI did not respond'}
                   </Text>
                 </View>
                 {log.alertSent && (
                   <Ionicons name="notifications" size={16} color={colors.primary} />
                 )}
               </View>
-            ))}
+              );
+            })}
           </ScrollView>
         </Card>
       )}
