@@ -75,6 +75,23 @@ def get_supabase_with_auth(auth_token: str) -> Optional[Client]:
         return None
 
 
+def get_supabase_service_role() -> Optional[Client]:
+    """
+    Get Supabase client with service role key (bypasses RLS).
+    Returns None if SUPABASE_SERVICE_ROLE_KEY is not set - use for server-side
+    inserts that must succeed (e.g. creating alerts for parent when sitter requests end).
+    """
+    url = os.getenv("SUPABASE_URL", "")
+    key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
+    if not url or not key:
+        return None
+    try:
+        return create_client(url, key)
+    except Exception as e:
+        print(f"Failed to create Supabase service-role client: {e}")
+        return None
+
+
 def init_supabase(url: str, key: str) -> Client:
     """Initialize Supabase client with provided credentials"""
     global _supabase

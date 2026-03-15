@@ -236,7 +236,30 @@ def charge_parent_before_session_end(session_id: str, total_amount: float, sessi
     Charge the parent for the session (prorated or full) BEFORE marking session completed.
     Used when parent ends the session: payment must succeed before session ends.
     Returns (True, amount_final) on success, (False, None, error_message) on failure.
+
+    Demo mode: set DEMO_SKIP_PAYMENT_ON_END=1 in .env to skip Stripe and end session without real payment (for testing).
     """
+    # Demo mode: skip real payment so you can test end-session without Stripe or a saved card
+    if os.getenv("DEMO_SKIP_PAYMENT_ON_END", "").strip().lower() in ("1", "true", "yes"):
+        amount_final = float(total_amount) if total_amount else 0.50
+        sb_service = _get_supabase_service()
+        if sb_service:
+            parent_id = session_data.get("parent_id")
+            try:
+                sb_service.table("payments").insert({
+                    "session_id": session_id,
+                    "parent_id": parent_id,
+                    "amount_estimated": amount_final,
+                    "amount_final": amount_final,
+                    "currency": "usd",
+                    "stripe_payment_intent_id": "demo",
+                    "payment_status": "captured",
+                }).execute()
+            except Exception:
+                pass
+        logger.info("Demo mode: skipping real payment for session %s (amount %.2f)", session_id, amount_final)
+        return True, amount_final, None
+
     stripe_obj = _stripe()
     sb_service = _get_supabase_service()
     if not stripe_obj or not sb_service:
@@ -249,8 +272,9 @@ def charge_parent_before_session_end(session_id: str, total_amount: float, sessi
     parent_id = session_data.get("parent_id")
     if not parent_id:
         return False, None, "Session has no parent."
-    pay_resp = sb_service.table("payments").select("*").eq("session_id", session_id).single().execute()
-    pay = pay_resp.data if pay_resp.data else None
+    # Don't use .single() — 0 rows is valid (no payment row yet; we'll charge and insert)
+    pay_resp = sb_service.table("payments").select("*").eq("session_id", session_id).limit(1).execute()
+    pay = pay_resp.data[0] if pay_resp.data and len(pay_resp.data) > 0 else None
     # Path 1: already authorized — capture it (prorated)
     if pay and pay.get("payment_status") == "authorized":
         pid = pay.get("stripe_payment_intent_id")
@@ -348,8 +372,8 @@ def do_capture_after_session_end(session_id: str):
         return False, None
     amount_cents = _amount_to_cents(total_amount)
     parent_id = session_data.get("parent_id")
-    pay_resp = sb_service.table("payments").select("*").eq("session_id", session_id).single().execute()
-    pay = pay_resp.data if pay_resp.data else None
+    pay_resp = sb_service.table("payments").select("*").eq("session_id", session_id).limit(1).execute()
+    pay = pay_resp.data[0] if pay_resp.data and len(pay_resp.data) > 0 else None
     # Path 1: already authorized — capture it
     if pay and pay.get("payment_status") == "authorized":
         pid = pay.get("stripe_payment_intent_id")

@@ -433,8 +433,9 @@ export default function SessionDetailScreen() {
               router.back();
             } else {
               const errMsg = result.error?.message || 'Failed to end session';
+              const isPaymentError = errMsg.toLowerCase().includes('payment') || errMsg.toLowerCase().includes('profile') || errMsg.toLowerCase().includes('card');
               Alert.alert(
-                'Payment required',
+                isPaymentError ? 'Payment required' : 'Cannot end session',
                 errMsg.includes('Profile') ? `${errMsg} Open Profile to add a payment method.` : errMsg
               );
             }

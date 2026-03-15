@@ -256,6 +256,28 @@ This is the most common issue. Try these steps:
   2. Check that your session is valid
   3. Verify Supabase auth is working (try other auth operations)
 
+## Session Audio Bucket (Cry Detection)
+
+Cry-detection audio clips are stored in a **separate** bucket `session-audio` (not in profile-images).
+
+### Create the bucket and policies
+
+1. **Run the SQL script**: `scripts/STORAGE_SESSION_AUDIO.sql`
+   - In Supabase Dashboard go to **SQL Editor** → New query
+   - Paste the contents of `scripts/STORAGE_SESSION_AUDIO.sql` and run it
+
+   This will:
+   - Create bucket `session-audio` (public, 10MB per file)
+   - Allow MIME types: `audio/wav`, `audio/mp4`, `audio/mpeg`, `application/octet-stream`
+   - Add policies: authenticated INSERT/UPDATE/DELETE under `sessions/`, public SELECT
+
+2. **Path format in the app**: `audio/sessions/{sessionId}/{timestamp}.m4a`
+   - Stored in bucket as: `sessions/{sessionId}/{timestamp}.m4a`
+
+3. **Verify**: Storage → `session-audio` bucket exists and is Public; Policies tab shows 4 active policies.
+
+---
+
 ## Child Images Bucket Setup
 
 Child photos are stored in a separate bucket called `child-images`. To set it up:
@@ -278,10 +300,12 @@ Child photos are stored in a separate bucket called `child-images`. To set it up
 
 - **Profile Bucket Name**: Must be `profile-images` (with hyphen, lowercase)
 - **Child Images Bucket Name**: Must be `child-images` (with hyphen, lowercase)
+- **Session Audio Bucket Name**: Must be `session-audio` (with hyphen, lowercase). Use path prefix `audio/` in the app (e.g. `audio/sessions/{sessionId}/{ts}.m4a`).
 - **Profile Path Format**: Files are stored as `{user_id}/{timestamp}.jpg`
 - **Child Path Format**: Files are stored as `{user_id}/{childId}_{timestamp}.jpg`
-- **Public Access**: Required for images to display in the app
-- **File Size**: 5MB limit is recommended for profile pictures
+- **Session Audio Path Format**: Use `audio/sessions/{sessionId}/{timestamp}.m4a` in the app; stored in bucket as `sessions/{sessionId}/{timestamp}.m4a`
+- **Public Access**: Required for images and audio URLs to work
+- **File Size**: 5MB for profile/child images; 10MB for session audio
 
 ## 🔒 Security Notes
 

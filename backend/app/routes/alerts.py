@@ -9,7 +9,7 @@ from datetime import datetime
 
 from app.utils.auth import verify_token, CurrentUser, security
 from app.utils.error_handler import handle_error, AppError
-from app.utils.database import get_supabase, get_supabase_with_auth
+from app.utils.database import get_supabase, get_supabase_with_auth, get_supabase_service_role
 
 router = APIRouter()
 
@@ -99,29 +99,34 @@ async def get_user_alerts(
 ):
     """
     Get current user's alerts (parent or sitter).
-    Uses authenticated Supabase client so RLS returns only this user's alerts.
+    Prefer service-role client so we filter by user id in code (avoids RLS/auth issues);
+    fallback to auth client for RLS-based filtering.
     """
     try:
-        supabase = get_supabase_with_auth(credentials.credentials)
+        # Prefer service-role so alerts created by backend (e.g. "sitter requested end") are always visible
+        supabase = get_supabase_service_role()
+        if not supabase:
+            supabase = get_supabase_with_auth(credentials.credentials)
         if not supabase:
             supabase = get_supabase()
-        
+
         if not supabase:
             raise AppError(
                 code="DB_NOT_AVAILABLE",
                 message="Database connection not available",
                 status_code=503
             )
-        
-        # Build query based on user role
+
+        # Filter by current user (service-role bypasses RLS; we enforce visibility in code)
         if current_user.role == "parent":
             query = supabase.table("alerts").select("*").eq("parent_id", current_user.id)
         elif current_user.role == "sitter":
             query = supabase.table("alerts").select("*").eq("sitter_id", current_user.id)
-        else:
-            # Admin can see all, or return empty for other roles
+        elif current_user.role == "admin":
             query = supabase.table("alerts").select("*")
-        
+        else:
+            query = supabase.table("alerts").select("*").eq("parent_id", current_user.id).limit(0)
+
         # Apply filters
         if sessionId:
             query = query.eq("session_id", sessionId)
@@ -129,16 +134,16 @@ async def get_user_alerts(
             query = query.eq("status", status)
         if alertType:
             query = query.eq("type", alertType)
-        
+
         # Order by created_at descending
         query = query.order("created_at", desc=True).limit(100)
-        
+
         response = query.execute()
-        
+
         alerts = []
         for alert_data in (response.data or []):
             alerts.append(db_to_alert_response(alert_data))
-        
+
         return alerts
         
     except AppError:
@@ -227,7 +232,7 @@ async def create_alert(
             "location": alert_data.location,
         }
         
-        response = supabase.table("alerts").insert(insert_data).select().execute()
+        response = supabase.table("alerts").insert(insert_data).execute()
         
         if not response.data:
             raise AppError(
@@ -235,13 +240,14 @@ async def create_alert(
                 message="Failed to create alert",
                 status_code=500
             )
-        # For cry_detection alerts, update session last_audio_signal_at and add timeline event
+        # For cry_detection alerts, update session last_audio_signal_at and add timeline event (use service role so it always succeeds)
         try:
             if alert_data.type == "cry_detection" and alert_data.sessionId:
-                supabase.table("sessions").update(
+                sb = get_supabase_service_role() or supabase
+                sb.table("sessions").update(
                     {"last_audio_signal_at": datetime.utcnow().isoformat()}
                 ).eq("id", alert_data.sessionId).execute()
-                supabase.table("session_events").insert({
+                sb.table("session_events").insert({
                     "session_id": alert_data.sessionId,
                     "type": "cry_detected",
                     "triggered_by": alert_data.sitterId or current_user.id,

@@ -258,7 +258,7 @@ async def create_child(
             "parent_number": child_data.parentNumber,
         }
         
-        response = supabase.table("children").insert(insert_data).select().execute()
+        response = supabase.table("children").insert(insert_data).execute()
         
         if not response.data:
             raise AppError(
@@ -524,7 +524,7 @@ async def update_child_instructions(
             # Create new
             update_data["child_id"] = child_id
             update_data["parent_id"] = current_user.id
-            response = supabase.table("child_instructions").insert(update_data).select().execute()
+            response = supabase.table("child_instructions").insert(update_data).execute()
         
         if not response.data:
             raise AppError(

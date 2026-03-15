@@ -168,18 +168,17 @@ export default function Header({
 const styles = StyleSheet.create({
   header: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
+    alignItems: 'center',
     justifyContent: 'space-between',
     borderBottomWidth: 1,
   },
   leftSection: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
+    alignItems: 'center',
     flex: 1,
   },
   backButton: {
     marginRight: 10,
-    marginTop: 2,
     zIndex: 10,
     padding: 4,
   },
@@ -212,7 +211,6 @@ const styles = StyleSheet.create({
   },
   rightSection: {
     marginLeft: 12,
-    marginTop: 2,
     justifyContent: 'center',
   },
   rightSectionAligned: {

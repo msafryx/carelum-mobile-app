@@ -50,7 +50,7 @@ import {
   getSessionAlerts,
   subscribeToSessionAlerts,
 } from '@/src/services/alert.service';
-import { readFileUriToBlob } from '@/src/utils/audioFileUtils';
+import { findMostRecentRecordingUri } from '@/src/utils/audioFileUtils';
 import { stopCurrentRecordingIfAny, setCurrentRecording } from '@/src/utils/audioRecordingSingleton';
 import { getInterviewBySession } from '@/src/services/interview.service';
 import {
@@ -215,6 +215,7 @@ export default function SitterSessionDetailScreen() {
       setGpsTrackingEnabled(gpsOn);
       setCryDetectionEnabled(cryOn);
       setIsMonitoringActive(monEnabled);
+      isMonitoringActiveRef.current = monEnabled;
 
       // Process GPS tracking
       if (gpsResult.success && gpsResult.data) {
@@ -266,6 +267,7 @@ export default function SitterSessionDetailScreen() {
         setGpsTrackingEnabled(updatedSession.gpsTrackingEnabled ?? monEnabled ?? false);
         setCryDetectionEnabled(updatedSession.cryDetectionEnabled ?? monEnabled ?? false);
         setIsMonitoringActive(monEnabled);
+        isMonitoringActiveRef.current = monEnabled;
       }
     });
 
@@ -311,6 +313,7 @@ export default function SitterSessionDetailScreen() {
   const lastAudioErrorLogRef = useRef<number>(0);
   const AUDIO_ERROR_LOG_INTERVAL_MS = 30000;
   const cryDetectionLoopRef = useRef<{ cancelled: boolean }>({ cancelled: false });
+  const isMonitoringActiveRef = useRef(false);
   useEffect(() => {
     if (!session?.location || !id) return;
     if (getParentCoords(session.location)) {
@@ -438,15 +441,17 @@ export default function SitterSessionDetailScreen() {
 
     setSession(toggleRes.data);
     setIsMonitoringActive(true);
+    isMonitoringActiveRef.current = true;
     setGpsTrackingEnabled(true);
     setCryDetectionEnabled(true);
     handleToggleGPS(true);
     handleToggleCryDetection(true);
 
-    // Start cry detection (mic → AI service); on success alerts are sent to parent/sitter via createCryDetectionAlert
+    // Start cry detection (sets isRecording true after previous loop exits so REC shows reliably after Stop → Start)
     try {
       await startCryDetection();
     } catch (err: any) {
+      setIsRecording(false);
       setActionLoading(false);
       Alert.alert(
         'Cry detection could not start',
@@ -470,6 +475,9 @@ export default function SitterSessionDetailScreen() {
     }
     setSession(toggleRes.data);
     setIsMonitoringActive(false);
+    isMonitoringActiveRef.current = false;
+    setGpsTrackingEnabled(false);
+    setCryDetectionEnabled(false);
 
     // Stop GPS tracking
     if (locationTrackingStop) {
@@ -493,7 +501,7 @@ export default function SitterSessionDetailScreen() {
     // (Backend state already updated via /monitoring)
   };
 
-  // Start cry detection: chunked recording every 3s (stop → read file → send → start again) so mobile always has a readable URI
+  // Start cry detection: chunked recording every 5s. Show REC when monitoring starts (including after Stop → Start).
   const startCryDetection = async () => {
     try {
       const { status } = await requestAudioPermissionsAsync();
@@ -508,7 +516,11 @@ export default function SitterSessionDetailScreen() {
       });
 
       await stopCurrentRecordingIfAny();
+      // Let any previous loop see cancelled and exit before we start (so it doesn't clear isRecording later)
+      cryDetectionLoopRef.current.cancelled = true;
+      await new Promise((r) => setTimeout(r, 400));
       cryDetectionLoopRef.current = { cancelled: false };
+      setIsRecording(true);
 
       const CHUNK_SEC = 5;
       const loop = async () => {
@@ -519,7 +531,6 @@ export default function SitterSessionDetailScreen() {
           );
           setCurrentRecording(chunkRecording);
           setRecording(chunkRecording);
-          setIsRecording(true);
 
           await new Promise<void>((resolve) => {
             const t = setTimeout(resolve, CHUNK_SEC * 1000);
@@ -534,6 +545,10 @@ export default function SitterSessionDetailScreen() {
             const st = await chunkRecording.getStatusAsync();
             uri = (st?.uri && typeof st.uri === 'string') ? st.uri : null;
           } catch (_) {}
+          if (!uri) {
+            const r = chunkRecording as any;
+            uri = (r._uri && typeof r._uri === 'string') ? r._uri : (typeof r.getURI === 'function' ? r.getURI() : null) || null;
+          }
           if (!uri) {
             uri = await new Promise<string | null>((resolve) => {
               let done = false;
@@ -562,32 +577,63 @@ export default function SitterSessionDetailScreen() {
                 }
               });
               chunkRecording.stopAndUnloadAsync().then(() => {
-                if (!done) tryResolve(null);
+                if (done) return;
+                try {
+                  const getUri = (chunkRecording as any).getURI;
+                  if (typeof getUri === 'function') {
+                    const u = getUri();
+                    if (u && typeof u === 'string') {
+                      tryResolve(u);
+                      return;
+                    }
+                  }
+                } catch (_) {}
+                tryResolve(null);
               });
             });
           } else {
             await chunkRecording.stopAndUnloadAsync();
           }
+          if (!uri) {
+            const r = chunkRecording as any;
+            if (r._uri && typeof r._uri === 'string') uri = r._uri;
+            else if (typeof r.getURI === 'function') {
+              const u = r.getURI();
+              if (u && typeof u === 'string') uri = u;
+            }
+          }
           setCurrentRecording(null);
           setRecording(null);
 
+          if (!uri) {
+            uri = await findMostRecentRecordingUri(15000);
+          }
+          if (cryDetectionLoopRef.current.cancelled) break;
           if (uri && sess.childId && sess.parentId) {
-            const blob = await readFileUriToBlob(uri, 'audio/wav').catch(() => null);
-            if (blob) {
-              try {
-                const res = await recordAndDetectCry(id!, sess.childId, sess.parentId, user.id, blob);
-                if (res.success) setLastAudioChunkSentAt(Date.now());
-              } catch (err: any) {
-                const now = Date.now();
-                if (now - lastAudioErrorLogRef.current >= AUDIO_ERROR_LOG_INTERVAL_MS) {
-                  lastAudioErrorLogRef.current = now;
-                  console.error('Error processing audio:', err?.message ?? err);
-                }
+            const mime = uri.toLowerCase().endsWith('.m4a') ? 'audio/mp4' : 'audio/wav';
+            await new Promise((r) => setTimeout(r, 400));
+            if (cryDetectionLoopRef.current.cancelled) break;
+            try {
+              const res = await recordAndDetectCry(
+                id!,
+                sess.childId,
+                sess.parentId,
+                user.id,
+                { uri, mimeType: mime },
+                { createAlert: isMonitoringActiveRef.current }
+              );
+              if (res.success) setLastAudioChunkSentAt(Date.now());
+            } catch (err: any) {
+              const now = Date.now();
+              if (now - lastAudioErrorLogRef.current >= AUDIO_ERROR_LOG_INTERVAL_MS) {
+                lastAudioErrorLogRef.current = now;
+                console.error('Error processing audio:', err?.message ?? err);
               }
             }
           }
         }
-        setIsRecording(false);
+        // Only clear REC when this loop exited because monitoring was stopped (not when a new loop took over)
+        if (cryDetectionLoopRef.current.cancelled) setIsRecording(false);
       };
       loop();
     } catch (err: any) {
@@ -595,41 +641,26 @@ export default function SitterSessionDetailScreen() {
     }
   };
 
-  // Handle end session (sitter or admin only; parent cannot end)
+  // Sitter can only request end (parent is notified). This screen is sitter-only so we always use request-end.
   const handleEndSession = async () => {
     if (!session || !id) return;
 
-    // If sitter, send request-end instead of actually ending
-    if (user?.role === 'sitter') {
-      setActionLoading(true);
-      const res = await requestSessionEnd(id);
-      setActionLoading(false);
-      if (res.success) {
-        Alert.alert('Request sent', 'Your request to end the session has been sent to the parent.');
-      } else {
-        Alert.alert('Error', res.error?.message || 'Failed to send end-session request.');
-      }
-      return;
-    }
-
     Alert.alert(
-      'End Session',
-      'Are you sure you want to end this session?',
+      'Request to end session',
+      'The parent will be notified. Only the parent can actually end the session and complete payment. Continue?',
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'End Session',
-          style: 'destructive',
+          text: 'Send request',
+          style: 'default',
           onPress: async () => {
             setActionLoading(true);
-            await handleStopMonitoring();
-            const result = await endSession(id);
+            const res = await requestSessionEnd(id);
             setActionLoading(false);
-            if (result.success && result.data) {
-              setSession(result.data);
-              Alert.alert('Success', 'Session ended successfully.');
+            if (res.success) {
+              Alert.alert('Request sent', 'The parent has been notified. They will end the session from their app when ready.');
             } else {
-              Alert.alert('Error', result.error?.message || 'Failed to end session');
+              Alert.alert('Error', res.error?.message || 'Failed to send request.');
             }
           },
         },
@@ -1201,18 +1232,21 @@ export default function SitterSessionDetailScreen() {
               <SessionTimeline session={session} role="sitter" />
             </View>
 
-            {/* End Session Button */}
+            {/* Request to end session (sitter notifies parent; parent ends and pays) */}
             <Card style={styles.endSessionCard}>
               <TouchableOpacity
                 style={[styles.endSessionButton, { borderColor: colors.error || '#dc2626', backgroundColor: (colors.error || '#dc2626') + '08' }]}
                 onPress={handleEndSession}
                 disabled={actionLoading}
               >
-                <Ionicons name="stop-circle-outline" size={20} color={colors.error || '#dc2626'} />
+                <Ionicons name="hand-left-outline" size={20} color={colors.error || '#dc2626'} />
                 <Text style={[styles.endSessionText, { color: colors.error || '#dc2626' }]}>
-                  End Session
+                  Request to end session
                 </Text>
               </TouchableOpacity>
+              <Text style={[styles.endSessionHint, { color: colors.textSecondary }]}>
+                Parent will be notified and will end the session from their app.
+              </Text>
             </Card>
           </>
         )}
@@ -1603,5 +1637,10 @@ const styles = StyleSheet.create({
   endSessionText: {
     fontSize: 16,
     fontWeight: '600',
+  },
+  endSessionHint: {
+    fontSize: 12,
+    marginTop: 8,
+    textAlign: 'center',
   },
 });

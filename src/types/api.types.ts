@@ -1,6 +1,8 @@
 export interface PredictResponse {
   label: 'crying' | 'normal';
   score: number;
+  /** AI-reported cry reason when label is crying: hungry, tired, discomfort, belly pain, burping */
+  cryType?: string;
 }
 
 export interface BotUpdateRequest {

@@ -56,15 +56,18 @@ export default function TrackScreen() {
 
   const loadActiveSessions = useCallback(async () => {
     if (!user) return;
-    // Force API fetch so Track always shows current active sessions (not stale cache)
-    const result = await getUserSessions(user.id, 'parent', SESSION_STATUS.ACTIVE, { forceRefresh: true });
-    if (result.success && result.data) {
-      setActiveSessions(result.data);
-      if (result.data.length > 0 && !selectedSession) {
-        setSelectedSession(result.data[0]);
+    try {
+      // Force API fetch so Track always shows current active sessions (not stale cache)
+      const result = await getUserSessions(user.id, 'parent', SESSION_STATUS.ACTIVE, { forceRefresh: true });
+      if (result.success && result.data) {
+        setActiveSessions(result.data);
+        if (result.data.length > 0 && !selectedSession) {
+          setSelectedSession(result.data[0]);
+        }
       }
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   }, [user]);
 
   const loadSessionData = useCallback(async (sessionId: string) => {
@@ -159,10 +162,10 @@ export default function TrackScreen() {
         showLogo={false}
         showBack={true}
         title="Track"
-        onBackPress={() => router.back()}
+        onBack={() => router.back()}
       />
       <ScrollView
-        contentContainerStyle={styles.content}
+        contentContainerStyle={[styles.content, activeSessions.length === 0 && !loading && styles.contentEmpty]}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.primary]} />
         }
@@ -175,7 +178,7 @@ export default function TrackScreen() {
             </View>
           </Card>
         ) : activeSessions.length === 0 ? (
-          <Card>
+          <Card style={styles.emptyCard}>
             <EmptyState
               icon="location-outline"
               title="No active session to track"
@@ -314,6 +317,8 @@ export default function TrackScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   content: { padding: 16, paddingBottom: 32 },
+  contentEmpty: { flexGrow: 1, minHeight: 280 },
+  emptyCard: { flex: 1 },
   loadingContainer: { padding: 24, alignItems: 'center' },
   loadingText: { marginTop: 8, fontSize: 14 },
   primaryButton: { marginTop: 16, paddingVertical: 14, borderRadius: 12, alignItems: 'center' },

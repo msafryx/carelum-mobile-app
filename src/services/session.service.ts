@@ -772,8 +772,9 @@ export async function setSessionMonitoringEnabled(
 }
 
 /**
- * End session (sitter or admin). POST /api/sessions/{id}/end.
- * Returns updated session. Parent cannot end (backend returns 403).
+ * End session (parent or admin). POST /api/sessions/{id}/end.
+ * Parent: backend charges for time used, then sets status completed.
+ * Admin: force-ends without payment. Sitter cannot call this; use requestSessionEnd.
  */
 export async function endSession(sessionId: string): Promise<ServiceResult<Session>> {
   try {

@@ -11,7 +11,7 @@ import os
 
 from app.utils.auth import verify_token, CurrentUser, security
 from app.utils.error_handler import handle_error, AppError
-from app.utils.database import get_supabase, get_supabase_with_auth
+from app.utils.database import get_supabase, get_supabase_with_auth, get_supabase_service_role
 
 
 def _get_supabase_service():
@@ -142,6 +142,8 @@ def _create_alert(
         supabase_client.table("alerts").insert(insert_data).execute()
     except Exception as e:
         print(f"⚠️ Failed to create alert: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 def _create_session_event(supabase_client, session_id: str, event_type: str, triggered_by: str) -> None:
@@ -284,61 +286,80 @@ class MonitoringToggleRequest(BaseModel):
     enabled: bool
 
 
+def _safe_float(v):
+    """Convert to float for JSON; handle Decimal and None."""
+    if v is None:
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _safe_str_dt(v):
+    """Return ISO string for JSON; handle datetime and None."""
+    if v is None:
+        return None
+    if hasattr(v, "isoformat"):
+        return v.isoformat()
+    return str(v) if v else None
+
+
 def db_to_session_response(session_data: dict) -> SessionResponse:
-    """Convert database session to API response"""
+    """Convert database session to API response (safe for Decimal/missing keys)."""
     # Parse child_ids JSONB field if present
     child_ids = None
     if session_data.get("child_ids"):
         if isinstance(session_data["child_ids"], str):
             try:
                 child_ids = json.loads(session_data["child_ids"])
-            except:
+            except Exception:
                 child_ids = None
         elif isinstance(session_data["child_ids"], list):
             child_ids = session_data["child_ids"]
-    
+
     # Parse time_slots JSONB field if present
     time_slots = None
     if session_data.get("time_slots"):
         if isinstance(session_data["time_slots"], str):
             try:
                 time_slots = json.loads(session_data["time_slots"])
-            except:
+            except Exception:
                 time_slots = None
         elif isinstance(session_data["time_slots"], list):
             time_slots = session_data["time_slots"]
-    
+
     return SessionResponse(
-        id=session_data["id"],
-        parentId=session_data["parent_id"],
-        sitterId=session_data.get("sitter_id"),
-        childId=session_data["child_id"],
-        childIds=child_ids,  # Array of child IDs
-        status=session_data["status"],
-        startTime=session_data["start_time"],
-        endTime=session_data.get("end_time"),
+        id=str(session_data.get("id")) if session_data.get("id") else "",
+        parentId=str(session_data.get("parent_id")) if session_data.get("parent_id") else "",
+        sitterId=str(session_data.get("sitter_id")) if session_data.get("sitter_id") else None,
+        childId=str(session_data.get("child_id")) if session_data.get("child_id") else "",
+        childIds=child_ids,
+        status=session_data.get("status") or "",
+        startTime=_safe_str_dt(session_data.get("start_time")) or "",
+        endTime=_safe_str_dt(session_data.get("end_time")),
         location=session_data.get("location"),
-        hourlyRate=float(session_data["hourly_rate"]) if session_data.get("hourly_rate") else None,
-        totalAmount=float(session_data["total_amount"]) if session_data.get("total_amount") else None,
+        hourlyRate=_safe_float(session_data.get("hourly_rate")),
+        totalAmount=_safe_float(session_data.get("total_amount")),
         notes=session_data.get("notes"),
         searchScope=session_data.get("search_scope"),
-        maxDistanceKm=float(session_data["max_distance_km"]) if session_data.get("max_distance_km") else None,
-        timeSlots=time_slots,  # Array of time slots
-        expiresAt=session_data.get("expires_at"),  # Request expiration time
-        cancelledAt=session_data.get("cancelled_at"),
+        maxDistanceKm=_safe_float(session_data.get("max_distance_km")),
+        timeSlots=time_slots,
+        expiresAt=_safe_str_dt(session_data.get("expires_at")),
+        cancelledAt=_safe_str_dt(session_data.get("cancelled_at")),
         cancelledBy=session_data.get("cancelled_by"),
         cancellationReason=session_data.get("cancellation_reason"),
-        completedAt=session_data.get("completed_at"),
-        endedAt=session_data.get("ended_at"),
-        startedAt=session_data.get("started_at"),
+        completedAt=_safe_str_dt(session_data.get("completed_at")),
+        endedAt=_safe_str_dt(session_data.get("ended_at")),
+        startedAt=_safe_str_dt(session_data.get("started_at")),
         monitoringEnabled=session_data.get("monitoring_enabled"),
-        lastLocationAt=session_data.get("last_location_at"),
-        lastAudioSignalAt=session_data.get("last_audio_signal_at"),
-        monitoringStartedAt=session_data.get("monitoring_started_at"),
-        createdAt=session_data["created_at"],
-        updatedAt=session_data.get("updated_at", session_data["created_at"]),
+        lastLocationAt=_safe_str_dt(session_data.get("last_location_at")),
+        lastAudioSignalAt=_safe_str_dt(session_data.get("last_audio_signal_at")),
+        monitoringStartedAt=_safe_str_dt(session_data.get("monitoring_started_at")),
+        createdAt=_safe_str_dt(session_data.get("created_at")) or "",
+        updatedAt=_safe_str_dt(session_data.get("updated_at") or session_data.get("created_at")) or "",
         paymentStatus=session_data.get("payment_status"),
-        estimatedAmount=float(session_data["estimated_amount"]) if session_data.get("estimated_amount") is not None else None,
+        estimatedAmount=_safe_float(session_data.get("estimated_amount")),
     )
 
 
@@ -1031,27 +1052,28 @@ async def end_session(
         now_dt = datetime.utcnow()
 
         # Prorated amount: charge only for time actually used (started_at → now); else full estimated
-        hourly_rate = session_data.get("hourly_rate")
+        hourly_rate = _safe_float(session_data.get("hourly_rate"))
         started_at = session_data.get("started_at")
-        estimated = session_data.get("estimated_amount")
+        estimated = _safe_float(session_data.get("estimated_amount"))
         total_amount = None
         if hourly_rate is not None and started_at:
             try:
                 start_dt = datetime.fromisoformat(str(started_at).replace("Z", "+00:00"))
                 hours_used = max(0.0, (now_dt - start_dt).total_seconds() / 3600.0)
                 hours_used = max(0.25, round(hours_used, 2))
-                total_amount = round(float(hourly_rate) * hours_used, 2)
+                total_amount = round(hourly_rate * hours_used, 2)
                 if estimated is not None:
-                    total_amount = min(total_amount, float(estimated))
+                    total_amount = min(total_amount, estimated)
                 if total_amount < 0.50:
                     total_amount = 0.50
             except Exception:
                 if estimated is not None:
-                    total_amount = float(estimated)
+                    total_amount = estimated
         if total_amount is None and estimated is not None:
-            total_amount = float(estimated)
+            total_amount = estimated
         if total_amount is None or total_amount < 0.01:
             total_amount = 0.50
+        total_amount = float(total_amount)
 
         # Charge parent first; session ends only after successful payment
         from app.routes.payments import charge_parent_before_session_end
@@ -1160,19 +1182,27 @@ async def request_end_session(
         # Timeline event
         _create_session_event(supabase, session_id, "sitter_requested_end", current_user.id)
 
-        # Notify parent
+        # Notify parent: must use service-role client so RLS does not block (sitter cannot insert alert for parent)
         parent_id = session_data.get("parent_id")
         if parent_id:
-            _create_alert(
-                supabase,
-                session_id=session_id,
-                parent_id=parent_id,
-                sitter_id=current_user.id,
-                alert_type="session_reminder",
-                title="Sitter requested to end session",
-                message="Your sitter has requested to end the session. Please review and decide whether to extend or finish.",
-                child_id=session_data.get("child_id"),
-            )
+            sb_service = get_supabase_service_role()
+            if sb_service:
+                _create_alert(
+                    sb_service,
+                    session_id=session_id,
+                    parent_id=str(parent_id),
+                    sitter_id=current_user.id,
+                    alert_type="session_reminder",
+                    title="Sitter requested to end session",
+                    message="Your sitter has requested to end the session. Please review and decide whether to extend or finish.",
+                    child_id=session_data.get("child_id"),
+                )
+                print(f"✅ Created 'Sitter requested to end session' alert for parent_id={parent_id}")
+            else:
+                print(
+                    "⚠️ SUPABASE_SERVICE_ROLE_KEY not set: cannot create 'Sitter requested to end session' alert for parent. "
+                    "Set SUPABASE_SERVICE_ROLE_KEY in backend .env so the parent receives the notification."
+                )
 
         return {"success": True}
     except AppError:

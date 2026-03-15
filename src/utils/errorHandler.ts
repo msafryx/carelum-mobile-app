@@ -147,10 +147,12 @@ export function handleAPIError(error: any, statusCode?: number): AppError {
   let errorDetails: any = error;
 
   // Check if error is in backend format: { success: false, error: { code, message } }
-  if (error && typeof error === 'object') {
-    if (error.error && typeof error.error === 'object') {
+  // FastAPI wraps in "detail": use detail when present
+  const payload = error?.detail && typeof error.detail === 'object' ? error.detail : error;
+  if (payload && typeof payload === 'object') {
+    if (payload.error && typeof payload.error === 'object') {
       // Backend error format
-      const backendError = error.error;
+      const backendError = payload.error;
       errorMessage = backendError.message;
       errorDetails = backendError;
 
@@ -179,6 +181,9 @@ export function handleAPIError(error: any, statusCode?: number): AppError {
         case 'VALIDATION_ERROR':
           errorCode = ErrorCode.BAD_REQUEST;
           break;
+        case 'PAYMENT_REQUIRED':
+          errorCode = ErrorCode.BAD_REQUEST;
+          break;
         case 'CREATE_FAILED':
         case 'UPDATE_FAILED':
         case 'DB_NOT_AVAILABLE':
@@ -197,8 +202,9 @@ export function handleAPIError(error: any, statusCode?: number): AppError {
             errorCode = ErrorCode.SERVER_ERROR;
           }
       }
+    } else if (payload.message) {
+      errorMessage = payload.message;
     } else if (error.message) {
-      // Direct error object with message
       errorMessage = error.message;
     }
   }

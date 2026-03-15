@@ -4,7 +4,6 @@ GPS tracking endpoints
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Optional, List
-from decimal import Decimal
 from datetime import datetime
 
 from app.utils.auth import verify_token, CurrentUser, security
@@ -102,16 +101,17 @@ async def track_location(
                 message="GPS tracking is only allowed for active sessions",
                 status_code=400
             )
+        # Use float so the payload is JSON-serializable (Supabase client sends JSON)
         insert_data = {
             "session_id": location_data.sessionId,
-            "latitude": Decimal(str(location_data.latitude)),
-            "longitude": Decimal(str(location_data.longitude)),
-            "accuracy": Decimal(str(location_data.accuracy)) if location_data.accuracy else None,
-            "speed": Decimal(str(location_data.speed)) if location_data.speed else None,
-            "heading": Decimal(str(location_data.heading)) if location_data.heading else None,
+            "latitude": float(location_data.latitude),
+            "longitude": float(location_data.longitude),
+            "accuracy": float(location_data.accuracy) if location_data.accuracy is not None else None,
+            "speed": float(location_data.speed) if location_data.speed is not None else None,
+            "heading": float(location_data.heading) if location_data.heading is not None else None,
         }
-        response = supabase.table("gps_tracking").insert(insert_data).select().execute()
-        
+        response = supabase.table("gps_tracking").insert(insert_data).execute()
+
         if not response.data:
             raise AppError(
                 code="CREATE_FAILED",

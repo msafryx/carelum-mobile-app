@@ -108,8 +108,16 @@ export async function createAlert(alertData: Omit<Alert, 'id' | 'createdAt'>): P
   }
 }
 
+/** Format AI cry type for display (e.g. "belly_pain" → "Belly pain") */
+function formatCryType(raw: string): string {
+  const s = (raw || '').replace(/_/g, ' ').trim();
+  return s ? s.charAt(0).toUpperCase() + s.slice(1) : '';
+}
+
 /**
- * Create cry detection alert
+ * Create cry detection alert.
+ * Prefer backend API so session gets last_audio_signal_at and timeline gets cry_detected event (parent sees it on Session Details/Track).
+ * Fallback to direct Supabase insert if API is unavailable.
  */
 export async function createCryDetectionAlert(
   sessionId: string,
@@ -117,22 +125,72 @@ export async function createCryDetectionAlert(
   parentId: string,
   sitterId: string,
   audioLogId: string,
-  confidence: number
+  confidence: number,
+  cryType?: string
 ): Promise<ServiceResult<Alert>> {
   const severity = confidence > 0.8 ? 'critical' : confidence > 0.6 ? 'high' : 'medium';
-
   const pct = (confidence * 100).toFixed(0);
-  return createAlert({
+  const reason = cryType ? formatCryType(cryType) : '';
+  const title = reason ? `Baby cry: ${reason}` : 'Baby cry detected';
+  const reasonLine = reason ? `Possible reason: ${reason}. ` : '';
+  const message = `${reasonLine}Our monitor detected crying (${pct}% confidence). The sitter has been notified. Check the Track tab for live updates.`;
+
+  const payload = {
     sessionId,
     childId,
     parentId,
     sitterId,
     type: 'cry_detection',
     severity,
-    title: 'Baby cry detected',
-    message: `Our monitor detected crying (${pct}% confidence). The sitter has been notified. Check the Track tab for live updates.`,
-    status: 'new',
+    title,
+    message,
     audioLogId,
+  };
+
+  // Prefer backend so it can update session (last_audio_signal_at) and add timeline event (cry_detected)
+  const apiResult = await apiRequest<{
+    id: string;
+    sessionId?: string;
+    childId?: string;
+    parentId: string;
+    sitterId?: string;
+    type: string;
+    severity: string;
+    title: string;
+    message: string;
+    status: string;
+    audioLogId?: string;
+    createdAt: string;
+  }>(API_ENDPOINTS.ALERTS, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+
+  if (apiResult.success && apiResult.data) {
+    const d = apiResult.data;
+    return {
+      success: true,
+      data: {
+        id: d.id,
+        sessionId: d.sessionId,
+        childId: d.childId,
+        parentId: d.parentId,
+        sitterId: d.sitterId,
+        type: d.type as Alert['type'],
+        severity: d.severity as Alert['severity'],
+        title: d.title,
+        message: d.message,
+        status: d.status as Alert['status'],
+        audioLogId: d.audioLogId,
+        createdAt: new Date(d.createdAt),
+      },
+    };
+  }
+
+  // Fallback: direct Supabase insert (session/timeline won't be updated)
+  return createAlert({
+    ...payload,
+    status: 'new',
   });
 }
 

@@ -63,14 +63,17 @@ export type CryDetectionAudioInput = Blob | { uri: string; mimeType: string };
 /**
  * Record audio and detect crying.
  * Accepts Blob or { uri, mimeType } so RN can send from file URI without creating a Blob from bytes.
+ * When createAlert is false (e.g. monitoring was stopped), prediction still runs but no parent alert is created.
  */
 export async function recordAndDetectCry(
   sessionId: string,
   childId: string,
   parentId: string,
   sitterId: string,
-  audio: CryDetectionAudioInput
+  audio: CryDetectionAudioInput,
+  options?: { createAlert?: boolean }
 ): Promise<ServiceResult<AudioLog>> {
+  const createAlert = options?.createAlert !== false;
   const isUri = typeof audio === 'object' && 'uri' in audio && typeof (audio as { uri: string }).uri === 'string';
   const uri = isUri ? (audio as { uri: string; mimeType: string }).uri : null;
   const mimeType = isUri ? (audio as { uri: string; mimeType: string }).mimeType : 'audio/wav';
@@ -164,8 +167,9 @@ export async function recordAndDetectCry(
         cryType: prediction.data.cryType,
       };
 
-      // 3. Only create alert for distress cry types (hungry, tired, etc.). Burping/normal → history only.
+      // 3. Only create alert for distress cry types when monitoring is active (createAlert true).
       if (
+        createAlert &&
         prediction.data.label === 'crying' &&
         prediction.data.score > 0.6 &&
         isDistressCryType(prediction.data.cryType)
