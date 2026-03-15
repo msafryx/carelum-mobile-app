@@ -35,12 +35,15 @@ STEP 10 — ERROR HANDLING
 =============================================================================
 """
 
+import logging
 from pathlib import Path
 
 import joblib
 import librosa
 import numpy as np
 from fastapi import FastAPI, File, HTTPException, UploadFile
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Feature extraction parameters (must match training pipeline)
@@ -79,8 +82,14 @@ def extract_features(audio_path: str | Path) -> np.ndarray | None:
     concatenate into one 1D vector for the trained model.
     """
     try:
-        # 1. Load audio with sample rate 16000
-        y, sr = librosa.load(audio_path, sr=SAMPLE_RATE)
+        # 1. Load audio with sample rate 16000 (librosa supports wav, m4a, mp3, etc.)
+        try:
+            y, sr = librosa.load(str(audio_path), sr=SAMPLE_RATE, mono=True)
+        except Exception as load_err:
+            logger.warning("librosa.load failed for %s: %s", audio_path, load_err)
+            return None
+        if y is None or len(y) == 0:
+            return None
         stft = np.abs(
             librosa.stft(
                 y, n_fft=N_FFT, hop_length=HOP_LENGTH,
@@ -155,12 +164,25 @@ def health():
     return {"status": "ok", "service": "baby-cry-classification"}
 
 
-async def _predict_from_upload(upload: UploadFile) -> str:
+def _suffix_from_content_type(content_type: str) -> str:
+    """Map content type to file extension for librosa."""
+    if not content_type:
+        return ".wav"
+    ct = content_type.lower().split(";")[0].strip()
+    if "mpeg" in ct or "mp4" in ct or "m4a" in ct:
+        return ".m4a"
+    if "wav" in ct:
+        return ".wav"
+    if "aac" in ct:
+        return ".aac"
+    return ".wav"
+
+
+async def _predict_from_upload(upload: UploadFile) -> tuple[str, float]:
     """
     Save upload to temp file, extract features, classify, return cry type.
     STEP 10: Raise HTTPException for invalid format or feature extraction failure.
     """
-    # Invalid audio format
     if not upload.content_type or not upload.content_type.startswith("audio/"):
         raise HTTPException(
             status_code=400,
@@ -168,14 +190,31 @@ async def _predict_from_upload(upload: UploadFile) -> str:
                 "success": False,
                 "error": {
                     "code": "INVALID_AUDIO_FORMAT",
-                    "message": "File must be an audio type (e.g. audio/wav, audio/mpeg).",
+                    "message": "File must be an audio type (e.g. audio/wav, audio/mpeg, audio/mp4).",
                 },
             },
         )
-    suffix = Path(upload.filename or "audio").suffix or ".wav"
-    tmp_path = MODEL_DIR / f"_tmp_upload{suffix}"
+    filename = upload.filename or "audio"
+    fn_suffix = (Path(filename).suffix or "").lower()
+    if fn_suffix in (".wav", ".m4a", ".mp4", ".aac", ".mp3"):
+        suffix = fn_suffix
+    else:
+        suffix = _suffix_from_content_type(upload.content_type)
+    tmp_path = MODEL_DIR / f"_tmp_upload_{id(upload)}{suffix}"
     try:
         content = await upload.read()
+        logger.info("predict upload: filename=%s content_type=%s size=%s", filename, upload.content_type, len(content or []))
+        if not content or len(content) < 100:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "success": False,
+                    "error": {
+                        "code": "AUDIO_TOO_SHORT",
+                        "message": "Audio file is empty or too short.",
+                    },
+                },
+            )
         tmp_path.write_bytes(content)
         features = extract_features(tmp_path)
         # Feature extraction failure
@@ -194,6 +233,15 @@ async def _predict_from_upload(upload: UploadFile) -> str:
         try:
             prediction = loaded_model.predict(features)
             cry_type = loaded_le.inverse_transform(prediction)[0]
+            # Use predict_proba when available; otherwise don't suggest a specific reason (avoids "every sound = burping")
+            confidence_score = 0.0
+            if hasattr(loaded_model, "predict_proba"):
+                try:
+                    proba = loaded_model.predict_proba(features)[0]
+                    confidence_score = float(np.max(proba))
+                except Exception:
+                    pass
+            return cry_type, confidence_score
         except Exception as e:
             # Model prediction error
             raise HTTPException(
@@ -206,7 +254,6 @@ async def _predict_from_upload(upload: UploadFile) -> str:
                     },
                 },
             ) from e
-        return cry_type
     finally:
         if tmp_path.exists():
             try:
@@ -218,11 +265,16 @@ async def _predict_from_upload(upload: UploadFile) -> str:
 @app.post("/classify")
 async def classify_cry(audio: UploadFile = File(...)):
     """Legacy endpoint: returns prediction and class."""
-    predicted_label = await _predict_from_upload(audio)
+    predicted_label, confidence = await _predict_from_upload(audio)
     return {
         "prediction": predicted_label,
         "class": predicted_label,
+        "confidence_score": confidence,
     }
+
+
+# Minimum confidence to show a specific cry reason (below this, show "Crying" without type)
+REASON_CONFIDENCE_THRESHOLD = 0.5
 
 
 @app.post("/predict")
@@ -230,11 +282,14 @@ async def predict(file: UploadFile = File(..., description="WAV audio file")):
     """
     STEP 5 — PREDICTION ENDPOINT
     POST /predict — multipart/form-data, field "file" (.wav).
-    Process: save file -> extract features -> reshape -> predict -> decode label.
-    Returns: { "cry_type": "hungry" } (or belly pain, burping, discomfort, tired).
+    Returns: { "cry_type": "hungry", "confidence_score": 0.85 }.
+    When confidence_score < threshold, clients should show "Crying" without a specific reason.
     """
-    cry_type = await _predict_from_upload(file)
-    return {"cry_type": cry_type}
+    cry_type, confidence_score = await _predict_from_upload(file)
+    # Don't suggest a specific reason when model is uncertain (avoids "every sound = burping")
+    if confidence_score < REASON_CONFIDENCE_THRESHOLD:
+        return {"cry_type": cry_type, "confidence_score": round(confidence_score, 3), "reason_suggested": False}
+    return {"cry_type": cry_type, "confidence_score": round(confidence_score, 3), "reason_suggested": True}
 
 
 if __name__ == "__main__":

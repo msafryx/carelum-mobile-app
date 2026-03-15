@@ -8,14 +8,15 @@
 -- 1. profile-images - For user profile pictures (5MB limit, public)
 -- 2. child-images - For child profile pictures (5MB limit, public)
 -- 3. verification-documents - For sitter verification documents (10MB limit, public)
---    - ID documents, background checks, qualifications, certifications
+-- 4. session-audio - For cry-detection audio clips (10MB limit, public)
 --
 -- Policies per bucket:
 -- - profile-images: 4 policies (INSERT, UPDATE, SELECT, DELETE)
 -- - child-images: 4 policies (INSERT, UPDATE, SELECT, DELETE)
 -- - verification-documents: 5 policies (INSERT, UPDATE, SELECT public, SELECT authenticated, DELETE)
+-- - session-audio: 4 policies (INSERT, SELECT, UPDATE, DELETE)
 --
--- Total: 13 policies
+-- Total: 17 policies
 -- All buckets are PUBLIC for direct URL access
 -- Users can only upload/update/delete files in their own folder ({user_id}/)
 -- ============================================
@@ -236,7 +237,52 @@ USING (
 -- VERIFICATION
 -- ============================================
 
--- Verify buckets exist
+-- ============================================
+-- PART 4: SESSION AUDIO BUCKET (cry-detection clips)
+-- ============================================
+-- App path format: audio/sessions/{sessionId}/{timestamp}.m4a
+-- Stored in bucket as: sessions/{sessionId}/{timestamp}.m4a
+-- ============================================
+
+INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+VALUES (
+  'session-audio',
+  'session-audio',
+  true,
+  10485760,
+  ARRAY['audio/wav', 'audio/mp4', 'audio/mpeg', 'audio/x-m4a', 'application/octet-stream']
+)
+ON CONFLICT (id) DO UPDATE SET
+  public = true,
+  file_size_limit = 10485760,
+  allowed_mime_types = ARRAY['audio/wav', 'audio/mp4', 'audio/mpeg', 'audio/x-m4a', 'application/octet-stream'];
+
+DROP POLICY IF EXISTS "Allow authenticated to upload session audio" ON storage.objects;
+DROP POLICY IF EXISTS "Allow public read session audio" ON storage.objects;
+DROP POLICY IF EXISTS "Allow authenticated to update session audio" ON storage.objects;
+DROP POLICY IF EXISTS "Allow authenticated to delete session audio" ON storage.objects;
+
+CREATE POLICY "Allow authenticated to upload session audio"
+ON storage.objects FOR INSERT TO authenticated
+WITH CHECK (bucket_id = 'session-audio' AND (storage.foldername(name))[1] = 'sessions');
+
+CREATE POLICY "Allow public read session audio"
+ON storage.objects FOR SELECT TO public
+USING (bucket_id = 'session-audio');
+
+CREATE POLICY "Allow authenticated to update session audio"
+ON storage.objects FOR UPDATE TO authenticated
+USING (bucket_id = 'session-audio' AND (storage.foldername(name))[1] = 'sessions')
+WITH CHECK (bucket_id = 'session-audio' AND (storage.foldername(name))[1] = 'sessions');
+
+CREATE POLICY "Allow authenticated to delete session audio"
+ON storage.objects FOR DELETE TO authenticated
+USING (bucket_id = 'session-audio' AND (storage.foldername(name))[1] = 'sessions');
+
+-- ============================================
+-- VERIFY BUCKETS AND POLICIES
+-- ============================================
+
 SELECT 
   id,
   name,
@@ -244,10 +290,9 @@ SELECT
   file_size_limit,
   allowed_mime_types
 FROM storage.buckets
-WHERE id IN ('profile-images', 'child-images', 'verification-documents')
+WHERE id IN ('profile-images', 'child-images', 'verification-documents', 'session-audio')
 ORDER BY id;
 
--- Verify policies (should see 13 policies total: 4 for profile-images, 4 for child-images, 5 for verification-documents)
 SELECT 
   policyname as "Policy Name",
   cmd as "Operation",
@@ -255,11 +300,7 @@ SELECT
 FROM pg_policies
 WHERE schemaname = 'storage'
   AND tablename = 'objects'
-  AND (policyname LIKE '%profile%' OR policyname LIKE '%child%' OR policyname LIKE '%verification%')
+  AND (policyname LIKE '%profile%' OR policyname LIKE '%child%' OR policyname LIKE '%verification%' OR policyname LIKE '%session audio%')
 ORDER BY policyname, cmd;
 
--- Expected results:
--- profile-images bucket: 4 policies (INSERT, UPDATE, SELECT, DELETE)
--- child-images bucket: 4 policies (INSERT, UPDATE, SELECT, DELETE)
--- verification-documents bucket: 5 policies (INSERT, UPDATE, SELECT, DELETE, admin SELECT)
--- Total: 13 policies, all Active
+-- Expected: 4 buckets, 17 policies total (profile 4, child 4, verification 5, session-audio 4)

@@ -39,7 +39,7 @@ A cross-platform mobile app and API for connecting parents with verified babysit
    EXPO_PUBLIC_AI_SERVICE_URL=http://localhost:8001
    ```
    - **EXPO_PUBLIC_API_URL** – main backend (sessions, users, etc.). Used by `api-base.service.ts`, `user-api.service.ts`, `api.service.ts`, `admin-api.service.ts`, and `app.config.js`.
-   - **EXPO_PUBLIC_AI_SERVICE_URL** – cry detection AI (predict endpoint). Used by `api.service.ts`; if unset, the app falls back to `EXPO_PUBLIC_API_URL`. On a physical device, use your computer’s LAN IP (e.g. `http://192.168.1.50:8001`). On a physical phone: find your computer LAN IP with `ip addr` / `ifconfig` / `ipconfig`; run `cd ai_service && uvicorn app:app --port 8001`; set `EXPO_PUBLIC_AI_SERVICE_URL=http://YOUR_LAN_IP:8001` in `.env`; then `npx expo start -c` and reload the app.
+   - **EXPO_PUBLIC_AI_SERVICE_URL** – cry detection AI (predict endpoint). Used by `api.service.ts`; if unset, the app falls back to `EXPO_PUBLIC_API_URL`. On a physical device, use your computer’s LAN IP (e.g. `http://192.168.1.50:8001`). On a physical phone: find your computer LAN IP with `ip addr` / `ifconfig` / `ipconfig`; see step 6 (Baby Cry AI) to start the cry service; set `EXPO_PUBLIC_AI_SERVICE_URL=http://YOUR_LAN_IP:8001` in `.env`; then `npx expo start -c` and reload the app.
 
    **Backend** - Create a `.env` file in the `backend/` directory:
    ```env
@@ -56,10 +56,23 @@ A cross-platform mobile app and API for connecting parents with verified babysit
 
 5. **Set up Supabase Storage (for profile and child images)**
 
-   - Run `STORAGE_SETUP.sql` in Supabase SQL Editor to create both storage buckets and policies
+   - Run `STORAGE_SETUP.sql` in Supabase SQL Editor to create storage buckets (profile-images, child-images, verification-documents, session-audio) and policies
    - Or follow the step-by-step guide in `SUPABASE_STORAGE_SETUP.md`
 
-6. **Start the backend API server**
+6. **Baby Cry AI (cry detection)**
+
+   The app uses the **baby-cry-ai** service for real-time cry classification (e.g. hungry, tired, burping). Start it separately so the mobile app can send audio for prediction:
+
+   ```bash
+   cd baby-cry-ai
+   ./start_carelum.sh
+   # Or: source venv/bin/activate && uvicorn carelum_cry_api:app --host 0.0.0.0 --port 8001
+   ```
+
+   - Ensure `EXPO_PUBLIC_AI_SERVICE_URL=http://YOUR_LAN_IP:8001` in `.env` when testing on a physical device (use your computer's LAN IP so the phone can reach the service).
+   - See `baby-cry-ai/README.md` for setup, training, and dataset info; `baby-cry-ai/CARELUM_CONNECT.md` for app integration and troubleshooting.
+
+7. **Start the backend API server**
 
    ```bash
    cd backend
@@ -74,7 +87,7 @@ A cross-platform mobile app and API for connecting parents with verified babysit
    - Swagger UI: http://localhost:8000/docs
    - ReDoc: http://localhost:8000/redoc
 
-7. **Start the frontend development server**
+8. **Start the frontend development server**
 
    ```bash
    npm start
@@ -228,7 +241,7 @@ cancelled   cancelled  cancelled
 - `scripts/add-missing-user-columns.sql` - Schema migration
 
 **Storage Setup:**
-- `STORAGE_SETUP.sql` - Complete storage setup (creates both profile-images and child-images buckets with policies)
+- `STORAGE_SETUP.sql` - Complete storage setup (profile-images, child-images, verification-documents, session-audio buckets and policies)
 
 **Utilities:**
 - `scripts/createAdmin.ts` - Admin user creation script
