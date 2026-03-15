@@ -2,76 +2,72 @@
  * Sitter Session Detail Screen
  * Shows active session controls, monitoring interface, GPS tracking, and cry detection
  */
-import React, { useState, useEffect, useCallback, useRef } from 'react';
-import {
-  View,
-  StyleSheet,
-  ScrollView,
-  RefreshControl,
-  Alert,
-  ActivityIndicator,
-  Text,
-  TouchableOpacity,
-  Linking,
-} from 'react-native';
-import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useTheme } from '@/src/components/ui/ThemeProvider';
-import Header from '@/src/components/ui/Header';
-import Card from '@/src/components/ui/Card';
-import ErrorDisplay from '@/src/components/ui/ErrorDisplay';
-import SitterHamburgerMenu from '@/src/components/ui/SitterHamburgerMenu';
-import GPSMapView from '@/src/components/session/GPSMapView';
 import EnhancedGPSMap from '@/src/components/gps/EnhancedGPSMap';
 import TwoPinMap from '@/src/components/gps/TwoPinMap';
-import CryDetectionIndicator from '@/src/components/session/CryDetectionIndicator';
 import CryDetectionInterface from '@/src/components/monitoring/CryDetectionInterface';
-import MonitoringControls from '@/src/components/session/MonitoringControls';
 import EmergencyCallButton from '@/src/components/session/EmergencyCallButton';
+import MonitoringControls from '@/src/components/session/MonitoringControls';
 import SessionTimeline from '@/src/components/session/SessionTimeline';
+import Card from '@/src/components/ui/Card';
+import ErrorDisplay from '@/src/components/ui/ErrorDisplay';
+import Header from '@/src/components/ui/Header';
+import SitterHamburgerMenu from '@/src/components/ui/SitterHamburgerMenu';
+import { useTheme } from '@/src/components/ui/ThemeProvider';
 import { useAuth } from '@/src/hooks/useAuth';
 import {
-  getSessionById,
-  subscribeToSession,
-  startSession,
-  setSessionMonitoringEnabled,
-  endSession,
-  requestSessionEnd,
-  updateSessionStatus,
-  acceptSessionRequest,
-  cancelSession,
-} from '@/src/services/session.service';
-import {
-  getSessionGPSTracking,
-  subscribeToGPSUpdates,
-  updateGPSLocation,
-  recordAndDetectCry,
-} from '@/src/services/monitoring.service';
-import {
-  getSessionAlerts,
-  subscribeToSessionAlerts,
+    Alert as AlertType,
+    getSessionAlerts,
+    subscribeToSessionAlerts,
 } from '@/src/services/alert.service';
-import { findMostRecentRecordingUri } from '@/src/utils/audioFileUtils';
-import { stopCurrentRecordingIfAny, setCurrentRecording } from '@/src/utils/audioRecordingSingleton';
 import { getInterviewBySession } from '@/src/services/interview.service';
 import {
-  startLocationTracking,
-  getCurrentLocation,
-  haversineDistanceMeters,
-  estimateTravelTimeMinutes,
+    estimateTravelTimeMinutes,
+    getCurrentLocation,
+    haversineDistanceMeters,
+    startLocationTracking,
 } from '@/src/services/location.service';
-import * as Location from 'expo-location';
-import { Session } from '@/src/types/session.types';
-import { LocationUpdate } from '@/src/types/session.types';
-import { Alert as AlertType } from '@/src/services/alert.service';
+import {
+    getSessionGPSTracking,
+    recordAndDetectCry,
+    subscribeToGPSUpdates,
+    updateGPSLocation,
+} from '@/src/services/monitoring.service';
+import {
+    acceptSessionRequest,
+    cancelSession,
+    getSessionById,
+    requestSessionEnd,
+    setSessionMonitoringEnabled,
+    startSession,
+    subscribeToSession,
+    updateSessionStatus
+} from '@/src/services/session.service';
+import { LocationUpdate, Session } from '@/src/types/session.types';
+import { findMostRecentRecordingUri } from '@/src/utils/audioFileUtils';
+import { setCurrentRecording, stopCurrentRecordingIfAny } from '@/src/utils/audioRecordingSingleton';
 import { formatExpectedDuration } from '@/src/utils/sessionSearchUtils';
 import { Ionicons } from '@expo/vector-icons';
+import { format } from 'date-fns';
 import { setAudioModeAsync } from 'expo-av/build/Audio';
 import {
-  Recording,
-  RecordingOptionsPresets,
-  requestPermissionsAsync as requestAudioPermissionsAsync,
+    Recording,
+    RecordingOptionsPresets,
+    requestPermissionsAsync as requestAudioPermissionsAsync,
 } from 'expo-av/build/Audio/Recording';
-import { format } from 'date-fns';
+import * as Location from 'expo-location';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import {
+    ActivityIndicator,
+    Alert,
+    Linking,
+    RefreshControl,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TouchableOpacity,
+    View,
+} from 'react-native';
 
 // Helper function to format duration (from start to now)
 function formatDuration(startTime: Date): string {
@@ -139,6 +135,7 @@ export default function SitterSessionDetailScreen() {
   const [cryDetectionEnabled, setCryDetectionEnabled] = useState(false);
   const [isMonitoringActive, setIsMonitoringActive] = useState(false);
   const [locationTrackingStop, setLocationTrackingStop] = useState<(() => void) | null>(null);
+  const locationTrackingStopRef = useRef<(() => void) | null>(null);
   const [recording, setRecording] = useState<Recording | null>(null);
   const [isRecording, setIsRecording] = useState(false);
   const [lastAudioChunkSentAt, setLastAudioChunkSentAt] = useState<number | null>(null);
@@ -349,6 +346,8 @@ export default function SitterSessionDetailScreen() {
   // Cleanup on unmount
   useEffect(() => {
     return () => {
+      locationTrackingStopRef.current?.();
+      locationTrackingStopRef.current = null;
       if (locationTrackingStop) {
         locationTrackingStop();
       }
@@ -378,18 +377,31 @@ export default function SitterSessionDetailScreen() {
     }
   };
 
-  // When session loads with GPS already on (e.g. monitoring was started), start location tracking
+  // When session loads with GPS already on, start location tracking. Stop when session is not active.
+  // Use ref for stop callback so we never put it in deps (avoids "Maximum update depth exceeded").
   useEffect(() => {
-    if (!id || !user?.id || !session || !gpsTrackingEnabled || locationTrackingStop) return;
+    if (!id || !user?.id || !session) return;
+    const isActive = session.status === 'active';
+    if (!isActive || !gpsTrackingEnabled) {
+      locationTrackingStopRef.current?.();
+      locationTrackingStopRef.current = null;
+      setLocationTrackingStop(null);
+      return;
+    }
+    // Stop any previous tracking (e.g. from another session) before starting
+    locationTrackingStopRef.current?.();
+    locationTrackingStopRef.current = null;
     const stopTracking = startLocationTracking(id, (location) => {
       addToLocationHistoryIfNeeded(location);
     });
+    locationTrackingStopRef.current = stopTracking;
     setLocationTrackingStop(() => stopTracking);
     return () => {
       stopTracking();
+      locationTrackingStopRef.current = null;
       setLocationTrackingStop(null);
     };
-  }, [id, user?.id, session?.id, gpsTrackingEnabled]);
+  }, [id, user?.id, session?.id, session?.status, gpsTrackingEnabled]);
 
   // Handle toggle GPS tracking
   const handleToggleGPS = async (enabled: boolean) => {
@@ -406,6 +418,7 @@ export default function SitterSessionDetailScreen() {
     } else {
       if (locationTrackingStop) {
         locationTrackingStop();
+        locationTrackingStopRef.current = null;
         setLocationTrackingStop(null);
       }
     }

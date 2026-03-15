@@ -424,17 +424,12 @@ async def get_verified_sitters(
         # Base query: verified sitters only
         query = supabase.table("users").select("*").eq("role", "sitter").eq("is_verified", True)
         
-        # Filter by request mode
+        # Filter by request mode: only show online sitters (is_active=True) in all modes
+        query = query.eq("is_active", True)
         if request_mode == "invite":
-            # Invite mode: show all verified sitters for browsing (regardless of active status)
-            # If specific sitter_id provided, filter to that sitter only
             if sitter_id:
                 query = query.eq("id", sitter_id)
-            # Otherwise, show all verified sitters so parent can browse and select
-            # Note: Active status not required for invite mode - parent can invite any verified sitter
         else:
-            # For all other modes (nearby, city, nationwide), only show active sitters
-            query = query.eq("is_active", True)
             
             if request_mode == "nearby":
                 # Nearby mode: filter by distance (will be done in Python after fetching)
@@ -459,7 +454,7 @@ async def get_verified_sitters(
         query = query.order("created_at", desc=True).limit(limit * 2)  # Fetch more for distance filtering
         
         print(f"🔍 Querying verified sitters for user {current_user.id} (role: {current_user.role}, mode: {request_mode})")
-        print(f"📋 Query filters: role=sitter, is_verified=True" + (f", is_active=True" if request_mode != "invite" else ""))
+        print(f"📋 Query filters: role=sitter, is_verified=True, is_active=True")
         
         try:
             response = query.execute()
