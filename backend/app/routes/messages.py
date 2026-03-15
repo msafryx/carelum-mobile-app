@@ -185,7 +185,7 @@ async def send_message(
             "attachment_url": message_data.attachmentUrl,
         }
         
-        response = supabase.table("chat_messages").insert(insert_data).select().execute()
+        response = supabase.table("chat_messages").insert(insert_data).execute()
         
         if not response.data:
             raise AppError(

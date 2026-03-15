@@ -50,6 +50,8 @@ import {
   getSessionAlerts,
   subscribeToSessionAlerts,
 } from '@/src/services/alert.service';
+import { findMostRecentRecordingUri } from '@/src/utils/audioFileUtils';
+import { stopCurrentRecordingIfAny, setCurrentRecording } from '@/src/utils/audioRecordingSingleton';
 import { getInterviewBySession } from '@/src/services/interview.service';
 import {
   startLocationTracking,
@@ -63,7 +65,12 @@ import { LocationUpdate } from '@/src/types/session.types';
 import { Alert as AlertType } from '@/src/services/alert.service';
 import { formatExpectedDuration } from '@/src/utils/sessionSearchUtils';
 import { Ionicons } from '@expo/vector-icons';
-import * as Audio from 'expo-av';
+import { setAudioModeAsync } from 'expo-av/build/Audio';
+import {
+  Recording,
+  RecordingOptionsPresets,
+  requestPermissionsAsync as requestAudioPermissionsAsync,
+} from 'expo-av/build/Audio/Recording';
 import { format } from 'date-fns';
 
 // Helper function to format duration (from start to now)
@@ -132,13 +139,46 @@ export default function SitterSessionDetailScreen() {
   const [cryDetectionEnabled, setCryDetectionEnabled] = useState(false);
   const [isMonitoringActive, setIsMonitoringActive] = useState(false);
   const [locationTrackingStop, setLocationTrackingStop] = useState<(() => void) | null>(null);
-  const [recording, setRecording] = useState<Audio.Recording | null>(null);
+  const [recording, setRecording] = useState<Recording | null>(null);
   const [isRecording, setIsRecording] = useState(false);
+  const [lastAudioChunkSentAt, setLastAudioChunkSentAt] = useState<number | null>(null);
   const [sitterLocationForMap, setSitterLocationForMap] = useState<LocationUpdate | null>(null);
   const [loadingSitterLocation, setLoadingSitterLocation] = useState(false);
   const [geocodedParentCoords, setGeocodedParentCoords] = useState<{ latitude: number; longitude: number } | null>(null);
   const [geocodingAddress, setGeocodingAddress] = useState(false);
   const [interview, setInterview] = useState<{ meeting_link: string; scheduled_time: string } | null>(null);
+
+  // Location history: only add when position changed (>= 15m) or at least every 5 minutes
+  const lastHistoryUpdateRef = useRef<{ lat: number; lon: number; time: number } | null>(null);
+  const MIN_MOVE_METERS = 15;
+  const HISTORY_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+
+  const shouldAddToLocationHistory = (location: LocationUpdate): boolean => {
+    const now = Date.now();
+    const last = lastHistoryUpdateRef.current;
+    if (!last) return true;
+    const distance = haversineDistanceMeters(last.lat, last.lon, location.latitude, location.longitude);
+    const elapsed = now - last.time;
+    return distance >= MIN_MOVE_METERS || elapsed >= HISTORY_INTERVAL_MS;
+  };
+
+  const addToLocationHistoryIfNeeded = (location: LocationUpdate) => {
+    setCurrentLocation(location);
+    if (!shouldAddToLocationHistory(location)) return;
+    lastHistoryUpdateRef.current = {
+      lat: location.latitude,
+      lon: location.longitude,
+      time: Date.now(),
+    };
+    setLocationHistory((prev) => [...prev, location]);
+    if (id && user?.id) {
+      updateGPSLocation(id, user.id, {
+        latitude: location.latitude,
+        longitude: location.longitude,
+        accuracy: location.accuracy,
+      });
+    }
+  };
 
   // Load session data
   const loadSessionData = useCallback(async () => {
@@ -169,29 +209,37 @@ export default function SitterSessionDetailScreen() {
       } else {
         setInterview(null);
       }
-      setGpsTrackingEnabled(sessionData.gpsTrackingEnabled || false);
-      setCryDetectionEnabled(sessionData.cryDetectionEnabled || false);
-      setIsMonitoringActive(sessionData.monitoringEnabled || false);
+      const monEnabled = !!sessionData.monitoringEnabled;
+      const gpsOn = sessionData.gpsTrackingEnabled ?? monEnabled ?? false;
+      const cryOn = sessionData.cryDetectionEnabled ?? monEnabled ?? false;
+      setGpsTrackingEnabled(gpsOn);
+      setCryDetectionEnabled(cryOn);
+      setIsMonitoringActive(monEnabled);
+      isMonitoringActiveRef.current = monEnabled;
 
       // Process GPS tracking
       if (gpsResult.success && gpsResult.data) {
         const tracking = gpsResult.data;
         if (tracking.length > 0) {
           const latest = tracking[tracking.length - 1];
+          const history = tracking.map((t) => ({
+            latitude: t.location.latitude,
+            longitude: t.location.longitude,
+            timestamp: t.timestamp,
+            accuracy: t.location.accuracy,
+          }));
           setCurrentLocation({
             latitude: latest.location.latitude,
             longitude: latest.location.longitude,
             timestamp: latest.timestamp,
             accuracy: latest.location.accuracy,
           });
-          setLocationHistory(
-            tracking.map((t) => ({
-              latitude: t.location.latitude,
-              longitude: t.location.longitude,
-              timestamp: t.timestamp,
-              accuracy: t.location.accuracy,
-            }))
-          );
+          setLocationHistory(history);
+          lastHistoryUpdateRef.current = {
+            lat: latest.location.latitude,
+            lon: latest.location.longitude,
+            time: new Date(latest.timestamp).getTime(),
+          };
         }
       }
 
@@ -215,9 +263,11 @@ export default function SitterSessionDetailScreen() {
     const unsubscribeSession = subscribeToSession(id, (updatedSession) => {
       if (updatedSession) {
         setSession(updatedSession);
-        setGpsTrackingEnabled(updatedSession.gpsTrackingEnabled || false);
-        setCryDetectionEnabled(updatedSession.cryDetectionEnabled || false);
-        setIsMonitoringActive(updatedSession.monitoringEnabled || false);
+        const monEnabled = !!updatedSession.monitoringEnabled;
+        setGpsTrackingEnabled(updatedSession.gpsTrackingEnabled ?? monEnabled ?? false);
+        setCryDetectionEnabled(updatedSession.cryDetectionEnabled ?? monEnabled ?? false);
+        setIsMonitoringActive(monEnabled);
+        isMonitoringActiveRef.current = monEnabled;
       }
     });
 
@@ -260,6 +310,10 @@ export default function SitterSessionDetailScreen() {
 
   // Geocode parent address when we have address but no coordinates (same as parent search when user types address)
   const geocodedForSessionRef = useRef<string | null>(null);
+  const lastAudioErrorLogRef = useRef<number>(0);
+  const AUDIO_ERROR_LOG_INTERVAL_MS = 30000;
+  const cryDetectionLoopRef = useRef<{ cancelled: boolean }>({ cancelled: false });
+  const isMonitoringActiveRef = useRef(false);
   useEffect(() => {
     if (!session?.location || !id) return;
     if (getParentCoords(session.location)) {
@@ -299,7 +353,8 @@ export default function SitterSessionDetailScreen() {
         locationTrackingStop();
       }
       if (recording) {
-        recording.stopAndUnloadAsync();
+        recording.stopAndUnloadAsync().catch(() => {});
+        setCurrentRecording(null);
       }
     };
   }, [locationTrackingStop, recording]);
@@ -323,6 +378,19 @@ export default function SitterSessionDetailScreen() {
     }
   };
 
+  // When session loads with GPS already on (e.g. monitoring was started), start location tracking
+  useEffect(() => {
+    if (!id || !user?.id || !session || !gpsTrackingEnabled || locationTrackingStop) return;
+    const stopTracking = startLocationTracking(id, (location) => {
+      addToLocationHistoryIfNeeded(location);
+    });
+    setLocationTrackingStop(() => stopTracking);
+    return () => {
+      stopTracking();
+      setLocationTrackingStop(null);
+    };
+  }, [id, user?.id, session?.id, gpsTrackingEnabled]);
+
   // Handle toggle GPS tracking
   const handleToggleGPS = async (enabled: boolean) => {
     if (!session || !id) return;
@@ -330,29 +398,18 @@ export default function SitterSessionDetailScreen() {
     setGpsTrackingEnabled(enabled);
 
     if (enabled) {
-      // Start location tracking
+      lastHistoryUpdateRef.current = null; // reset so first fix is recorded
       const stopTracking = startLocationTracking(id, (location) => {
-        setCurrentLocation(location);
-        setLocationHistory((prev) => [...prev, location]);
-        // Update in database
-        if (user?.id) {
-          updateGPSLocation(id, user.id, {
-            latitude: location.latitude,
-            longitude: location.longitude,
-            accuracy: location.accuracy,
-          });
-        }
+        addToLocationHistoryIfNeeded(location);
       });
       setLocationTrackingStop(() => stopTracking);
     } else {
-      // Stop location tracking
       if (locationTrackingStop) {
         locationTrackingStop();
         setLocationTrackingStop(null);
       }
     }
 
-    // Update session
     await updateSessionStatus(id, session.status, {
       gpsTrackingEnabled: enabled,
     } as any);
@@ -370,27 +427,39 @@ export default function SitterSessionDetailScreen() {
     } as any);
   };
 
-  // Handle start monitoring
+  // Handle start monitoring (GPS + microphone → AI cry detection; alerts go to parent & sitter)
   const handleStartMonitoring = async () => {
     if (!session || !id || !user) return;
 
     setActionLoading(true);
     const toggleRes = await setSessionMonitoringEnabled(id, true);
-    setActionLoading(false);
     if (!toggleRes.success || !toggleRes.data) {
+      setActionLoading(false);
       Alert.alert('Error', toggleRes.error?.message || 'Failed to enable monitoring.');
       return;
     }
 
     setSession(toggleRes.data);
     setIsMonitoringActive(true);
-
-    // Auto-start monitoring components
+    isMonitoringActiveRef.current = true;
     setGpsTrackingEnabled(true);
     setCryDetectionEnabled(true);
     handleToggleGPS(true);
     handleToggleCryDetection(true);
-    startCryDetection();
+
+    // Start cry detection (sets isRecording true after previous loop exits so REC shows reliably after Stop → Start)
+    try {
+      await startCryDetection();
+    } catch (err: any) {
+      setIsRecording(false);
+      setActionLoading(false);
+      Alert.alert(
+        'Cry detection could not start',
+        err?.message || 'Microphone or recording failed. GPS tracking is still on.'
+      );
+      return;
+    }
+    setActionLoading(false);
   };
 
   // Handle stop monitoring
@@ -406,6 +475,9 @@ export default function SitterSessionDetailScreen() {
     }
     setSession(toggleRes.data);
     setIsMonitoringActive(false);
+    isMonitoringActiveRef.current = false;
+    setGpsTrackingEnabled(false);
+    setCryDetectionEnabled(false);
 
     // Stop GPS tracking
     if (locationTrackingStop) {
@@ -413,118 +485,182 @@ export default function SitterSessionDetailScreen() {
       setLocationTrackingStop(null);
     }
 
-    // Stop cry detection
+    // Stop cry detection (chunked loop will exit when cancelled)
+    cryDetectionLoopRef.current.cancelled = true;
     if (recording) {
-      await recording.stopAndUnloadAsync();
+      try {
+        await recording.stopAndUnloadAsync();
+      } catch (_) {}
+      setCurrentRecording(null);
       setRecording(null);
-      setIsRecording(false);
     }
+    setIsRecording(false);
+    setLastAudioChunkSentAt(null);
 
     // Update session
     // (Backend state already updated via /monitoring)
   };
 
-  // Start cry detection recording
+  // Start cry detection: chunked recording every 5s. Show REC when monitoring starts (including after Stop → Start).
   const startCryDetection = async () => {
     try {
-      // Request permissions
-      const { status } = await Audio.requestPermissionsAsync();
+      const { status } = await requestAudioPermissionsAsync();
       if (status !== 'granted') {
         Alert.alert('Permission Denied', 'Microphone permission is required for cry detection');
         return;
       }
 
-      // Configure audio mode
-      await Audio.setAudioModeAsync({
+      await setAudioModeAsync({
         allowsRecordingIOS: true,
         playsInSilentModeIOS: true,
       });
 
-      // Start recording
-      const { recording: newRecording } = await Audio.Recording.createAsync(
-        Audio.RecordingOptionsPresets.HIGH_QUALITY
-      );
-
-      setRecording(newRecording);
+      await stopCurrentRecordingIfAny();
+      // Let any previous loop see cancelled and exit before we start (so it doesn't clear isRecording later)
+      cryDetectionLoopRef.current.cancelled = true;
+      await new Promise((r) => setTimeout(r, 400));
+      cryDetectionLoopRef.current = { cancelled: false };
       setIsRecording(true);
 
-      // Process audio chunks every 3 seconds
-      const interval = setInterval(async () => {
-        if (!newRecording || !session || !user) {
-          clearInterval(interval);
-          return;
-        }
+      const CHUNK_SEC = 5;
+      const loop = async () => {
+        while (!cryDetectionLoopRef.current.cancelled && session && user && id) {
+          const sess = session;
+          const { recording: chunkRecording } = await Recording.createAsync(
+            RecordingOptionsPresets.HIGH_QUALITY
+          );
+          setCurrentRecording(chunkRecording);
+          setRecording(chunkRecording);
 
-        try {
-          const status = await newRecording.getStatusAsync();
-          if (status.isRecording) {
-            // Get recorded URI and convert to blob
-            const uri = status.uri;
-            const response = await fetch(uri);
-            const blob = await response.blob();
+          await new Promise<void>((resolve) => {
+            const t = setTimeout(resolve, CHUNK_SEC * 1000);
+            chunkRecording.setOnRecordingStatusUpdate((s) => {
+              if (!s.isRecording) clearTimeout(t);
+            });
+          });
+          if (cryDetectionLoopRef.current.cancelled) break;
 
-            // Process cry detection
-            if (session.childId && session.parentId) {
-              await recordAndDetectCry(
-                id!,
-                session.childId,
-                session.parentId,
-                user.id,
-                blob
-              );
+          let uri: string | null = null;
+          try {
+            const st = await chunkRecording.getStatusAsync();
+            uri = (st?.uri && typeof st.uri === 'string') ? st.uri : null;
+          } catch (_) {}
+          if (!uri) {
+            const r = chunkRecording as any;
+            uri = (r._uri && typeof r._uri === 'string') ? r._uri : (typeof r.getURI === 'function' ? r.getURI() : null) || null;
+          }
+          if (!uri) {
+            uri = await new Promise<string | null>((resolve) => {
+              let done = false;
+              const tryResolve = (u: string | null) => {
+                if (!done) {
+                  done = true;
+                  resolve(u || null);
+                }
+              };
+              chunkRecording.setOnRecordingStatusUpdate(async (s) => {
+                if (!s.isRecording && !done) {
+                  const fromCallback = (s.uri && typeof s.uri === 'string') ? s.uri : null;
+                  if (fromCallback) {
+                    tryResolve(fromCallback);
+                    return;
+                  }
+                  await new Promise((r) => setTimeout(r, 100));
+                  if (done) return;
+                  try {
+                    const st = await chunkRecording.getStatusAsync();
+                    const u = (st?.uri && typeof st.uri === 'string') ? st.uri : null;
+                    tryResolve(u);
+                  } catch (_) {
+                    tryResolve(null);
+                  }
+                }
+              });
+              chunkRecording.stopAndUnloadAsync().then(() => {
+                if (done) return;
+                try {
+                  const getUri = (chunkRecording as any).getURI;
+                  if (typeof getUri === 'function') {
+                    const u = getUri();
+                    if (u && typeof u === 'string') {
+                      tryResolve(u);
+                      return;
+                    }
+                  }
+                } catch (_) {}
+                tryResolve(null);
+              });
+            });
+          } else {
+            await chunkRecording.stopAndUnloadAsync();
+          }
+          if (!uri) {
+            const r = chunkRecording as any;
+            if (r._uri && typeof r._uri === 'string') uri = r._uri;
+            else if (typeof r.getURI === 'function') {
+              const u = r.getURI();
+              if (u && typeof u === 'string') uri = u;
             }
           }
-        } catch (err) {
-          console.error('Error processing audio:', err);
-        }
-      }, 3000);
+          setCurrentRecording(null);
+          setRecording(null);
 
-      // Cleanup interval when recording stops
-      newRecording.setOnRecordingStatusUpdate((status) => {
-        if (!status.isRecording) {
-          clearInterval(interval);
+          if (!uri) {
+            uri = await findMostRecentRecordingUri(15000);
+          }
+          if (cryDetectionLoopRef.current.cancelled) break;
+          if (uri && sess.childId && sess.parentId) {
+            const mime = uri.toLowerCase().endsWith('.m4a') ? 'audio/mp4' : 'audio/wav';
+            await new Promise((r) => setTimeout(r, 400));
+            if (cryDetectionLoopRef.current.cancelled) break;
+            try {
+              const res = await recordAndDetectCry(
+                id!,
+                sess.childId,
+                sess.parentId,
+                user.id,
+                { uri, mimeType: mime },
+                { createAlert: isMonitoringActiveRef.current }
+              );
+              if (res.success) setLastAudioChunkSentAt(Date.now());
+            } catch (err: any) {
+              const now = Date.now();
+              if (now - lastAudioErrorLogRef.current >= AUDIO_ERROR_LOG_INTERVAL_MS) {
+                lastAudioErrorLogRef.current = now;
+                console.error('Error processing audio:', err?.message ?? err);
+              }
+            }
+          }
         }
-      });
+        // Only clear REC when this loop exited because monitoring was stopped (not when a new loop took over)
+        if (cryDetectionLoopRef.current.cancelled) setIsRecording(false);
+      };
+      loop();
     } catch (err: any) {
       Alert.alert('Error', `Failed to start recording: ${err.message}`);
     }
   };
 
-  // Handle end session (sitter or admin only; parent cannot end)
+  // Sitter can only request end (parent is notified). This screen is sitter-only so we always use request-end.
   const handleEndSession = async () => {
     if (!session || !id) return;
 
-    // If sitter, send request-end instead of actually ending
-    if (user?.role === 'sitter') {
-      setActionLoading(true);
-      const res = await requestSessionEnd(id);
-      setActionLoading(false);
-      if (res.success) {
-        Alert.alert('Request sent', 'Your request to end the session has been sent to the parent.');
-      } else {
-        Alert.alert('Error', res.error?.message || 'Failed to send end-session request.');
-      }
-      return;
-    }
-
     Alert.alert(
-      'End Session',
-      'Are you sure you want to end this session?',
+      'Request to end session',
+      'The parent will be notified. Only the parent can actually end the session and complete payment. Continue?',
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'End Session',
-          style: 'destructive',
+          text: 'Send request',
+          style: 'default',
           onPress: async () => {
             setActionLoading(true);
-            await handleStopMonitoring();
-            const result = await endSession(id);
+            const res = await requestSessionEnd(id);
             setActionLoading(false);
-            if (result.success && result.data) {
-              setSession(result.data);
-              Alert.alert('Success', 'Session ended successfully.');
+            if (res.success) {
+              Alert.alert('Request sent', 'The parent has been notified. They will end the session from their app when ready.');
             } else {
-              Alert.alert('Error', result.error?.message || 'Failed to end session');
+              Alert.alert('Error', res.error?.message || 'Failed to send request.');
             }
           },
         },
@@ -596,7 +732,10 @@ export default function SitterSessionDetailScreen() {
     ? cryAlerts.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0].createdAt
     : undefined;
 
-  const canStartSession = session.status === 'accepted' || session.status === 'booked';
+  const canStartSession =
+    session.status === 'accepted' ||
+    session.status === 'booked' ||
+    session.status === 'payment_pending';
   const isActive = session.status === 'active';
   const isRequested = session.status === 'requested';
   const isInterviewCompleted = session.status === 'interview_completed';
@@ -1083,39 +1222,31 @@ export default function SitterSessionDetailScreen() {
                 sitterId={user?.id || ''}
                 isEnabled={cryDetectionEnabled}
                 onToggle={handleToggleCryDetection}
+                recordingStartedByMonitoring={isMonitoringActive && isRecording}
+                lastChunkSentAtFromMonitoring={lastAudioChunkSentAt}
               />
             )}
 
-            {/* Chatbot Access */}
-            {session.childId && (
-              <Card style={styles.chatbotCard}>
-                <TouchableOpacity
-                  style={[styles.chatbotButton, { backgroundColor: colors.primary }]}
-                  onPress={() => {
-                    router.push(`/(sitter)/chatbot?sessionId=${id}&childId=${session.childId}`);
-                  }}
-                >
-                  <Ionicons name="reader-outline" size={24} color={colors.white} />
-                  <Text style={[styles.chatbotButtonText, { color: colors.white }]}>
-                    Child Assistant
-                  </Text>
-                  <Ionicons name="chevron-forward" size={20} color={colors.white} />
-                </TouchableOpacity>
-              </Card>
-            )}
+            {/* Session Timeline – before End Session (space above so it doesn’t overlap Cry alerts) */}
+            <View style={styles.timelineWrap}>
+              <SessionTimeline session={session} role="sitter" />
+            </View>
 
-            {/* End Session Button */}
+            {/* Request to end session (sitter notifies parent; parent ends and pays) */}
             <Card style={styles.endSessionCard}>
               <TouchableOpacity
-                style={[styles.endSessionButton, { borderColor: colors.border }]}
+                style={[styles.endSessionButton, { borderColor: colors.error || '#dc2626', backgroundColor: (colors.error || '#dc2626') + '08' }]}
                 onPress={handleEndSession}
                 disabled={actionLoading}
               >
-                <Ionicons name="stop-circle-outline" size={20} color={colors.textSecondary} />
-                <Text style={[styles.endSessionText, { color: colors.textSecondary }]}>
-                  End Session
+                <Ionicons name="hand-left-outline" size={20} color={colors.error || '#dc2626'} />
+                <Text style={[styles.endSessionText, { color: colors.error || '#dc2626' }]}>
+                  Request to end session
                 </Text>
               </TouchableOpacity>
+              <Text style={[styles.endSessionHint, { color: colors.textSecondary }]}>
+                Parent will be notified and will end the session from their app.
+              </Text>
             </Card>
           </>
         )}
@@ -1156,12 +1287,19 @@ export default function SitterSessionDetailScreen() {
             </View>
           </Card>
         )}
-
-        {/* Session Timeline */}
-        <SessionTimeline session={session} role="sitter" />
       </ScrollView>
 
-      <EmergencyCallButton session={session} role="sitter" />
+      {/* Two circles: left = Emergency, right = Assistant (same as home screen) */}
+      {session.status === 'active' && session.childId && (
+        <TouchableOpacity
+          style={[styles.fabCircle, styles.fabCircleRight, { backgroundColor: colors.primary }]}
+          onPress={() => router.push(`/(sitter)/chatbot?sessionId=${id}&childId=${session.childId}` as any)}
+          activeOpacity={0.9}
+        >
+          <Ionicons name="chatbubbles" size={28} color={colors.white} />
+        </TouchableOpacity>
+      )}
+      <EmergencyCallButton session={session} role="sitter" position="left" />
     </View>
   );
 }
@@ -1198,6 +1336,7 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     padding: 16,
+    paddingBottom: 100,
   },
   infoCard: {
     marginBottom: 16,
@@ -1444,7 +1583,29 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: 'bold',
   },
+  fabCircle: {
+    position: 'absolute',
+    bottom: 30,
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    zIndex: 99,
+  },
+  fabCircleRight: {
+    right: 20,
+  },
+  timelineWrap: {
+    marginTop: 24,
+  },
   endSessionCard: {
+    marginTop: 8,
     marginBottom: 16,
   },
   endSessionButton: {
@@ -1453,7 +1614,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     padding: 16,
     borderRadius: 12,
-    borderWidth: 1,
+    borderWidth: 2,
     gap: 8,
   },
   chatbotCard: {
@@ -1476,5 +1637,10 @@ const styles = StyleSheet.create({
   endSessionText: {
     fontSize: 16,
     fontWeight: '600',
+  },
+  endSessionHint: {
+    fontSize: 12,
+    marginTop: 8,
+    textAlign: 'center',
   },
 });

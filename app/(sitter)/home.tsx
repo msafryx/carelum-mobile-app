@@ -178,10 +178,14 @@ export default function SitterHomeScreen() {
     }
 
     try {
-      // Load active sessions
+      // Load active sessions (LIVE)
       const activeResult = await getUserSessions(user.id, 'sitter', SESSION_STATUS.ACTIVE);
-      // Load upcoming sessions (accepted but not yet active)
-      const upcomingResult = await getUserSessions(user.id, 'sitter', SESSION_STATUS.ACCEPTED);
+      // Load upcoming: accepted, payment_pending, booked (sitter can start these)
+      const upcomingResult = await getUserSessions(
+        user.id,
+        'sitter',
+        `${SESSION_STATUS.ACCEPTED},${SESSION_STATUS.PAYMENT_PENDING},${SESSION_STATUS.BOOKED}`
+      );
       // Discover available sessions (Uber-like discovery)
       const availableResult = await discoverAvailableSessions();
 

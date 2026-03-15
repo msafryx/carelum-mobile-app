@@ -295,225 +295,199 @@ export default function EnhancedAlertsView({
 
   if (loading && !refreshing) {
     return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color={colors.primary} />
-        <Text style={[styles.loadingText, { color: colors.textSecondary }]}>
-          Loading alerts...
-        </Text>
-      </View>
+      <Card style={styles.alertsCardContainer}>
+        <View style={styles.cardHeader}>
+          <Ionicons name="notifications-outline" size={20} color={colors.primary} />
+          <Text style={[styles.cardTitle, { color: colors.text }]}>Alerts</Text>
+        </View>
+        <View style={styles.loadingInCard}>
+          <ActivityIndicator size="small" color={colors.primary} />
+          <Text style={[styles.loadingText, { color: colors.textSecondary }]}>
+            Loading alerts...
+          </Text>
+        </View>
+      </Card>
     );
   }
 
-  return (
-    <View style={styles.container}>
-      {/* Filter Tabs */}
-      <View style={styles.filterContainer}>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-          <TouchableOpacity
-            style={[
-              styles.filterTab,
-              {
-                backgroundColor: filter === 'all' ? colors.primary : colors.backgroundSecondary,
-              },
-            ]}
-            onPress={() => setFilter('all')}
-          >
-            <Text
+  const renderAlertCard = (alert: AlertType) => (
+    <Card
+      key={alert.id}
+      style={[
+        styles.alertCard,
+        alert.status === 'new' && { borderLeftWidth: 4, borderLeftColor: colors.primary },
+      ]}
+    >
+      <TouchableOpacity
+        onPress={() => {
+          handleMarkAsViewed(alert);
+          onAlertPress?.(alert);
+        }}
+        activeOpacity={0.7}
+      >
+        <View style={styles.alertHeader}>
+          <View style={styles.alertHeaderLeft}>
+            <View
               style={[
-                styles.filterText,
-                { color: filter === 'all' ? colors.white : colors.text },
+                styles.alertIconContainer,
+                { backgroundColor: getSeverityColor(alert.severity) + '20' },
               ]}
             >
-              All ({alerts.length})
+              <Ionicons
+                name={getTypeIcon(alert.type) as any}
+                size={20}
+                color={getSeverityColor(alert.severity)}
+              />
+            </View>
+            <View style={styles.alertTitleContainer}>
+              <Text style={[styles.alertTitle, { color: colors.text }]}>
+                {alert.title}
+              </Text>
+              <View style={styles.alertBadges}>
+                <Badge
+                  label={alert.severity}
+                  variant={
+                    alert.severity === 'critical' || alert.severity === 'high'
+                      ? 'error'
+                      : 'default'
+                  }
+                />
+                {alert.status === 'new' && (
+                  <Badge label="New" variant="info" />
+                )}
+              </View>
+            </View>
+          </View>
+          <Ionicons
+            name="chevron-forward"
+            size={20}
+            color={colors.textSecondary}
+          />
+        </View>
+        <Text style={[styles.alertMessage, { color: colors.textSecondary }]}>
+          {alert.message}
+        </Text>
+        <View style={styles.alertFooter}>
+          <View style={styles.alertFooterLeft}>
+            <Ionicons name="time-outline" size={14} color={colors.textSecondary} />
+            <Text style={[styles.alertTime, { color: colors.textSecondary }]}>
+              {formatDistanceToNow(alert.createdAt, { addSuffix: true })}
             </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[
-              styles.filterTab,
-              {
-                backgroundColor: filter === 'new' ? colors.primary : colors.backgroundSecondary,
-              },
-            ]}
-            onPress={() => setFilter('new')}
-          >
-            <Text
-              style={[
-                styles.filterText,
-                { color: filter === 'new' ? colors.white : colors.text },
-              ]}
+          </View>
+          {alert.severity === 'critical' && (
+            <TouchableOpacity
+              style={[styles.emergencyButton, { backgroundColor: colors.error }]}
+              onPress={() => handleEmergencyAction(alert)}
             >
-              New ({newAlertsCount})
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[
-              styles.filterTab,
-              {
-                backgroundColor: filter === 'critical' ? colors.error : colors.backgroundSecondary,
-              },
-            ]}
-            onPress={() => setFilter('critical')}
-          >
-            <Text
-              style={[
-                styles.filterText,
-                { color: filter === 'critical' ? colors.white : colors.text },
-              ]}
+              <Ionicons name="call" size={16} color={colors.white} />
+              <Text style={[styles.emergencyButtonText, { color: colors.white }]}>
+                Emergency
+              </Text>
+            </TouchableOpacity>
+          )}
+        </View>
+        {alert.status !== 'resolved' && (
+          <View style={styles.alertActions}>
+            {alert.status === 'new' && (
+              <TouchableOpacity
+                style={[styles.actionButton, { borderColor: colors.border }]}
+                onPress={() => handleAcknowledge(alert)}
+              >
+                <Ionicons name="checkmark-circle" size={18} color={colors.primary} />
+                <Text style={[styles.actionButtonText, { color: colors.primary }]}>
+                  Acknowledge
+                </Text>
+              </TouchableOpacity>
+            )}
+            <TouchableOpacity
+              style={[styles.actionButton, { borderColor: colors.border }]}
+              onPress={() => handleResolve(alert)}
             >
-              Critical ({criticalAlertsCount})
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[
-              styles.filterTab,
-              {
-                backgroundColor:
-                  filter === 'cry_detection' ? colors.primary : colors.backgroundSecondary,
-              },
-            ]}
-            onPress={() => setFilter('cry_detection')}
-          >
-            <Text
-              style={[
-                styles.filterText,
-                { color: filter === 'cry_detection' ? colors.white : colors.text },
-              ]}
-            >
-              Cry Detection
-            </Text>
-          </TouchableOpacity>
-        </ScrollView>
-      </View>
+              <Ionicons name="checkmark-done" size={18} color={colors.success} />
+              <Text style={[styles.actionButtonText, { color: colors.success }]}>
+                Resolve
+              </Text>
+            </TouchableOpacity>
+          </View>
+        )}
+      </TouchableOpacity>
+    </Card>
+  );
 
-      {/* Alerts List */}
+  return (
+    <Card style={styles.alertsCardContainer}>
+      <View style={styles.cardHeader}>
+        <Ionicons name="notifications-outline" size={20} color={colors.primary} />
+        <Text style={[styles.cardTitle, { color: colors.text }]}>Alerts</Text>
+      </View>
+      {/* Filter Tabs inside card */}
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterScroll}>
+        <TouchableOpacity
+          style={[
+            styles.filterTab,
+            { backgroundColor: filter === 'all' ? colors.primary : colors.backgroundSecondary },
+          ]}
+          onPress={() => setFilter('all')}
+        >
+          <Text style={[styles.filterText, { color: filter === 'all' ? colors.white : colors.text }]}>
+            All ({alerts.length})
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[
+            styles.filterTab,
+            { backgroundColor: filter === 'new' ? colors.primary : colors.backgroundSecondary },
+          ]}
+          onPress={() => setFilter('new')}
+        >
+          <Text style={[styles.filterText, { color: filter === 'new' ? colors.white : colors.text }]}>
+            New ({newAlertsCount})
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[
+            styles.filterTab,
+            { backgroundColor: filter === 'critical' ? colors.error : colors.backgroundSecondary },
+          ]}
+          onPress={() => setFilter('critical')}
+        >
+          <Text style={[styles.filterText, { color: filter === 'critical' ? colors.white : colors.text }]}>
+            Critical ({criticalAlertsCount})
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[
+            styles.filterTab,
+            { backgroundColor: filter === 'cry_detection' ? colors.primary : colors.backgroundSecondary },
+          ]}
+          onPress={() => setFilter('cry_detection')}
+        >
+          <Text style={[styles.filterText, { color: filter === 'cry_detection' ? colors.white : colors.text }]}>
+            Cry Detection
+          </Text>
+        </TouchableOpacity>
+      </ScrollView>
+      {/* Scroll within card (like Session Timeline) */}
       <ScrollView
-        style={styles.alertsList}
-        contentContainerStyle={styles.alertsContent}
+        style={styles.alertsScrollInCard}
+        contentContainerStyle={filteredAlerts.length === 0 ? styles.alertsScrollContentEmpty : styles.alertsScrollContent}
+        showsVerticalScrollIndicator={true}
+        nestedScrollEnabled
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={() => loadAlerts(true)} />
         }
       >
         {filteredAlerts.length === 0 ? (
-          <Card style={styles.emptyCard}>
-            <Ionicons name="notifications-outline" size={64} color={colors.textSecondary} />
-            <Text style={[styles.emptyTitle, { color: colors.text }]}>No Alerts</Text>
-            <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
-              {filter === 'all'
-                ? 'No alerts for this session yet'
-                : `No ${filter} alerts found`}
-            </Text>
-          </Card>
+          <Text style={[styles.emptyTextInCard, { color: colors.textSecondary }]}>
+            {filter === 'all'
+              ? 'No alerts for this session yet'
+              : `No ${filter} alerts found`}
+          </Text>
         ) : (
-          filteredAlerts.map((alert) => (
-            <Card
-              key={alert.id}
-              style={[
-                styles.alertCard,
-                alert.status === 'new' && { borderLeftWidth: 4, borderLeftColor: colors.primary },
-              ]}
-            >
-              <TouchableOpacity
-                onPress={() => {
-                  handleMarkAsViewed(alert);
-                  onAlertPress?.(alert);
-                }}
-                activeOpacity={0.7}
-              >
-                <View style={styles.alertHeader}>
-                  <View style={styles.alertHeaderLeft}>
-                    <View
-                      style={[
-                        styles.alertIconContainer,
-                        { backgroundColor: getSeverityColor(alert.severity) + '20' },
-                      ]}
-                    >
-                      <Ionicons
-                        name={getTypeIcon(alert.type) as any}
-                        size={20}
-                        color={getSeverityColor(alert.severity)}
-                      />
-                    </View>
-                    <View style={styles.alertTitleContainer}>
-                      <Text style={[styles.alertTitle, { color: colors.text }]}>
-                        {alert.title}
-                      </Text>
-                      <View style={styles.alertBadges}>
-                        <Badge
-                          label={alert.severity}
-                          variant={
-                            alert.severity === 'critical' || alert.severity === 'high'
-                              ? 'error'
-                              : 'default'
-                          }
-                        />
-                        {alert.status === 'new' && (
-                          <Badge label="New" variant="info" />
-                        )}
-                      </View>
-                    </View>
-                  </View>
-                  <Ionicons
-                    name="chevron-forward"
-                    size={20}
-                    color={colors.textSecondary}
-                  />
-                </View>
-
-                <Text style={[styles.alertMessage, { color: colors.textSecondary }]}>
-                  {alert.message}
-                </Text>
-
-                <View style={styles.alertFooter}>
-                  <View style={styles.alertFooterLeft}>
-                    <Ionicons name="time-outline" size={14} color={colors.textSecondary} />
-                    <Text style={[styles.alertTime, { color: colors.textSecondary }]}>
-                      {formatDistanceToNow(alert.createdAt, { addSuffix: true })}
-                    </Text>
-                  </View>
-                  {alert.severity === 'critical' && (
-                    <TouchableOpacity
-                      style={[styles.emergencyButton, { backgroundColor: colors.error }]}
-                      onPress={() => handleEmergencyAction(alert)}
-                    >
-                      <Ionicons name="call" size={16} color={colors.white} />
-                      <Text style={[styles.emergencyButtonText, { color: colors.white }]}>
-                        Emergency
-                      </Text>
-                    </TouchableOpacity>
-                  )}
-                </View>
-
-                {/* Action Buttons */}
-                {alert.status !== 'resolved' && (
-                  <View style={styles.alertActions}>
-                    {alert.status === 'new' && (
-                      <TouchableOpacity
-                        style={[styles.actionButton, { borderColor: colors.border }]}
-                        onPress={() => handleAcknowledge(alert)}
-                      >
-                        <Ionicons name="checkmark-circle" size={18} color={colors.primary} />
-                        <Text style={[styles.actionButtonText, { color: colors.primary }]}>
-                          Acknowledge
-                        </Text>
-                      </TouchableOpacity>
-                    )}
-                    <TouchableOpacity
-                      style={[styles.actionButton, { borderColor: colors.border }]}
-                      onPress={() => handleResolve(alert)}
-                    >
-                      <Ionicons name="checkmark-done" size={18} color={colors.success} />
-                      <Text style={[styles.actionButtonText, { color: colors.success }]}>
-                        Resolve
-                      </Text>
-                    </TouchableOpacity>
-                  </View>
-                )}
-              </TouchableOpacity>
-            </Card>
-          ))
+          filteredAlerts.map((alert) => renderAlertCard(alert))
         )}
       </ScrollView>
-    </View>
+    </Card>
   );
 }
 
@@ -530,12 +504,26 @@ const styles = StyleSheet.create({
     marginTop: 12,
     fontSize: 14,
   },
-  filterContainer: {
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    backgroundColor: '#fff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
+  loadingInCard: {
+    paddingVertical: 24,
+    alignItems: 'center',
+  },
+  alertsCardContainer: {
+    marginBottom: 16,
+  },
+  cardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 12,
+  },
+  cardTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  filterScroll: {
+    marginBottom: 12,
+    marginHorizontal: -4,
   },
   filterTab: {
     paddingHorizontal: 16,
@@ -547,29 +535,21 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
   },
-  alertsList: {
-    flex: 1,
+  alertsScrollInCard: {
+    maxHeight: 600,
   },
-  alertsContent: {
-    padding: 16,
-    gap: 12,
+  alertsScrollContent: {
+    paddingBottom: 16,
   },
-  emptyCard: {
-    alignItems: 'center',
-    paddingVertical: 48,
+  alertsScrollContentEmpty: {
+    paddingVertical: 12,
+    paddingBottom: 8,
   },
-  emptyTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    marginTop: 16,
-    marginBottom: 8,
-  },
-  emptyText: {
+  emptyTextInCard: {
     fontSize: 14,
-    textAlign: 'center',
   },
   alertCard: {
-    marginBottom: 0,
+    marginBottom: 12,
   },
   alertHeader: {
     flexDirection: 'row',

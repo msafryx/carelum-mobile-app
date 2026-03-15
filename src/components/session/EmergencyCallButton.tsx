@@ -14,9 +14,13 @@ type Role = 'parent' | 'sitter';
 interface EmergencyCallButtonProps {
   session: Session;
   role: Role;
+  /** When true, render as inline bar button (no floating); use inside a bottom action bar */
+  inline?: boolean;
+  /** FAB position: 'left' | 'right' (matches home screen circles). Ignored when inline. */
+  position?: 'left' | 'right';
 }
 
-export default function EmergencyCallButton({ session, role }: EmergencyCallButtonProps) {
+export default function EmergencyCallButton({ session, role, inline, position = 'right' }: EmergencyCallButtonProps) {
   const { colors } = useTheme();
   const [sheetVisible, setSheetVisible] = useState(false);
 
@@ -26,15 +30,21 @@ export default function EmergencyCallButton({ session, role }: EmergencyCallButt
 
   const openSheet = () => setSheetVisible(true);
 
+  const fabStyle = [
+    styles.fab,
+    { backgroundColor: colors.error ?? '#dc2626' },
+    position === 'left' ? styles.fabLeft : styles.fabRight,
+  ];
+
   return (
     <>
       <TouchableOpacity
-        style={[styles.fab, { backgroundColor: colors.error ?? '#dc2626' }]}
+        style={[inline ? styles.inlineButton : fabStyle]}
         onPress={openSheet}
         activeOpacity={0.9}
       >
-        <Ionicons name="call" size={28} color="#fff" />
-        <Text style={styles.fabLabel}>Emergency</Text>
+        <Ionicons name="call" size={inline ? 22 : 26} color="#fff" />
+        {inline && <Text style={[styles.fabLabel, styles.inlineLabel]}>Emergency</Text>}
       </TouchableOpacity>
       <EmergencyCallSheet
         sessionId={session.id}
@@ -49,11 +59,10 @@ export default function EmergencyCallButton({ session, role }: EmergencyCallButt
 const styles = StyleSheet.create({
   fab: {
     position: 'absolute',
-    bottom: 24,
-    right: 20,
-    width: 64,
-    height: 64,
-    borderRadius: 32,
+    bottom: 30,
+    width: 60,
+    height: 60,
+    borderRadius: 30,
     alignItems: 'center',
     justifyContent: 'center',
     elevation: 4,
@@ -63,9 +72,29 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     zIndex: 100,
   },
+  fabLeft: {
+    left: 20,
+  },
+  fabRight: {
+    right: 20,
+  },
   fabLabel: {
     fontSize: 10,
     color: '#fff',
     fontWeight: '600',
+  },
+  inlineButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    minHeight: 48,
+  },
+  inlineLabel: {
+    fontSize: 14,
   },
 });

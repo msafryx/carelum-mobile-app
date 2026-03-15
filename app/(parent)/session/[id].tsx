@@ -40,6 +40,7 @@ import { Child } from '@/src/types/child.types';
 import { LocationUpdate, Session } from '@/src/types/session.types';
 import { formatExpectedDuration, formatSearchDuration, getAcceptedDuration, getSearchingMessage, isDirectInvite } from '@/src/utils/sessionSearchUtils';
 import { Ionicons } from '@expo/vector-icons';
+import Constants from 'expo-constants';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -148,6 +149,13 @@ export default function SessionDetailScreen() {
   const [searchDuration, setSearchDuration] = useState<string>('');
   const searchDurationIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const sessionRef = useRef<Session | null>(null);
+  const [paymentClientSecret, setPaymentClientSecret] = useState<string | null>(null);
+  const [payButtonLoading, setPayButtonLoading] = useState(false);
+  const isExpoGo = Constants.appOwnership === 'expo';
+  const LazyPaymentSheetFlow = React.useMemo(
+    () => React.lazy(() => import('@/src/components/session/PaymentSheetFlow')),
+    []
+  );
 
   const monitoringEnabled = session?.monitoringEnabled || false;
   const lastSignal =
@@ -401,13 +409,13 @@ export default function SessionDetailScreen() {
     };
   }, [id, loadSessionData]);
 
-  // Handle end session
+  // Handle end session (payment required: charged for time used, then session ends)
   const handleEndSession = async () => {
     if (!session || !id) return;
 
     Alert.alert(
       'End Session',
-      'Are you sure you want to end this session?',
+      'You will be charged for the time used (or full amount). Payment must succeed before the session ends. Continue?',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -424,7 +432,12 @@ export default function SessionDetailScreen() {
               Alert.alert('Success', message);
               router.back();
             } else {
-              Alert.alert('Error', result.error?.message || 'Failed to end session');
+              const errMsg = result.error?.message || 'Failed to end session';
+              const isPaymentError = errMsg.toLowerCase().includes('payment') || errMsg.toLowerCase().includes('profile') || errMsg.toLowerCase().includes('card');
+              Alert.alert(
+                isPaymentError ? 'Payment required' : 'Cannot end session',
+                errMsg.includes('Profile') ? `${errMsg} Open Profile to add a payment method.` : errMsg
+              );
             }
             setActionLoading(false);
           },
@@ -696,24 +709,57 @@ export default function SessionDetailScreen() {
                 <Text style={[styles.helperText, { color: colors.textSecondary }]}>
                   Add a payment method in Profile if you have not. You will be charged (Rs. for time used) when you end the session. Sitter can start once you have added an account.
                 </Text>
+                {paymentClientSecret && !isExpoGo && (
+                  <React.Suspense fallback={null}>
+                    <LazyPaymentSheetFlow
+                      clientSecret={paymentClientSecret}
+                      merchantDisplayName="Carelum"
+                      onSuccess={() => {
+                        setPaymentClientSecret(null);
+                        loadSessionData();
+                      }}
+                      onCancel={() => setPaymentClientSecret(null)}
+                      onError={(msg) => Alert.alert('Payment error', msg)}
+                    />
+                  </React.Suspense>
+                )}
                 <TouchableOpacity
-                  style={[styles.confirmPayButton, { backgroundColor: colors.primary }]}
+                  style={[styles.confirmPayButton, { backgroundColor: colors.primary, opacity: payButtonLoading ? 0.7 : 1 }]}
                   onPress={async () => {
-                    const res = await createPaymentIntent(session.id);
-                    if (res.success && res.data?.clientSecret) {
-                      Alert.alert(
-                        'Complete payment',
-                        'Use the Stripe payment sheet in the app to complete payment (integrate @stripe/stripe-react-native for full flow). Client secret is ready.',
-                        [{ text: 'OK' }]
-                      );
-                      loadSessionData();
-                    } else {
-                      Alert.alert('Error', res.error?.message || 'Could not start payment.');
+                    if (payButtonLoading) return;
+                    setPayButtonLoading(true);
+                    try {
+                      const res = await createPaymentIntent(session.id);
+                      const secret = res.data?.clientSecret ?? (res.data as any)?.client_secret;
+                      if (res.success && secret) {
+                        if (isExpoGo) {
+                          Alert.alert(
+                            'Expo Go',
+                            'Payment will be collected when you end the session. For the in-app payment sheet, use a development build (expo run:android or expo run:ios).'
+                          );
+                          loadSessionData();
+                        } else {
+                          setPaymentClientSecret(secret);
+                        }
+                      } else {
+                        Alert.alert('Error', res.error?.message || 'Could not start payment. Please try again.');
+                      }
+                    } catch (e: any) {
+                      Alert.alert('Error', e?.message || 'Could not start payment. Please try again.');
+                    } finally {
+                      setPayButtonLoading(false);
                     }
                   }}
+                  disabled={payButtonLoading}
                 >
-                  <Ionicons name="card" size={20} color="#fff" />
-                  <Text style={styles.confirmPayButtonText}>Confirm and Pay</Text>
+                  {payButtonLoading ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <>
+                      <Ionicons name="card" size={20} color="#fff" />
+                      <Text style={styles.confirmPayButtonText}>Confirm and Pay</Text>
+                    </>
+                  )}
                 </TouchableOpacity>
               </View>
             )}
@@ -905,21 +951,6 @@ export default function SessionDetailScreen() {
           </View>
         </Card>
 
-        {/* Session Controls - placed high so End Session / Cancel are visible without scrolling */}
-        {session.status === 'active' && (
-          <Text style={[styles.helperText, { color: colors.textSecondary, marginBottom: 8 }]}>
-            When you end the session, you'll be charged only for the time used (prorated).
-          </Text>
-        )}
-        <SessionControls
-          sessionStatus={session.status}
-          onEndSession={handleEndSession}
-          onEmergency={handleEmergency}
-          onCancel={() => setCancelModalVisible(true)}
-          isLoading={actionLoading}
-          canEndSession={session.status === 'active'}
-        />
-
         {/* Monitoring Status */}
         {session.status === 'active' && (
           <Card style={styles.infoCard}>
@@ -943,7 +974,7 @@ export default function SessionDetailScreen() {
             sessionId={id!}
             currentLocation={currentLocation || undefined}
             locationHistory={locationHistory}
-            isTracking={session.gpsTrackingEnabled}
+            isTracking={session.gpsTrackingEnabled ?? session.monitoringEnabled ?? false}
             geofenceCenter={session.location?.coordinates ? {
               latitude: session.location.coordinates.latitude,
               longitude: session.location.coordinates.longitude,
@@ -989,8 +1020,8 @@ export default function SessionDetailScreen() {
         {/* Cry Detection */}
         {session.status === 'active' && monitoringEnabled && (
           <CryDetectionIndicator
-            isEnabled={session.cryDetectionEnabled || false}
-            isActive={session.monitoringEnabled || false}
+            isEnabled={session.cryDetectionEnabled ?? session.monitoringEnabled ?? false}
+            isActive={session.monitoringEnabled ?? false}
             lastDetection={lastCryDetection}
             alertCount={cryAlerts.length}
             recentAlerts={cryAlerts.slice(0, 5)}
@@ -1015,24 +1046,6 @@ export default function SessionDetailScreen() {
               }}
             />
           </View>
-        )}
-
-        {/* Chatbot Access */}
-        {session.status === 'active' && child && (
-          <Card style={styles.chatbotCard}>
-            <TouchableOpacity
-              style={[styles.chatbotButton, { backgroundColor: colors.primary }]}
-              onPress={() => {
-                router.push(`/(parent)/chatbot?sessionId=${id}&childId=${child.id}&sitterId=${session.sitterId}`);
-              }}
-            >
-              <Ionicons name="reader-outline" size={24} color={colors.white} />
-              <Text style={[styles.chatbotButtonText, { color: colors.white }]}>
-                Child Assistant
-              </Text>
-              <Ionicons name="chevron-forward" size={20} color={colors.white} />
-            </TouchableOpacity>
-          </Card>
         )}
 
         {/* Parent: Completed session summary + rate sitter */}
@@ -1095,11 +1108,36 @@ export default function SessionDetailScreen() {
           </Card>
         )}
 
-        {/* Session Timeline */}
+        {/* Session Timeline – at bottom */}
         <SessionTimeline session={session} role="parent" />
+
+        {/* Session Controls – at bottom */}
+        {session.status === 'active' && (
+          <Text style={[styles.helperText, { color: colors.textSecondary, marginBottom: 8 }]}>
+            When you end the session, you'll be charged only for the time used (prorated).
+          </Text>
+        )}
+        <SessionControls
+          sessionStatus={session.status}
+          onEndSession={handleEndSession}
+          onEmergency={handleEmergency}
+          onCancel={() => setCancelModalVisible(true)}
+          isLoading={actionLoading}
+          canEndSession={session.status === 'active'}
+        />
       </ScrollView>
 
-      <EmergencyCallButton session={session} role="parent" />
+      {/* Two circles: left = Emergency, right = Assistant (same as home screen) */}
+      {session.status === 'active' && child && (
+        <TouchableOpacity
+          style={[styles.fabCircle, styles.fabCircleRight, { backgroundColor: colors.primary }]}
+          onPress={() => router.push(`/(parent)/chatbot?sessionId=${id}&childId=${child.id}&sitterId=${session.sitterId}` as any)}
+          activeOpacity={0.9}
+        >
+          <Ionicons name="chatbubbles" size={28} color={colors.white} />
+        </TouchableOpacity>
+      )}
+      <EmergencyCallButton session={session} role="parent" position="left" />
 
       {/* Cancel Session Modal */}
       {cancelModalVisible && session && (
@@ -1164,12 +1202,31 @@ const styles = StyleSheet.create({
   scrollContent: {
     padding: 16,
     gap: 16,
+    paddingBottom: 100,
   },
   alertsSection: {
     marginTop: 8,
   },
   chatbotCard: {
     marginBottom: 0,
+  },
+  fabCircle: {
+    position: 'absolute',
+    bottom: 30,
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    zIndex: 99,
+  },
+  fabCircleRight: {
+    right: 20,
   },
   rateButton: {
     flexDirection: 'row',

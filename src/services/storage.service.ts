@@ -2,6 +2,7 @@
  * Storage Service - Supabase Storage
  * Handles file uploads and deletions
  */
+import * as FileSystem from 'expo-file-system';
 import { supabaseUrl as configSupabaseUrl, isSupabaseConfigured, supabase, supabaseAnonKey } from '@/src/config/supabase';
 import { ErrorCode, ServiceResult } from '@/src/types/error.types';
 import { handleUnexpectedError } from '@/src/utils/errorHandler';
@@ -16,6 +17,104 @@ export interface UploadOptions {
   onProgress?: (progress: UploadProgress) => void;
   maxSize?: number; // in bytes
   allowedTypes?: string[];
+}
+
+/** Bucket names used by the app */
+export const STORAGE_BUCKETS = {
+  PROFILE_IMAGES: 'profile-images',
+  CHILD_IMAGES: 'child-images',
+  CHAT_ATTACHMENTS: 'chat-attachments',
+  VERIFICATION_DOCUMENTS: 'verification-documents',
+  SESSION_AUDIO: 'session-audio',
+} as const;
+
+const BUCKET_PATH_PREFIXES: { prefix: RegExp; bucket: string }[] = [
+  { prefix: /^(profileImages|profile-images)\//i, bucket: STORAGE_BUCKETS.PROFILE_IMAGES },
+  { prefix: /^(childImages|child-images)\//i, bucket: STORAGE_BUCKETS.CHILD_IMAGES },
+  { prefix: /^chat-attachments\//i, bucket: STORAGE_BUCKETS.CHAT_ATTACHMENTS },
+  { prefix: /^(verificationDocuments|verification-documents)\//i, bucket: STORAGE_BUCKETS.VERIFICATION_DOCUMENTS },
+  { prefix: /^audio\//i, bucket: STORAGE_BUCKETS.SESSION_AUDIO },
+];
+
+/**
+ * Resolve storage bucket and file path from a logical path string.
+ * Used by uploadFile, deleteFile, getFileUrl.
+ */
+function getBucketAndFilePath(path: string): { bucket: string; filePath: string } {
+  for (const { prefix, bucket } of BUCKET_PATH_PREFIXES) {
+    if (prefix.test(path)) {
+      const filePath = path.replace(prefix, '');
+      return { bucket, filePath };
+    }
+  }
+  return { bucket: STORAGE_BUCKETS.PROFILE_IMAGES, filePath: path };
+}
+
+/**
+ * Upload a file from a local URI (file:// or content://) to Supabase Storage.
+ * Uses native FileSystem.uploadAsync so no Blob is used — fixes "Network request failed" on React Native.
+ * Only supported for session-audio bucket.
+ */
+export async function uploadFileFromUri(
+  path: string,
+  fileUri: string,
+  contentType?: string
+): Promise<ServiceResult<string>> {
+  try {
+    if (!isSupabaseConfigured() || !supabase) {
+      return { success: false, error: { code: ErrorCode.STORAGE_ERROR, message: 'Supabase is not configured' } };
+    }
+    const { bucket, filePath } = getBucketAndFilePath(path);
+    if (bucket !== STORAGE_BUCKETS.SESSION_AUDIO) {
+      return { success: false, error: { code: ErrorCode.STORAGE_ERROR, message: 'uploadFileFromUri only supports session-audio bucket' } };
+    }
+
+    let uriToUpload = fileUri;
+    let tempPath: string | null = null;
+    if (fileUri.startsWith('content://')) {
+      const cache = FileSystem.cacheDirectory;
+      if (!cache) return { success: false, error: { code: ErrorCode.STORAGE_ERROR, message: 'No cache directory' } };
+      tempPath = `${cache}upload_${Date.now()}.m4a`;
+      await FileSystem.copyAsync({ from: fileUri, to: tempPath });
+      uriToUpload = tempPath;
+    }
+
+    const supabaseUrl = (supabase as any)?.supabaseUrl ?? configSupabaseUrl ?? '';
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) {
+      if (tempPath) await FileSystem.deleteAsync(tempPath, { idempotent: true });
+      return { success: false, error: { code: ErrorCode.STORAGE_ERROR, message: 'No session for upload' } };
+    }
+    const anonKey = supabaseAnonKey || (supabase as any)?.supabaseKey || '';
+    const uploadUrl = `${supabaseUrl}/storage/v1/object/${bucket}/${filePath}`;
+
+    const result = await FileSystem.uploadAsync(uploadUrl, uriToUpload, {
+      httpMethod: 'POST',
+      uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
+      headers: {
+        'apikey': anonKey,
+        'Authorization': `Bearer ${session.access_token}`,
+        'Content-Type': contentType || 'application/octet-stream',
+        'x-upsert': 'true',
+      },
+    }).finally(() => {
+      if (tempPath) FileSystem.deleteAsync(tempPath, { idempotent: true }).catch(() => {});
+    });
+
+    if (result.status < 200 || result.status >= 300) {
+      return {
+        success: false,
+        error: { code: ErrorCode.UPLOAD_FAILED, message: `Upload failed: ${result.status}` },
+      };
+    }
+    const { data: urlData } = supabase.storage.from(bucket).getPublicUrl(filePath);
+    if (!urlData?.publicUrl) {
+      return { success: false, error: { code: ErrorCode.STORAGE_ERROR, message: 'Failed to get public URL' } };
+    }
+    return { success: true, data: urlData.publicUrl };
+  } catch (e: any) {
+    return { success: false, error: handleUnexpectedError(e) };
+  }
 }
 
 /**
@@ -160,21 +259,7 @@ export async function uploadFile(
       };
     }
 
-    // Determine bucket from path
-    let bucket = 'profile-images';
-    if (path.startsWith('profileImages/') || path.startsWith('profile-images/')) {
-      bucket = 'profile-images';
-    } else if (path.startsWith('childImages/') || path.startsWith('child-images/')) {
-      bucket = 'child-images';
-    } else if (path.startsWith('chat-attachments/')) {
-      bucket = 'chat-attachments';
-    } else if (path.startsWith('verificationDocuments/') || path.startsWith('verification-documents/')) {
-      bucket = 'verification-documents';
-    }
-
-    // Extract file path (remove bucket prefix)
-    // Handle both camelCase and kebab-case for verification documents
-    const filePath = path.replace(/^(profileImages|profile-images|childImages|child-images|chat-attachments|verificationDocuments|verification-documents)\//, '');
+    const { bucket, filePath } = getBucketAndFilePath(path);
 
     console.log(`📤 Uploading to bucket: ${bucket}, path: ${filePath}`);
     console.log(`📦 File type: ${file instanceof Blob ? 'Blob' : file instanceof Uint8Array ? 'Uint8Array' : file instanceof ArrayBuffer ? 'ArrayBuffer' : typeof file}`);
@@ -232,8 +317,48 @@ export async function uploadFile(
     let uploadError = null;
     let uploadData = null;
     let lastException: any = null;
-    
-    // Try upload up to 2 times with Supabase client
+
+    // On React Native, Supabase client upload often fails with "Network request failed" for Blob.
+    // For session-audio, try direct fetch first to get a real HTTP response (200/403/415).
+    const tryDirectFetchFirst = bucket === STORAGE_BUCKETS.SESSION_AUDIO;
+
+    if (tryDirectFetchFirst) {
+      try {
+        const uploadUrl = `${supabaseUrl}/storage/v1/object/${bucket}/${filePath}`;
+        console.log(`📡 [session-audio] Direct fetch upload to: ${uploadUrl.substring(0, 80)}...`);
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) throw new Error('No session for direct upload');
+        const anonKey = supabaseAnonKey || (supabase as any)?.supabaseKey || '';
+        const response = await fetch(uploadUrl, {
+          method: 'POST',
+          headers: {
+            'apikey': anonKey,
+            'Authorization': `Bearer ${session.access_token}`,
+            'Content-Type': contentType || 'application/octet-stream',
+            'x-upsert': 'true',
+          },
+          body: fileToUpload,
+        });
+        if (response.ok) {
+          const { data: urlData } = supabase.storage.from(bucket).getPublicUrl(filePath);
+          if (urlData?.publicUrl) {
+            console.log('✅ [session-audio] Direct fetch upload successful');
+            uploadData = { path: filePath };
+            uploadError = null;
+          }
+        } else {
+          const errorText = await response.text();
+          console.error(`❌ [session-audio] Direct fetch: ${response.status}`, errorText.substring(0, 150));
+          uploadError = { message: `Upload failed: ${response.status}`, statusCode: response.status, error: errorText } as any;
+        }
+      } catch (directErr: any) {
+        console.warn('⚠️ [session-audio] Direct fetch failed, will try Supabase client:', directErr?.message);
+        uploadError = { message: directErr?.message || 'Direct fetch failed', statusCode: undefined, error: directErr } as any;
+      }
+    }
+
+    // Try upload up to 2 times with Supabase client (when direct fetch didn't succeed)
+    if (!uploadData) {
     for (let attempt = 1; attempt <= 2; attempt++) {
       try {
         console.log(`🔄 Upload attempt ${attempt}/2 (Supabase client)...`);
@@ -379,7 +504,8 @@ export async function uploadFile(
         }
       }
     }
-    
+    } // end if (!uploadData)
+
     // If we have an exception but no error object, use the exception
     if (!uploadError && lastException) {
       uploadError = {
@@ -408,7 +534,7 @@ export async function uploadFile(
       
       // Check for specific Supabase Storage errors
       if (error.message?.includes('Bucket not found') || errorStatus === 404 || errorError === 'Bucket not found') {
-        errorMessage = 'Storage bucket "profile-images" not found. Please create it in Supabase Dashboard → Storage. See SUPABASE_STORAGE_SETUP.md for instructions.';
+        errorMessage = `Storage bucket "${bucket}" not found. Please create it in Supabase Dashboard → Storage. See SUPABASE_STORAGE_SETUP.md and run STORAGE_SESSION_AUDIO.sql for session-audio.`;
       } else if (error.message?.includes('new row violates row-level security policy') || errorStatus === 403 || errorError === 'new row violates row-level security policy') {
         errorMessage = 'Permission denied. Please set up Storage policies in Supabase. See SUPABASE_STORAGE_SETUP.md for instructions.';
       } else if (error.message?.includes('JWT') || error.message?.includes('token') || errorStatus === 401) {
@@ -488,20 +614,7 @@ export async function deleteFile(path: string): Promise<ServiceResult<void>> {
       };
     }
 
-    // Determine bucket from path
-    let bucket = 'profile-images';
-    if (path.startsWith('profileImages/') || path.includes('profile-images')) {
-      bucket = 'profile-images';
-    } else if (path.startsWith('childImages/') || path.includes('child-images')) {
-      bucket = 'child-images';
-    } else if (path.startsWith('chat-attachments/')) {
-      bucket = 'chat-attachments';
-    } else if (path.startsWith('verification-documents/')) {
-      bucket = 'verification-documents';
-    }
-
-    // Extract file path
-    const filePath = path.replace(/^(profileImages|profile-images|childImages|child-images|chat-attachments|verification-documents)\//, '');
+    const { bucket, filePath } = getBucketAndFilePath(path);
 
     const { error } = await supabase.storage
       .from(bucket)
@@ -541,20 +654,7 @@ export async function getFileUrl(path: string): Promise<ServiceResult<string>> {
       };
     }
 
-    // Determine bucket from path
-    let bucket = 'profile-images';
-    if (path.startsWith('profileImages/') || path.includes('profile-images')) {
-      bucket = 'profile-images';
-    } else if (path.startsWith('childImages/') || path.includes('child-images')) {
-      bucket = 'child-images';
-    } else if (path.startsWith('chat-attachments/')) {
-      bucket = 'chat-attachments';
-    } else if (path.startsWith('verification-documents/')) {
-      bucket = 'verification-documents';
-    }
-
-    // Extract file path
-    const filePath = path.replace(/^(profileImages|profile-images|childImages|child-images|chat-attachments|verification-documents)\//, '');
+    const { bucket, filePath } = getBucketAndFilePath(path);
 
     const { data } = supabase.storage
       .from(bucket)

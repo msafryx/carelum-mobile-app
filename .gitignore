@@ -3,6 +3,11 @@
 # dependencies
 node_modules/
 
+# Python venvs (AI services)
+ai_service/.venv/
+baby-cry-ai/venv/
+baby-cry-ai/.venv/
+
 # Expo
 .expo/
 dist/

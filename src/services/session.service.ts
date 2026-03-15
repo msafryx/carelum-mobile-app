@@ -303,6 +303,10 @@ export async function getSessionById(sessionId: string): Promise<ServiceResult<S
           startedAt: (s.startedAt ?? s.started_at) ? new Date(s.startedAt ?? s.started_at) : undefined,
           monitoringEnabled: (s.monitoringEnabled ?? s.monitoring_enabled) ?? undefined,
           monitoringStartedAt: (s.monitoringStartedAt ?? s.monitoring_started_at) ? new Date(s.monitoringStartedAt ?? s.monitoring_started_at) : undefined,
+          lastLocationAt: (s.lastLocationAt ?? s.last_location_at) ? new Date(s.lastLocationAt ?? s.last_location_at) : undefined,
+          lastAudioSignalAt: (s.lastAudioSignalAt ?? s.last_audio_signal_at) ? new Date(s.lastAudioSignalAt ?? s.last_audio_signal_at) : undefined,
+          gpsTrackingEnabled: s.gpsTrackingEnabled ?? s.gps_tracking_enabled ?? (s.monitoringEnabled ?? s.monitoring_enabled) ?? undefined,
+          cryDetectionEnabled: s.cryDetectionEnabled ?? s.cry_detection_enabled ?? (s.monitoringEnabled ?? s.monitoring_enabled) ?? undefined,
           createdAt: new Date(s.createdAt || Date.now()),
           updatedAt: new Date(s.updatedAt || Date.now()),
         };
@@ -339,6 +343,7 @@ async function syncSessionFromAPI(sessionId: string): Promise<ServiceResult<Sess
     }
 
     const apiSession = result.data;
+    const monitoringEnabled = apiSession.monitoringEnabled ?? apiSession.monitoring_enabled ?? undefined;
     const session: Session = {
       id: apiSession.id,
       parentId: apiSession.parentId,
@@ -363,6 +368,12 @@ async function syncSessionFromAPI(sessionId: string): Promise<ServiceResult<Sess
       completedAt: apiSession.completedAt ? new Date(apiSession.completedAt) : undefined,
       endedAt: apiSession.endedAt ? new Date(apiSession.endedAt) : undefined,
       startedAt: (apiSession.startedAt ?? apiSession.started_at) ? new Date(apiSession.startedAt ?? apiSession.started_at) : undefined,
+      monitoringEnabled,
+      monitoringStartedAt: (apiSession.monitoringStartedAt ?? apiSession.monitoring_started_at) ? new Date(apiSession.monitoringStartedAt ?? apiSession.monitoring_started_at) : undefined,
+      lastLocationAt: (apiSession.lastLocationAt ?? apiSession.last_location_at) ? new Date(apiSession.lastLocationAt ?? apiSession.last_location_at) : undefined,
+      lastAudioSignalAt: (apiSession.lastAudioSignalAt ?? apiSession.last_audio_signal_at) ? new Date(apiSession.lastAudioSignalAt ?? apiSession.last_audio_signal_at) : undefined,
+      gpsTrackingEnabled: apiSession.gpsTrackingEnabled ?? apiSession.gps_tracking_enabled ?? monitoringEnabled ?? undefined,
+      cryDetectionEnabled: apiSession.cryDetectionEnabled ?? apiSession.cry_detection_enabled ?? monitoringEnabled ?? undefined,
       createdAt: new Date(apiSession.createdAt),
       updatedAt: new Date(apiSession.updatedAt),
     };
@@ -401,9 +412,15 @@ export type SessionStatusFilter = Session['status'] | string;
 export async function getUserSessions(
   userId: string,
   role: 'parent' | 'sitter',
-  status?: SessionStatusFilter
+  status?: SessionStatusFilter,
+  options?: { forceRefresh?: boolean }
 ): Promise<ServiceResult<Session[]>> {
   try {
+    // When forceRefresh (e.g. Track screen), skip cache and always fetch from API
+    if (options?.forceRefresh) {
+      return syncSessionsFromAPI(userId, role, status);
+    }
+
     // Try AsyncStorage first (instant UI)
     try {
       const { getAll, STORAGE_KEYS } = await import('./local-storage.service');
@@ -422,27 +439,34 @@ export async function getUserSessions(
         }
         
         if (userSessions.length > 0) {
-          const sessions: Session[] = userSessions.map((s: any) => ({
-            id: s.id,
-            parentId: s.parentId,
-            sitterId: s.sitterId || '',
-            childId: s.childId,
-            childIds: s.childIds || (s.child_ids ? (Array.isArray(s.child_ids) ? s.child_ids : JSON.parse(s.child_ids)) : undefined),
-            status: s.status,
-            startTime: new Date(s.startTime || s.createdAt || Date.now()),
-            endTime: s.endTime ? new Date(s.endTime) : undefined,
-            location: s.location,
-            hourlyRate: s.hourlyRate,
-            totalAmount: s.totalAmount,
-            paymentStatus: s.paymentStatus ?? s.payment_status,
-            estimatedAmount: s.estimatedAmount ?? s.estimated_amount,
-            notes: s.notes,
-            searchScope: s.searchScope || s.search_scope,
-            maxDistanceKm: s.maxDistanceKm || s.max_distance_km,
-            timeSlots: s.timeSlots || (s.time_slots ? (Array.isArray(s.time_slots) ? s.time_slots : JSON.parse(s.time_slots)) : undefined),
-            createdAt: new Date(s.createdAt || Date.now()),
-            updatedAt: new Date(s.updatedAt || Date.now()),
-          }));
+          const sessions: Session[] = userSessions.map((s: any) => {
+            const monitoringEnabled = (s.monitoringEnabled ?? s.monitoring_enabled) ?? undefined;
+            return {
+              id: s.id,
+              parentId: s.parentId,
+              sitterId: s.sitterId || '',
+              childId: s.childId,
+              childIds: s.childIds || (s.child_ids ? (Array.isArray(s.child_ids) ? s.child_ids : JSON.parse(s.child_ids)) : undefined),
+              status: s.status,
+              startTime: new Date(s.startTime || s.createdAt || Date.now()),
+              endTime: s.endTime ? new Date(s.endTime) : undefined,
+              location: s.location,
+              hourlyRate: s.hourlyRate,
+              totalAmount: s.totalAmount,
+              paymentStatus: s.paymentStatus ?? s.payment_status,
+              estimatedAmount: s.estimatedAmount ?? s.estimated_amount,
+              notes: s.notes,
+              searchScope: s.searchScope || s.search_scope,
+              maxDistanceKm: s.maxDistanceKm || s.max_distance_km,
+              timeSlots: s.timeSlots || (s.time_slots ? (Array.isArray(s.time_slots) ? s.time_slots : JSON.parse(s.time_slots)) : undefined),
+              monitoringEnabled,
+              monitoringStartedAt: (s.monitoringStartedAt ?? s.monitoring_started_at) ? new Date(s.monitoringStartedAt ?? s.monitoring_started_at) : undefined,
+              gpsTrackingEnabled: s.gpsTrackingEnabled ?? s.gps_tracking_enabled ?? monitoringEnabled ?? undefined,
+              cryDetectionEnabled: s.cryDetectionEnabled ?? s.cry_detection_enabled ?? monitoringEnabled ?? undefined,
+              createdAt: new Date(s.createdAt || Date.now()),
+              updatedAt: new Date(s.updatedAt || Date.now()),
+            };
+          });
           console.log(`✅ Loaded ${sessions.length} sessions from AsyncStorage (instant)`);
           
           // Sync from API in background (non-blocking)
@@ -484,37 +508,42 @@ async function syncSessionsFromAPI(
       return result;
     }
 
-    const sessions: Session[] = (result.data || []).map((apiSession: any) => ({
-      id: apiSession.id,
-      parentId: apiSession.parentId,
-      sitterId: apiSession.sitterId || '',
-      childId: apiSession.childId,
-      childIds: parseChildIds(apiSession),
-      status: apiSession.status,
-      startTime: new Date(apiSession.startTime),
-      endTime: apiSession.endTime ? new Date(apiSession.endTime) : undefined,
-      location: apiSession.location,
-      hourlyRate: apiSession.hourlyRate,
-      totalAmount: apiSession.totalAmount,
-      paymentStatus: apiSession.paymentStatus ?? apiSession.payment_status,
-      estimatedAmount: apiSession.estimatedAmount ?? apiSession.estimated_amount,
-      notes: apiSession.notes,
-      searchScope: apiSession.searchScope || apiSession.search_scope,
-      maxDistanceKm: apiSession.maxDistanceKm || apiSession.max_distance_km,
-      timeSlots: parseTimeSlots(apiSession),
-      cancelledAt: apiSession.cancelledAt ? new Date(apiSession.cancelledAt) : undefined,
-      cancelledBy: apiSession.cancelledBy,
-      cancellationReason: apiSession.cancellationReason,
-      completedAt: apiSession.completedAt ? new Date(apiSession.completedAt) : undefined,
-      endedAt: apiSession.endedAt ? new Date(apiSession.endedAt) : undefined,
-      startedAt: (apiSession.startedAt ?? apiSession.started_at) ? new Date(apiSession.startedAt ?? apiSession.started_at) : undefined,
-      monitoringEnabled: (apiSession.monitoringEnabled ?? apiSession.monitoring_enabled) ?? undefined,
-      monitoringStartedAt: (apiSession.monitoringStartedAt ?? apiSession.monitoring_started_at) ? new Date(apiSession.monitoringStartedAt ?? apiSession.monitoring_started_at) : undefined,
-      lastLocationAt: (apiSession.lastLocationAt ?? apiSession.last_location_at) ? new Date(apiSession.lastLocationAt ?? apiSession.last_location_at) : undefined,
-      lastAudioSignalAt: (apiSession.lastAudioSignalAt ?? apiSession.last_audio_signal_at) ? new Date(apiSession.lastAudioSignalAt ?? apiSession.last_audio_signal_at) : undefined,
-      createdAt: new Date(apiSession.createdAt),
-      updatedAt: new Date(apiSession.updatedAt),
-    }));
+    const sessions: Session[] = (result.data || []).map((apiSession: any) => {
+      const monitoringEnabled = (apiSession.monitoringEnabled ?? apiSession.monitoring_enabled) ?? undefined;
+      return {
+        id: apiSession.id,
+        parentId: apiSession.parentId,
+        sitterId: apiSession.sitterId || '',
+        childId: apiSession.childId,
+        childIds: parseChildIds(apiSession),
+        status: apiSession.status,
+        startTime: new Date(apiSession.startTime),
+        endTime: apiSession.endTime ? new Date(apiSession.endTime) : undefined,
+        location: apiSession.location,
+        hourlyRate: apiSession.hourlyRate,
+        totalAmount: apiSession.totalAmount,
+        paymentStatus: apiSession.paymentStatus ?? apiSession.payment_status,
+        estimatedAmount: apiSession.estimatedAmount ?? apiSession.estimated_amount,
+        notes: apiSession.notes,
+        searchScope: apiSession.searchScope || apiSession.search_scope,
+        maxDistanceKm: apiSession.maxDistanceKm || apiSession.max_distance_km,
+        timeSlots: parseTimeSlots(apiSession),
+        cancelledAt: apiSession.cancelledAt ? new Date(apiSession.cancelledAt) : undefined,
+        cancelledBy: apiSession.cancelledBy,
+        cancellationReason: apiSession.cancellationReason,
+        completedAt: apiSession.completedAt ? new Date(apiSession.completedAt) : undefined,
+        endedAt: apiSession.endedAt ? new Date(apiSession.endedAt) : undefined,
+        startedAt: (apiSession.startedAt ?? apiSession.started_at) ? new Date(apiSession.startedAt ?? apiSession.started_at) : undefined,
+        monitoringEnabled,
+        monitoringStartedAt: (apiSession.monitoringStartedAt ?? apiSession.monitoring_started_at) ? new Date(apiSession.monitoringStartedAt ?? apiSession.monitoring_started_at) : undefined,
+        lastLocationAt: (apiSession.lastLocationAt ?? apiSession.last_location_at) ? new Date(apiSession.lastLocationAt ?? apiSession.last_location_at) : undefined,
+        lastAudioSignalAt: (apiSession.lastAudioSignalAt ?? apiSession.last_audio_signal_at) ? new Date(apiSession.lastAudioSignalAt ?? apiSession.last_audio_signal_at) : undefined,
+        gpsTrackingEnabled: apiSession.gpsTrackingEnabled ?? apiSession.gps_tracking_enabled ?? monitoringEnabled ?? undefined,
+        cryDetectionEnabled: apiSession.cryDetectionEnabled ?? apiSession.cry_detection_enabled ?? monitoringEnabled ?? undefined,
+        createdAt: new Date(apiSession.createdAt),
+        updatedAt: new Date(apiSession.updatedAt),
+      };
+    });
 
     // Save to AsyncStorage and remove deleted sessions
     try {
@@ -701,6 +730,7 @@ export async function setSessionMonitoringEnabled(
     if (!result.success) return result;
 
     const apiSession = result.data;
+    const mon = (apiSession.monitoringEnabled ?? apiSession.monitoring_enabled) ?? undefined;
     const session: Session = {
       id: apiSession.id,
       parentId: apiSession.parentId,
@@ -725,10 +755,12 @@ export async function setSessionMonitoringEnabled(
       cancellationReason: apiSession.cancellationReason,
       completedAt: apiSession.completedAt ? new Date(apiSession.completedAt) : undefined,
       startedAt: (apiSession.startedAt ?? apiSession.started_at) ? new Date(apiSession.startedAt ?? apiSession.started_at) : undefined,
-      monitoringEnabled: (apiSession.monitoringEnabled ?? apiSession.monitoring_enabled) ?? undefined,
+      monitoringEnabled: mon,
       monitoringStartedAt: (apiSession.monitoringStartedAt ?? apiSession.monitoring_started_at) ? new Date(apiSession.monitoringStartedAt ?? apiSession.monitoring_started_at) : undefined,
       lastLocationAt: (apiSession.lastLocationAt ?? apiSession.last_location_at) ? new Date(apiSession.lastLocationAt ?? apiSession.last_location_at) : undefined,
       lastAudioSignalAt: (apiSession.lastAudioSignalAt ?? apiSession.last_audio_signal_at) ? new Date(apiSession.lastAudioSignalAt ?? apiSession.last_audio_signal_at) : undefined,
+      gpsTrackingEnabled: apiSession.gpsTrackingEnabled ?? apiSession.gps_tracking_enabled ?? mon ?? undefined,
+      cryDetectionEnabled: apiSession.cryDetectionEnabled ?? apiSession.cry_detection_enabled ?? mon ?? undefined,
       createdAt: new Date(apiSession.createdAt),
       updatedAt: new Date(apiSession.updatedAt),
     };
@@ -740,8 +772,9 @@ export async function setSessionMonitoringEnabled(
 }
 
 /**
- * End session (sitter or admin). POST /api/sessions/{id}/end.
- * Returns updated session. Parent cannot end (backend returns 403).
+ * End session (parent or admin). POST /api/sessions/{id}/end.
+ * Parent: backend charges for time used, then sets status completed.
+ * Admin: force-ends without payment. Sitter cannot call this; use requestSessionEnd.
  */
 export async function endSession(sessionId: string): Promise<ServiceResult<Session>> {
   try {

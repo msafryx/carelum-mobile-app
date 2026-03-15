@@ -12,6 +12,8 @@ import {
   ActivityIndicator,
   Dimensions,
   Platform,
+  Linking,
+  Alert,
 } from 'react-native';
 import { useTheme } from '@/src/components/ui/ThemeProvider';
 import { Ionicons } from '@expo/vector-icons';
@@ -164,6 +166,19 @@ export default function EnhancedGPSMap({
       );
     }
     return total;
+  };
+
+  const openInMaps = (latitude: number, longitude: number) => {
+    const url = Platform.select({
+      ios: `maps:?q=${latitude},${longitude}`,
+      android: `geo:${latitude},${longitude}?q=${latitude},${longitude}`,
+      default: `https://www.google.com/maps?q=${latitude},${longitude}`,
+    });
+    Linking.openURL(url).catch(() => {
+      Linking.openURL(`https://www.google.com/maps?q=${latitude},${longitude}`).catch(() =>
+        Alert.alert('Cannot open maps', 'No map app available.')
+      );
+    });
   };
 
   if (!mapReady) {
@@ -324,35 +339,68 @@ export default function EnhancedGPSMap({
               : null
           )
         ) : (
-          /* Fallback - Show location data without map (web or when react-native-maps unavailable) */
+          /* Fallback - Single combined card: heading like other cards, compact "Tracking Active" */
           <>
-            <View style={styles.header}>
-              <View style={styles.headerLeft}>
-                <Ionicons name="location" size={20} color={colors.primary} />
-                <Text style={[styles.title, { color: colors.text }]}>Location Tracking</Text>
-              </View>
-              <View style={[styles.statusIndicator, { backgroundColor: isTracking ? colors.success : colors.border }]}>
-                <Text style={[styles.statusText, { color: colors.white }]}>
-                  {isTracking ? 'Active' : 'Inactive'}
-                </Text>
-              </View>
+            <View style={styles.infoHeader}>
+              <Ionicons name="location" size={20} color={colors.primary} />
+              <Text style={[styles.infoTitle, { color: colors.text }]}>Location Tracking</Text>
             </View>
-            <View style={[styles.mapContainer, { backgroundColor: colors.backgroundSecondary, borderColor: colors.border }]}>
+            <View style={[styles.statusIndicatorCompact, { backgroundColor: isTracking ? colors.success : colors.border }]}>
+              <View style={[styles.statusDot, { backgroundColor: isTracking ? colors.white : colors.textSecondary }]} />
+              <Text style={[styles.statusText, { color: isTracking ? colors.white : colors.text }]}>
+                {isTracking ? 'Tracking Active' : 'Tracking Inactive'}
+              </Text>
+            </View>
+            <View style={[styles.mapContainerFallback, { backgroundColor: colors.backgroundSecondary, borderColor: colors.border }]}>
               <View style={styles.mapPlaceholder}>
-                <Ionicons name="map" size={48} color={colors.textSecondary} />
-                <Text style={[styles.mapText, { color: colors.textSecondary }]}>
-                  {Platform.OS === 'web' ? 'Map View (Native Only)' : 'Map View Unavailable'}
+                <Ionicons name="map-outline" size={40} color={colors.textSecondary} />
+                <Text style={[styles.mapText, { color: colors.text }]}>
+                  {Platform.OS === 'web' ? 'Map View (Native Only)' : 'In-app map unavailable'}
+                </Text>
+                <Text style={[styles.mapSubtext, { color: colors.textSecondary }]}>
+                  View this location in your maps app
                 </Text>
                 {currentLocation && (
                   <>
-                    <Text style={[styles.coordinatesText, { color: colors.textSecondary }]}>
-                      {currentLocation.latitude.toFixed(6)}, {currentLocation.longitude.toFixed(6)}
-                    </Text>
-                    {locationHistory.length > 0 && (
-                      <Text style={[styles.historyText, { color: colors.textSecondary }]}>
-                        {locationHistory.length} location points tracked
-                      </Text>
-                    )}
+                    <TouchableOpacity
+                      style={[styles.openMapsButton, { backgroundColor: colors.primary }]}
+                      onPress={() => openInMaps(currentLocation.latitude, currentLocation.longitude)}
+                    >
+                      <Ionicons name="map" size={20} color="#fff" />
+                      <Text style={styles.openMapsButtonText}>Open in Maps</Text>
+                    </TouchableOpacity>
+                    <View style={[styles.combinedDetails, { borderTopColor: colors.border }]}>
+                      <View style={styles.infoRow}>
+                        <Text style={[styles.infoLabel, { color: colors.textSecondary }]}>Coordinates:</Text>
+                        <Text style={[styles.infoValue, { color: colors.text }]} numberOfLines={1}>
+                          {currentLocation.latitude.toFixed(6)}, {currentLocation.longitude.toFixed(6)}
+                        </Text>
+                      </View>
+                      <View style={styles.infoRow}>
+                        <Text style={[styles.infoLabel, { color: colors.textSecondary }]}>Last Update:</Text>
+                        <Text style={[styles.infoValue, { color: colors.text }]}>
+                          {formatDistanceToNow(currentLocation.timestamp, { addSuffix: true })}
+                        </Text>
+                      </View>
+                      {currentLocation.accuracy && (
+                        <View style={styles.infoRow}>
+                          <Text style={[styles.infoLabel, { color: colors.textSecondary }]}>Accuracy:</Text>
+                          <Text style={[styles.infoValue, { color: colors.text }]}>{currentLocation.accuracy.toFixed(0)} m</Text>
+                        </View>
+                      )}
+                      {locationHistory.length > 0 && (
+                        <>
+                          <View style={styles.infoRow}>
+                            <Text style={[styles.infoLabel, { color: colors.textSecondary }]}>Total Distance:</Text>
+                            <Text style={[styles.infoValue, { color: colors.text }]}>{(getTotalDistance() / 1000).toFixed(2)} km</Text>
+                          </View>
+                          <View style={styles.infoRow}>
+                            <Text style={[styles.infoLabel, { color: colors.textSecondary }]}>Location Points:</Text>
+                            <Text style={[styles.infoValue, { color: colors.text }]}>{locationHistory.length}</Text>
+                          </View>
+                        </>
+                      )}
+                    </View>
                   </>
                 )}
               </View>
@@ -360,98 +408,84 @@ export default function EnhancedGPSMap({
           </>
         )}
 
-        {/* Status Overlay */}
-        <View style={[styles.statusOverlay, { backgroundColor: colors.white }]}>
-          <View style={styles.statusRow}>
-            <View
-              style={[
-                styles.statusIndicator,
-                { backgroundColor: isTracking ? colors.success : colors.border },
-              ]}
-            >
+        {/* Status Overlay - only when map is shown (fallback has single indicator in header) */}
+        {Platform.OS !== 'web' && mapComponentsLoaded && MapView && (
+          <View style={[styles.statusOverlay, { backgroundColor: colors.white }]}>
+            <View style={styles.statusRow}>
               <View
                 style={[
-                  styles.statusDot,
-                  { backgroundColor: isTracking ? colors.white : colors.textSecondary },
-                ]}
-              />
-              <Text
-                style={[
-                  styles.statusText,
-                  { color: isTracking ? colors.white : colors.text },
+                  styles.statusIndicatorCompact,
+                  { backgroundColor: isTracking ? colors.success : colors.border },
                 ]}
               >
-                {isTracking ? 'Tracking Active' : 'Tracking Inactive'}
-              </Text>
+                <View
+                  style={[
+                    styles.statusDot,
+                    { backgroundColor: isTracking ? colors.white : colors.textSecondary },
+                  ]}
+                />
+                <Text
+                  style={[
+                    styles.statusText,
+                    { color: isTracking ? colors.white : colors.text },
+                  ]}
+                >
+                  {isTracking ? 'Tracking Active' : 'Tracking Inactive'}
+                </Text>
+              </View>
+              {currentLocation?.accuracy && (
+                <Text style={[styles.accuracyText, { color: colors.textSecondary }]}>
+                  ±{currentLocation.accuracy.toFixed(0)}m
+                </Text>
+              )}
             </View>
-            {currentLocation?.accuracy && (
-              <Text style={[styles.accuracyText, { color: colors.textSecondary }]}>
-                ±{currentLocation.accuracy.toFixed(0)}m
-              </Text>
-            )}
           </View>
-        </View>
+        )}
+        {/* When map is shown: add View in Maps + details inside this card */}
+        {currentLocation && Platform.OS !== 'web' && mapComponentsLoaded && MapView && (
+          <View style={[styles.inCardDetails, { borderTopColor: colors.border }]}>
+            <TouchableOpacity
+              style={[styles.viewInMapsButtonTop, { backgroundColor: colors.primary + '18', borderColor: colors.primary }]}
+              onPress={() => openInMaps(currentLocation.latitude, currentLocation.longitude)}
+            >
+              <Ionicons name="map" size={20} color={colors.primary} />
+              <Text style={[styles.viewInMapsButtonTopText, { color: colors.primary }]}>View in Maps</Text>
+            </TouchableOpacity>
+            <View style={styles.infoContent}>
+              <View style={styles.infoRow}>
+                <Text style={[styles.infoLabel, { color: colors.textSecondary }]}>Coordinates:</Text>
+                <Text style={[styles.infoValue, { color: colors.text }]} numberOfLines={1}>
+                  {currentLocation.latitude.toFixed(6)}, {currentLocation.longitude.toFixed(6)}
+                </Text>
+              </View>
+              <View style={styles.infoRow}>
+                <Text style={[styles.infoLabel, { color: colors.textSecondary }]}>Last Update:</Text>
+                <Text style={[styles.infoValue, { color: colors.text }]}>
+                  {formatDistanceToNow(currentLocation.timestamp, { addSuffix: true })}
+                </Text>
+              </View>
+              {currentLocation.accuracy && (
+                <View style={styles.infoRow}>
+                  <Text style={[styles.infoLabel, { color: colors.textSecondary }]}>Accuracy:</Text>
+                  <Text style={[styles.infoValue, { color: colors.text }]}>{currentLocation.accuracy.toFixed(0)} m</Text>
+                </View>
+              )}
+              {locationHistory.length > 0 && (
+                <>
+                  <View style={styles.infoRow}>
+                    <Text style={[styles.infoLabel, { color: colors.textSecondary }]}>Total Distance:</Text>
+                    <Text style={[styles.infoValue, { color: colors.text }]}>{(getTotalDistance() / 1000).toFixed(2)} km</Text>
+                  </View>
+                  <View style={styles.infoRow}>
+                    <Text style={[styles.infoLabel, { color: colors.textSecondary }]}>Location Points:</Text>
+                    <Text style={[styles.infoValue, { color: colors.text }]}>{locationHistory.length}</Text>
+                  </View>
+                </>
+              )}
+            </View>
+          </View>
+        )}
       </Card>
-
-      {/* Location Info */}
-      {currentLocation && (
-        <Card style={styles.infoCard}>
-          <View style={styles.infoHeader}>
-            <Ionicons name="location" size={20} color={colors.primary} />
-            <Text style={[styles.infoTitle, { color: colors.text }]}>
-              Current Location
-            </Text>
-          </View>
-          <View style={styles.infoContent}>
-            <View style={styles.infoRow}>
-              <Text style={[styles.infoLabel, { color: colors.textSecondary }]}>
-                Coordinates:
-              </Text>
-              <Text style={[styles.infoValue, { color: colors.text }]}>
-                {currentLocation.latitude.toFixed(6)}, {currentLocation.longitude.toFixed(6)}
-              </Text>
-            </View>
-            <View style={styles.infoRow}>
-              <Text style={[styles.infoLabel, { color: colors.textSecondary }]}>
-                Last Update:
-              </Text>
-              <Text style={[styles.infoValue, { color: colors.text }]}>
-                {formatDistanceToNow(currentLocation.timestamp, { addSuffix: true })}
-              </Text>
-            </View>
-            {currentLocation.accuracy && (
-              <View style={styles.infoRow}>
-                <Text style={[styles.infoLabel, { color: colors.textSecondary }]}>
-                  Accuracy:
-                </Text>
-                <Text style={[styles.infoValue, { color: colors.text }]}>
-                  {currentLocation.accuracy.toFixed(0)} meters
-                </Text>
-              </View>
-            )}
-            {locationHistory.length > 0 && (
-              <View style={styles.infoRow}>
-                <Text style={[styles.infoLabel, { color: colors.textSecondary }]}>
-                  Total Distance:
-                </Text>
-                <Text style={[styles.infoValue, { color: colors.text }]}>
-                  {(getTotalDistance() / 1000).toFixed(2)} km
-                </Text>
-              </View>
-            )}
-            {locationHistory.length > 0 && (
-              <View style={styles.infoRow}>
-                <Text style={[styles.infoLabel, { color: colors.textSecondary }]}>
-                  Location Points:
-                </Text>
-                <Text style={[styles.infoValue, { color: colors.text }]}>
-                  {locationHistory.length}
-                </Text>
-              </View>
-            )}
-          </View>
-        </Card>
-      )}
 
       {/* Location History List */}
       {locationHistory.length > 0 && (
@@ -512,6 +546,7 @@ export default function EnhancedGPSMap({
 const styles = StyleSheet.create({
   container: {
     gap: 16,
+    marginBottom: 20,
   },
   mapCard: {
     marginBottom: 0,
@@ -546,6 +581,62 @@ const styles = StyleSheet.create({
     width: '100%',
     height: 300,
   },
+  mapContainer: {
+    height: 220,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderRadius: 12,
+  },
+  mapContainerFallback: {
+    minHeight: 180,
+    paddingVertical: 20,
+    paddingHorizontal: 16,
+    borderWidth: 1,
+    borderRadius: 12,
+    overflow: 'visible',
+  },
+  mapPlaceholder: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: 8,
+    gap: 12,
+  },
+  mapText: {
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  mapSubtext: {
+    fontSize: 13,
+  },
+  mapPlaceholderDetails: {
+    marginTop: 4,
+    alignItems: 'center',
+    gap: 4,
+  },
+  coordinatesText: {
+    fontSize: 12,
+    fontFamily: 'monospace',
+  },
+  historyText: {
+    fontSize: 12,
+  },
+  openMapsButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 14,
+    paddingHorizontal: 24,
+    borderRadius: 12,
+    marginTop: 4,
+    minWidth: 200,
+  },
+  openMapsButtonText: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '600',
+  },
   statusOverlay: {
     position: 'absolute',
     bottom: 0,
@@ -567,6 +658,16 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 16,
     gap: 6,
+  },
+  statusIndicatorCompact: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 14,
+    gap: 6,
+    marginBottom: 12,
   },
   statusDot: {
     width: 8,
@@ -596,6 +697,18 @@ const styles = StyleSheet.create({
   infoContent: {
     gap: 8,
   },
+  combinedDetails: {
+    marginTop: 16,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    gap: 8,
+  },
+  inCardDetails: {
+    paddingTop: 12,
+    paddingHorizontal: 16,
+    paddingBottom: 16,
+    borderTopWidth: 1,
+  },
   infoRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -608,6 +721,34 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '500',
     fontFamily: 'monospace',
+  },
+  locationCardWithFAB: {},
+  viewInMapsButtonTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    marginBottom: 12,
+  },
+  viewInMapsButtonTopText: {
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  viewInMapsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+  },
+  viewInMapsText: {
+    fontSize: 14,
+    fontWeight: '600',
   },
   historyCard: {
     marginBottom: 0,
