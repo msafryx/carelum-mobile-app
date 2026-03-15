@@ -3,7 +3,7 @@
  * Shows session events from API. Parent/sitter see same timeline; admin sees admin actions too.
  */
 import React, { useEffect, useState } from 'react';
-import { View, StyleSheet, Text, ActivityIndicator } from 'react-native';
+import { View, StyleSheet, Text, ActivityIndicator, ScrollView } from 'react-native';
 import { useTheme } from '@/src/components/ui/ThemeProvider';
 import Card from '@/src/components/ui/Card';
 import { Ionicons } from '@expo/vector-icons';
@@ -133,10 +133,6 @@ export default function SessionTimeline({ session, role = 'parent' }: SessionTim
     );
   }
 
-  if (events.length === 0) {
-    return null;
-  }
-
   return (
     <Card style={styles.container}>
       <View style={styles.header}>
@@ -144,31 +140,46 @@ export default function SessionTimeline({ session, role = 'parent' }: SessionTim
         <Text style={[styles.title, { color: colors.text }]}>Session Timeline</Text>
       </View>
 
-      <View style={styles.timelineContainer}>
-        {events.map((event, index) => {
-          const isLast = index === events.length - 1;
-          const eventColor = getEventColor(event.type);
+      <ScrollView
+        style={styles.timelineScroll}
+        contentContainerStyle={events.length === 0 ? styles.timelineScrollContentEmpty : styles.timelineScrollContent}
+        showsVerticalScrollIndicator={true}
+        nestedScrollEnabled
+      >
+        {events.length === 0 ? (
+          <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
+            Session started, monitoring, and cry alerts will appear here.
+          </Text>
+        ) : (
+          <View style={styles.timelineContainer}>
+            {events.map((event, index) => {
+              const isLast = index === events.length - 1;
+              const eventColor = getEventColor(event.type);
 
-          return (
-            <View key={event.id} style={styles.timelineItem}>
-              <View style={styles.timelineLeft}>
-                <View style={[styles.iconContainer, { backgroundColor: eventColor + '20' }]}>
-                  <Ionicons name={event.icon} size={20} color={eventColor} />
+              return (
+                <View key={event.id} style={styles.timelineItem}>
+                  <View style={styles.timelineLeft}>
+                    <View style={[styles.iconContainer, { backgroundColor: eventColor + '20' }]}>
+                      <Ionicons name={event.icon} size={20} color={eventColor} />
+                    </View>
+                    {!isLast && <View style={[styles.timelineLine, { backgroundColor: colors.border }]} />}
+                  </View>
+                  <View style={styles.timelineContent}>
+                    <Text style={[styles.eventTitle, { color: colors.text }]}>
+                      {event.timeLabel} {event.title}
+                    </Text>
+                  </View>
                 </View>
-                {!isLast && <View style={[styles.timelineLine, { backgroundColor: colors.border }]} />}
-              </View>
-              <View style={styles.timelineContent}>
-                <Text style={[styles.eventTitle, { color: colors.text }]}>
-                  {event.timeLabel} {event.title}
-                </Text>
-              </View>
-            </View>
-          );
-        })}
-      </View>
+              );
+            })}
+          </View>
+        )}
+      </ScrollView>
     </Card>
   );
 }
+
+const TIMELINE_BODY_HEIGHT = 200;
 
 const styles = StyleSheet.create({
   container: {
@@ -178,15 +189,29 @@ const styles = StyleSheet.create({
     paddingVertical: 16,
     alignItems: 'center',
   },
+  emptyText: {
+    fontSize: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 4,
+  },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    marginBottom: 16,
+    marginBottom: 12,
   },
   title: {
     fontSize: 16,
     fontWeight: '600',
+  },
+  timelineScroll: {
+    height: TIMELINE_BODY_HEIGHT,
+  },
+  timelineScrollContent: {
+    paddingBottom: 16,
+  },
+  timelineScrollContentEmpty: {
+    paddingBottom: 8,
   },
   timelineContainer: {
     paddingLeft: 8,

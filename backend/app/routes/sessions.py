@@ -14,6 +14,16 @@ from app.utils.error_handler import handle_error, AppError
 from app.utils.database import get_supabase, get_supabase_with_auth
 
 
+def _get_supabase_service():
+    """Service-role client to bypass RLS (e.g. check parent payment_methods when sitter starts session)."""
+    url = os.getenv("SUPABASE_URL")
+    key = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_ANON_KEY")
+    if not url or not key:
+        return get_supabase()
+    from supabase import create_client
+    return create_client(url, key)
+
+
 def _session_scheduled_duration_hours(session_data: dict) -> float:
     """Compute scheduled duration in hours from time_slots or start_time/end_time."""
     time_slots = session_data.get("time_slots")
@@ -848,25 +858,44 @@ async def start_session(
                 message="Session is not ready to start",
                 status_code=400
             )
-        # When payment_pending: parent and sitter must have added accounts (parent: payment method, sitter: Connect already checked on accept)
+        # When payment_pending: parent must have added payment method. Use SERVICE ROLE client so RLS doesn't hide parent's row from sitter.
         parent_id = session_data.get("parent_id")
         if current_status == "payment_pending" and parent_id:
-            pm = supabase.table("payment_methods").select("stripe_customer_id").eq("parent_id", parent_id).execute()
-            if not pm.data or not pm.data[0].get("stripe_customer_id"):
-                raise AppError(
-                    code="PAYMENT_REQUIRED",
-                    message="Parent must add a payment method in Profile before the session can start. You will be charged when the parent ends the session.",
-                    status_code=400
+            service_role_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+            if not service_role_key:
+                # Without service role key we cannot read parent's payment_methods (RLS blocks). Allow start so dev/testing works.
+                import logging
+                logging.getLogger(__name__).warning(
+                    "SUPABASE_SERVICE_ROLE_KEY not set: cannot verify parent payment. Allowing sitter to start. Set SUPABASE_SERVICE_ROLE_KEY in backend .env to enforce check."
                 )
+            else:
+                sb_service = _get_supabase_service()
+                if sb_service:
+                    pm = sb_service.table("payment_methods").select("stripe_customer_id").eq("parent_id", parent_id).execute()
+                    if not pm.data or not pm.data[0].get("stripe_customer_id"):
+                        raise AppError(
+                            code="PAYMENT_REQUIRED",
+                            message="Parent must add a payment method in Profile before the session can start. You will be charged when the parent ends the session.",
+                            status_code=400
+                        )
+                else:
+                    raise AppError(
+                        code="PAYMENT_REQUIRED",
+                        message="Parent must add a payment method in Profile before the session can start.",
+                        status_code=400
+                    )
 
         now_iso = datetime.utcnow().isoformat()
         update_data = {
             "status": "active",
             "started_at": now_iso,
             "updated_at": now_iso,
+            "monitoring_enabled": True,
+            "monitoring_started_at": now_iso,
         }
         supabase.table("sessions").update(update_data).eq("id", session_id).execute()
         _create_session_event(supabase, session_id, "session_started", current_user.id)
+        _create_session_event(supabase, session_id, "monitoring_enabled", current_user.id)
         # Notify parent that sitter has started the session
         parent_id = session_data.get("parent_id")
         if parent_id:
@@ -1000,47 +1029,52 @@ async def end_session(
 
         now_iso = datetime.utcnow().isoformat()
         now_dt = datetime.utcnow()
-        update_data = {
-            "status": "completed",
-            "completed_at": now_iso,
-            "ended_at": now_iso,
-            "updated_at": now_iso,
-            "monitoring_enabled": False,
-        }
-        if not session_data.get("end_time"):
-            update_data["end_time"] = now_iso
 
-        # Prorated amount: charge only for time actually used (started_at → now)
+        # Prorated amount: charge only for time actually used (started_at → now); else full estimated
         hourly_rate = session_data.get("hourly_rate")
         started_at = session_data.get("started_at")
         estimated = session_data.get("estimated_amount")
+        total_amount = None
         if hourly_rate is not None and started_at:
             try:
                 start_dt = datetime.fromisoformat(str(started_at).replace("Z", "+00:00"))
                 hours_used = max(0.0, (now_dt - start_dt).total_seconds() / 3600.0)
-                # Minimum charge 15 minutes; cap at estimated (authorized) amount
                 hours_used = max(0.25, round(hours_used, 2))
                 total_amount = round(float(hourly_rate) * hours_used, 2)
                 if estimated is not None:
                     total_amount = min(total_amount, float(estimated))
                 if total_amount < 0.50:
                     total_amount = 0.50
-                update_data["total_amount"] = total_amount
             except Exception:
                 if estimated is not None:
-                    update_data["total_amount"] = float(estimated)
-        elif estimated is not None:
-            update_data["total_amount"] = float(estimated)
+                    total_amount = float(estimated)
+        if total_amount is None and estimated is not None:
+            total_amount = float(estimated)
+        if total_amount is None or total_amount < 0.01:
+            total_amount = 0.50
+
+        # Charge parent first; session ends only after successful payment
+        from app.routes.payments import charge_parent_before_session_end
+        charged, amount_final, pay_err = charge_parent_before_session_end(session_id, total_amount, session_data)
+        if not charged:
+            raise AppError(
+                code="PAYMENT_REQUIRED",
+                message=pay_err or "Payment is required to end the session. Add a payment method in Profile and try again.",
+                status_code=400,
+            )
+
+        update_data = {
+            "status": "completed",
+            "completed_at": now_iso,
+            "ended_at": now_iso,
+            "updated_at": now_iso,
+            "monitoring_enabled": False,
+            "total_amount": total_amount,
+        }
+        if not session_data.get("end_time"):
+            update_data["end_time"] = now_iso
 
         supabase.table("sessions").update(update_data).eq("id", session_id).execute()
-
-        # Auto-capture payment for actual time used (prorated); sitter payout is created inside
-        try:
-            from app.routes.payments import do_capture_after_session_end
-            do_capture_after_session_end(session_id)
-        except Exception as cap_err:
-            import logging
-            logging.getLogger(__name__).warning("Auto-capture after end_session failed: %s", cap_err)
 
         # Timeline event: session_completed (triggered_by parent/admin)
         _create_session_event(supabase, session_id, "session_completed", current_user.id)

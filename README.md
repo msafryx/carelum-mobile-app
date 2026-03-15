@@ -31,12 +31,15 @@ A cross-platform mobile app and API for connecting parents with verified babysit
 
 3. **Configure environment variables**
 
-   **Frontend** - Create a `.env` file in the project root or update `app.config.js`:
+   **Frontend** - Create a `.env` file in the **project root** (same folder as `app.config.js`). Copy from `.env.example` and fill in values:
    ```env
    EXPO_PUBLIC_SUPABASE_URL=your_supabase_url
    EXPO_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
    EXPO_PUBLIC_API_URL=http://localhost:8000
+   EXPO_PUBLIC_AI_SERVICE_URL=http://localhost:8001
    ```
+   - **EXPO_PUBLIC_API_URL** – main backend (sessions, users, etc.). Used by `api-base.service.ts`, `user-api.service.ts`, `api.service.ts`, `admin-api.service.ts`, and `app.config.js`.
+   - **EXPO_PUBLIC_AI_SERVICE_URL** – cry detection AI (predict endpoint). Used by `api.service.ts`; if unset, the app falls back to `EXPO_PUBLIC_API_URL`. On a physical device, use your computer’s LAN IP (e.g. `http://192.168.1.50:8001`). On a physical phone: find your computer LAN IP with `ip addr` / `ifconfig` / `ipconfig`; run `cd ai_service && uvicorn app:app --port 8001`; set `EXPO_PUBLIC_AI_SERVICE_URL=http://YOUR_LAN_IP:8001` in `.env`; then `npx expo start -c` and reload the app.
 
    **Backend** - Create a `.env` file in the `backend/` directory:
    ```env

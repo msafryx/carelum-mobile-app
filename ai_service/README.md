@@ -31,6 +31,8 @@ Microservice that classifies baby cry audio using the [foduucom/baby-cry-classif
 
    **When using with Carelum backend:** The main backend runs on port 8000, so run the AI service on a different port (e.g. 8001) and set `AI_SERVICE_URL=http://localhost:8001` in the backend `.env`.
 
+   **Mobile app (Cry Detection):** The Carelum app’s “Start Recording” / monitoring sends audio to this service. (1) Start the AI service: `uvicorn app:app --port 8000`. (2) If the AI service runs on a different port, set `EXPO_PUBLIC_AI_SERVICE_URL=http://localhost:8001` in the app’s `.env`. (3) When testing on a physical device, use your computer’s LAN IP, e.g. `EXPO_PUBLIC_AI_SERVICE_URL=http://192.168.1.10:8000`.
+
 ## API
 
 - **GET /health** – Health check.

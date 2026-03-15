@@ -54,17 +54,25 @@ async function apiRequest<T>(
   }
 }
 
+// AI service URL (can differ from main API when AI runs on e.g. 8001)
+const AI_SERVICE_URL = process.env.EXPO_PUBLIC_AI_SERVICE_URL || API_BASE_URL;
+
+/** Known cry-type labels from baby-cry-classification model (any of these = crying) */
+const CRY_TYPES = new Set(['hungry', 'tired', 'discomfort', 'belly pain', 'burping', 'belly_pain']);
+
 /**
- * Upload audio file for cry detection prediction
+ * Upload audio file for cry detection prediction.
+ * Calls ai_service POST /predict (field "file"); ai returns { cry_type: "hungry" | ... }.
+ * We map that to { label: 'crying'|'normal', score } for the app.
  */
 export async function predictCry(
   audioBlob: Blob
 ): Promise<ServiceResult<PredictResponse>> {
   try {
     const formData = new FormData();
-    formData.append('audio', audioBlob, 'audio.wav');
+    formData.append('file', audioBlob, 'audio.wav');
 
-    const url = `${API_BASE_URL}${API_ENDPOINTS.PREDICT}`;
+    const url = `${AI_SERVICE_URL}${API_ENDPOINTS.PREDICT}`;
     const response = await retryWithBackoff(async () => {
       return fetch(url, {
         method: 'POST',
@@ -81,12 +89,24 @@ export async function predictCry(
       };
     }
 
-    return { success: true, data };
+    // ai_service returns { cry_type: "hungry" } or { prediction, class }; normalize to app shape
+    const raw = (data.cry_type ?? data.prediction ?? data.class ?? '').toString().toLowerCase().replace(/\s+/g, ' ');
+    const isCrying = raw && (CRY_TYPES.has(raw) || CRY_TYPES.has(raw.replace(' ', '_')));
+    const mapped: PredictResponse = isCrying
+      ? { label: 'crying', score: 0.85 }
+      : { label: 'normal', score: 0.3 };
+
+    return { success: true, data: mapped };
   } catch (error: any) {
-    if (error.message?.includes('fetch') || error.message?.includes('network')) {
+    const message = error?.message ?? '';
+    if (message.includes('fetch') || message.includes('network') || message.includes('Network request failed')) {
+      const url = `${AI_SERVICE_URL}${API_ENDPOINTS.PREDICT}`;
       return {
         success: false,
-        error: handleNetworkError(error),
+        error: {
+          ...handleNetworkError(error),
+          message: `${message} (POST ${url})`,
+        },
       };
     }
     return {

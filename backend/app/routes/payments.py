@@ -1,6 +1,11 @@
 """
 Payment endpoints: Stripe customer, payment intent (manual capture), capture, webhook.
-Parent pays before session; payment is captured after session completion; sitter payout is separate (see sitters/connect).
+
+Payment flow:
+- Booking: Parent can book without paying if they have a payment method set up in Profile.
+- When sitter accepts: session goes to payment_pending; parent must have a payment method to start (charged when they end).
+- When parent ends session: they are charged (prorated for time used, or full amount); session completes only after successful payment.
+- Sitter payout is separate (see sitters/connect).
 """
 import os
 import logging
@@ -224,6 +229,104 @@ def _amount_to_cents(amount_decimal):
         rate = float(os.getenv("LKR_TO_USD_RATE", "320"))
         amount = amount / rate  # LKR -> USD
     return max(50, int(Decimal(str(amount)) * 100))
+
+
+def charge_parent_before_session_end(session_id: str, total_amount: float, session_data: dict):
+    """
+    Charge the parent for the session (prorated or full) BEFORE marking session completed.
+    Used when parent ends the session: payment must succeed before session ends.
+    Returns (True, amount_final) on success, (False, None, error_message) on failure.
+    """
+    stripe_obj = _stripe()
+    sb_service = _get_supabase_service()
+    if not stripe_obj or not sb_service:
+        return False, None, "Payment service is not configured."
+    if session_data.get("status") != "active":
+        return False, None, "Session is not active."
+    if not total_amount or float(total_amount) < 0.01:
+        return False, None, "No amount to charge."
+    amount_cents = _amount_to_cents(total_amount)
+    parent_id = session_data.get("parent_id")
+    if not parent_id:
+        return False, None, "Session has no parent."
+    pay_resp = sb_service.table("payments").select("*").eq("session_id", session_id).single().execute()
+    pay = pay_resp.data if pay_resp.data else None
+    # Path 1: already authorized — capture it (prorated)
+    if pay and pay.get("payment_status") == "authorized":
+        pid = pay.get("stripe_payment_intent_id")
+        if not pid:
+            return False, None, "No authorized payment found."
+        try:
+            pi = stripe_obj.PaymentIntent.retrieve(pid)
+            authorized = getattr(pi, "amount", None) or (pi.get("amount") if isinstance(pi, dict) else None)
+            if authorized is not None and amount_cents > int(authorized):
+                amount_cents = int(authorized)
+            if amount_cents < 50:
+                return False, None, "Amount too small to capture."
+            stripe_obj.PaymentIntent.capture(pid, amount_to_capture=amount_cents)
+        except Exception as e:
+            logger.exception("Capture failed: %s", e)
+            return False, None, str(e) or "Payment capture failed."
+        amount_final_val = amount_cents / 100.0
+        sb_service.table("payments").update({
+            "payment_status": "captured",
+            "amount_final": amount_final_val,
+            "updated_at": __import__("datetime").datetime.utcnow().isoformat(),
+        }).eq("session_id", session_id).execute()
+        _do_payout(stripe_obj, sb_service, session_id, session_data, amount_final_val)
+        return True, amount_final_val, None
+    # Path 2: charge parent's saved card (payment on end)
+    pm_row = sb_service.table("payment_methods").select("stripe_customer_id").eq("parent_id", parent_id).execute()
+    if not pm_row.data or not pm_row.data[0].get("stripe_customer_id"):
+        return False, None, "Add a payment method in Profile first. You will be charged when you end the session."
+    customer_id = pm_row.data[0]["stripe_customer_id"]
+    try:
+        pms = stripe_obj.PaymentMethod.list(customer=customer_id, type="card")
+        if not pms.data or len(pms.data) == 0:
+            return False, None, "Add a payment method in Profile first. You will be charged when you end the session."
+        payment_method_id = pms.data[0].id
+    except Exception as e:
+        logger.exception("List payment methods failed: %s", e)
+        return False, None, "Could not load payment method. Please try again or add a card in Profile."
+    try:
+        pi = stripe_obj.PaymentIntent.create(
+            amount=amount_cents,
+            currency="usd",
+            customer=customer_id,
+            payment_method=payment_method_id,
+            off_session=True,
+            confirm=True,
+            metadata={"session_id": session_id, "parent_id": parent_id},
+        )
+        if pi.status != "succeeded":
+            return False, None, "Payment did not complete. Please try again."
+    except Exception as e:
+        logger.exception("Charge on end failed: %s", e)
+        err_msg = str(e) if e else "Payment failed."
+        if "card" in err_msg.lower() or "declined" in err_msg.lower():
+            return False, None, "Your card was declined. Please update your payment method in Profile."
+        return False, None, err_msg or "Payment failed. Please add a payment method in Profile and try again."
+    amount_final_val = amount_cents / 100.0
+    if pay:
+        sb_service.table("payments").update({
+            "stripe_payment_intent_id": pi.id,
+            "payment_status": "captured",
+            "amount_estimated": float(total_amount),
+            "amount_final": amount_final_val,
+            "updated_at": __import__("datetime").datetime.utcnow().isoformat(),
+        }).eq("session_id", session_id).execute()
+    else:
+        sb_service.table("payments").insert({
+            "session_id": session_id,
+            "parent_id": parent_id,
+            "amount_estimated": float(total_amount),
+            "amount_final": amount_final_val,
+            "currency": "usd",
+            "stripe_payment_intent_id": pi.id,
+            "payment_status": "captured",
+        }).execute()
+    _do_payout(stripe_obj, sb_service, session_id, session_data, amount_final_val)
+    return True, amount_final_val, None
 
 
 def do_capture_after_session_end(session_id: str):

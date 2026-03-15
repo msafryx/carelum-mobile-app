@@ -5,6 +5,9 @@ import { useRealtimeSync } from '@/src/hooks/useRealtimeSync';
 import { Stack } from 'expo-router';
 import { useEffect } from 'react';
 
+// Stripe is not wrapped at root so Expo Go works (no OnrampSdk native module).
+// Payment sheet is lazy-loaded only in dev builds from the session screen.
+
 export default function RootLayout() {
   const { localDbReady, supabaseConfigured, error } = useDatabaseInit();
   
@@ -57,10 +60,6 @@ export default function RootLayout() {
     }
   }, [error]);
 
-  // NOTE: StripeProvider is NOT wrapped here so the app can still run in Expo Go
-  // without a custom dev client. When you are ready to integrate full Stripe
-  // Payment Sheet UI (requires native module support), wrap the app with
-  // StripeProvider here and run in a dev client / standalone build.
   return (
     <ThemeProvider>
       <ErrorBoundary>

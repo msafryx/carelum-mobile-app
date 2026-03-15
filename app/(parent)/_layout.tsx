@@ -94,6 +94,12 @@ function ParentLayoutTabs() {
           }}
         />
         <Tabs.Screen
+          name="track"
+          options={{
+            href: null, // Hide from tabs
+          }}
+        />
+        <Tabs.Screen
           name="session/[id]"
           options={{
             href: null, // Hide from tabs

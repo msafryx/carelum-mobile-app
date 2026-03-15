@@ -56,24 +56,46 @@ export async function recordAndDetectCry(
 ): Promise<ServiceResult<AudioLog>> {
   try {
     // 1. Upload audio to Storage
-    const audioUrl = await uploadFile(
-      `audio/sessions/${sessionId}/${Date.now()}.wav`,
-      audioBlob,
-      'audio/wav'
-    );
+    let audioUrl: Awaited<ReturnType<typeof uploadFile>>;
+    try {
+      audioUrl = await uploadFile(
+        `audio/sessions/${sessionId}/${Date.now()}.wav`,
+        audioBlob,
+        'audio/wav'
+      );
+    } catch (e: any) {
+      return {
+        success: false,
+        error: {
+          code: ErrorCode.UPLOAD_FAILED,
+          message: `Upload failed: ${e?.message ?? 'Network or storage error'}`,
+        },
+      };
+    }
 
     if (!audioUrl.success || !audioUrl.data) {
       return {
         success: false,
         error: {
           code: ErrorCode.UPLOAD_FAILED,
-          message: 'Failed to upload audio file',
+          message: audioUrl.error?.message ?? 'Failed to upload audio file',
         },
       };
     }
 
     // 2. Call AI prediction endpoint
-    const prediction = await predictCry(audioBlob);
+    let prediction: Awaited<ReturnType<typeof predictCry>>;
+    try {
+      prediction = await predictCry(audioBlob);
+    } catch (e: any) {
+      return {
+        success: false,
+        error: {
+          code: ErrorCode.UPLOAD_FAILED, // reuse or add PREDICTION_FAILED
+          message: `Prediction request failed: ${e?.message ?? 'Network request failed'}`,
+        },
+      };
+    }
 
     const audioLog: AudioLog = {
       sessionId,
@@ -91,20 +113,22 @@ export async function recordAndDetectCry(
         processedAt: new Date(),
       };
 
-      // 3. If crying detected, create alert
+      // 3. If crying detected, create alert (stored in DB; parent & sitter see it in session + Notifications/Track)
       if (prediction.data.label === 'crying' && prediction.data.score > 0.6) {
         const alertResult = await createCryDetectionAlert(
           sessionId,
           childId,
           parentId,
           sitterId,
-          'audio-log-id', // Will be updated after log is saved
+          'audio-log-id', // Placeholder until audio_log table is used
           prediction.data.score
         );
 
         if (alertResult.success && alertResult.data) {
           audioLog.alertSent = true;
           audioLog.alertSentAt = new Date();
+        } else if (!alertResult.success && alertResult.error) {
+          console.warn('[Cry detection] Alert could not be saved:', alertResult.error.message);
         }
       }
     }

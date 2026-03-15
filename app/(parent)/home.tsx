@@ -312,7 +312,7 @@ export default function ParentHomeScreen() {
           </TouchableOpacity>
           <TouchableOpacity
             style={[styles.quickButton, { backgroundColor: colors.primary }]}
-            onPress={() => {}}
+            onPress={() => router.push('/(parent)/track')}
           >
             <Text style={styles.quickText}>Track</Text>
           </TouchableOpacity>

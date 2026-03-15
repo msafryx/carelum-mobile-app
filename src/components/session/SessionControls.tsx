@@ -103,7 +103,8 @@ export default function SessionControls({
                 variant="outline"
                 disabled={isLoading}
                 loading={isLoading}
-                style={styles.button}
+                style={[styles.button, styles.endSessionButton, { borderColor: colors.error || '#dc2626', borderWidth: 2 }]}
+                textStyle={{ color: colors.error || '#dc2626', fontWeight: '600' }}
               />
             )}
 
@@ -167,6 +168,9 @@ const styles = StyleSheet.create({
   },
   button: {
     width: '100%',
+  },
+  endSessionButton: {
+    backgroundColor: 'transparent',
   },
   emergencyButton: {
     flexDirection: 'row',

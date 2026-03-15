@@ -14,10 +14,17 @@ import {
 } from 'react-native';
 import { useTheme } from '@/src/components/ui/ThemeProvider';
 import { Ionicons } from '@expo/vector-icons';
-import { Audio } from 'expo-av';
+import { setAudioModeAsync } from 'expo-av/build/Audio';
+import {
+  Recording,
+  RecordingOptionsPresets,
+  requestPermissionsAsync as requestAudioPermissionsAsync,
+} from 'expo-av/build/Audio/Recording';
 import Card from '@/src/components/ui/Card';
 import { recordAndDetectCry, AudioLog } from '@/src/services/monitoring.service';
 import { Alert as AlertType, getSessionAlerts } from '@/src/services/alert.service';
+import { readFileUriToBlob } from '@/src/utils/audioFileUtils';
+import { stopCurrentRecordingIfAny, setCurrentRecording } from '@/src/utils/audioRecordingSingleton';
 import { format, formatDistanceToNow } from 'date-fns';
 
 interface CryDetectionInterfaceProps {
@@ -27,6 +34,10 @@ interface CryDetectionInterfaceProps {
   sitterId: string;
   isEnabled: boolean;
   onToggle?: (enabled: boolean) => void;
+  /** When true, recording was started by "Start Monitoring" – show active state and hide Start button */
+  recordingStartedByMonitoring?: boolean;
+  /** Timestamp (ms) when session last sent audio to AI (for monitoring flow) – so user sees "audio transferred" */
+  lastChunkSentAtFromMonitoring?: number | null;
 }
 
 export default function CryDetectionInterface({
@@ -36,11 +47,18 @@ export default function CryDetectionInterface({
   sitterId,
   isEnabled,
   onToggle,
+  recordingStartedByMonitoring = false,
+  lastChunkSentAtFromMonitoring = null,
 }: CryDetectionInterfaceProps) {
   const { colors, spacing } = useTheme();
-  const [recording, setRecording] = useState<Audio.Recording | null>(null);
+  const [recording, setRecording] = useState<Recording | null>(null);
   const [isRecording, setIsRecording] = useState(false);
+  const effectivelyRecording = isRecording || recordingStartedByMonitoring;
   const [isProcessing, setIsProcessing] = useState(false);
+  const [lastChunkSentAt, setLastChunkSentAt] = useState<number | null>(null);
+  const [lastActivityAt, setLastActivityAt] = useState<number | null>(null); // set each tick so we never hang on "first clip"
+  const [chunksSentCount, setChunksSentCount] = useState(0);
+  const [, setTransferTick] = useState(0); // force re-render every 1s to update "X s ago"
   const [detectionHistory, setDetectionHistory] = useState<AudioLog[]>([]);
   const [recentAlerts, setRecentAlerts] = useState<AlertType[]>([]);
   const [currentDetection, setCurrentDetection] = useState<{
@@ -50,6 +68,7 @@ export default function CryDetectionInterface({
   } | null>(null);
   const [recordingDuration, setRecordingDuration] = useState(0);
   const [hasPermission, setHasPermission] = useState<boolean | null>(null);
+  const [lastSendError, setLastSendError] = useState<string | null>(null);
 
   useEffect(() => {
     checkPermissions();
@@ -71,9 +90,26 @@ export default function CryDetectionInterface({
     };
   }, [isRecording]);
 
+  // Update "Last sent X s ago" every second when recording
+  useEffect(() => {
+    if (!effectivelyRecording) return;
+    const t = setInterval(() => setTransferTick((n) => n + 1), 1000);
+    return () => clearInterval(t);
+  }, [effectivelyRecording]);
+
+  // On unmount, stop recording so expo-av singleton is cleared
+  useEffect(() => {
+    return () => {
+      if (recording) {
+        recording.stopAndUnloadAsync().catch(() => {});
+        setCurrentRecording(null);
+      }
+    };
+  }, [recording]);
+
   const checkPermissions = async () => {
     try {
-      const { status } = await Audio.requestPermissionsAsync();
+      const { status } = await requestAudioPermissionsAsync();
       setHasPermission(status === 'granted');
     } catch (err) {
       setHasPermission(false);
@@ -99,6 +135,8 @@ export default function CryDetectionInterface({
     }
   };
 
+  const recordingLoopRef = React.useRef<{ cancelled: boolean }>({ cancelled: false });
+
   const startRecording = async () => {
     if (!hasPermission) {
       Alert.alert(
@@ -110,98 +148,148 @@ export default function CryDetectionInterface({
     }
 
     try {
-      await Audio.setAudioModeAsync({
+      await setAudioModeAsync({
         allowsRecordingIOS: true,
         playsInSilentModeIOS: true,
       });
 
-      const { recording: newRecording } = await Audio.Recording.createAsync(
-        Audio.RecordingOptionsPresets.HIGH_QUALITY
-      );
+      await stopCurrentRecordingIfAny();
+      recordingLoopRef.current = { cancelled: false };
+      setLastSendError(null);
 
-      setRecording(newRecording);
-      setIsRecording(true);
+      const CHUNK_SEC = 5;
       setRecordingDuration(0);
+      const loop = async () => {
+        while (!recordingLoopRef.current.cancelled) {
+          const { recording: chunkRecording } = await Recording.createAsync(
+            RecordingOptionsPresets.HIGH_QUALITY
+          );
+          setCurrentRecording(chunkRecording);
+          setRecording(chunkRecording);
+          setIsRecording(true);
 
-      // Process audio chunks every 3 seconds
-      const processInterval = setInterval(async () => {
-        if (!newRecording || !isRecording) {
-          clearInterval(processInterval);
-          return;
-        }
+          await new Promise<void>((resolve) => {
+            const t = setTimeout(resolve, CHUNK_SEC * 1000);
+            chunkRecording.setOnRecordingStatusUpdate((s) => {
+              if (!s.isRecording) clearTimeout(t);
+            });
+          });
+          if (recordingLoopRef.current.cancelled) break;
 
-        try {
-          const status = await newRecording.getStatusAsync();
-          if (status.isRecording && status.durationMillis) {
-            // Get recorded audio and process
-            const uri = status.uri;
-            const response = await fetch(uri);
-            const blob = await response.blob();
+          const now = Date.now();
+          setLastActivityAt(now);
+          setIsProcessing(true);
 
-            setIsProcessing(true);
-            const result = await recordAndDetectCry(
-              sessionId,
-              childId,
-              parentId,
-              sitterId,
-              blob
-            );
-
-            if (result.success && result.data) {
-              const audioLog = result.data;
-              setDetectionHistory((prev) => [audioLog, ...prev].slice(0, 20));
-
-              if (audioLog.prediction) {
-                setCurrentDetection({
-                  label: audioLog.prediction.label,
-                  confidence: audioLog.prediction.confidence,
-                  timestamp: audioLog.prediction.processedAt,
-                });
-
-                if (audioLog.prediction.label === 'crying' && audioLog.alertSent) {
-                  // Reload alerts
-                  loadRecentAlerts();
-                  
-                  // Show notification
-                  Alert.alert(
-                    'Crying Detected',
-                    `Crying detected with ${(audioLog.prediction.confidence * 100).toFixed(0)}% confidence.`,
-                    [{ text: 'OK' }]
-                  );
+          let uri: string | null = null;
+          try {
+            const status = await chunkRecording.getStatusAsync();
+            uri = (status?.uri && typeof status.uri === 'string') ? status.uri : null;
+          } catch (_) {}
+          if (!uri) {
+            uri = await new Promise<string | null>((resolve) => {
+              let done = false;
+              const tryResolve = (u: string | null) => {
+                if (!done) {
+                  done = true;
+                  resolve(u || null);
                 }
-              }
-            }
-            setIsProcessing(false);
+              };
+              chunkRecording.setOnRecordingStatusUpdate(async (s) => {
+                if (!s.isRecording && !done) {
+                  const fromCallback = (s.uri && typeof s.uri === 'string') ? s.uri : null;
+                  if (fromCallback) {
+                    tryResolve(fromCallback);
+                    return;
+                  }
+                  await new Promise((r) => setTimeout(r, 100));
+                  if (done) return;
+                  try {
+                    const status = await chunkRecording.getStatusAsync();
+                    const u = (status?.uri && typeof status.uri === 'string') ? status.uri : null;
+                    tryResolve(u);
+                  } catch (_) {
+                    tryResolve(null);
+                  }
+                }
+              });
+              chunkRecording.stopAndUnloadAsync().then(() => {
+                if (!done) tryResolve(null);
+              });
+            });
+          } else {
+            await chunkRecording.stopAndUnloadAsync();
           }
-        } catch (err: any) {
-          console.error('Error processing audio:', err);
-          setIsProcessing(false);
-        }
-      }, 3000);
+          setCurrentRecording(null);
+          setRecording(null);
 
-      // Cleanup on stop
-      newRecording.setOnRecordingStatusUpdate((status) => {
-        if (!status.isRecording) {
-          clearInterval(processInterval);
+          if (uri) {
+            const blob = await readFileUriToBlob(uri, 'audio/wav').catch(() => null);
+            if (blob) {
+              try {
+                const result = await recordAndDetectCry(
+                  sessionId,
+                  childId,
+                  parentId,
+                  sitterId,
+                  blob
+                );
+                if (result.success && result.data) {
+                  setLastSendError(null);
+                  setLastChunkSentAt(Date.now()); // only when actually sent and checked
+                  setChunksSentCount((n) => n + 1);
+                  const audioLog = result.data;
+                  setDetectionHistory((prev) => [audioLog, ...prev].slice(0, 20));
+                  if (audioLog.prediction) {
+                    setCurrentDetection({
+                      label: audioLog.prediction.label,
+                      confidence: audioLog.prediction.confidence,
+                      timestamp: audioLog.prediction.processedAt,
+                    });
+                    if (audioLog.prediction.label === 'crying' && audioLog.alertSent) {
+                      loadRecentAlerts();
+                      Alert.alert(
+                        'Crying Detected',
+                        `Crying detected with ${(audioLog.prediction.confidence * 100).toFixed(0)}% confidence.`,
+                        [{ text: 'OK' }]
+                      );
+                    }
+                  }
+                } else {
+                  setLastSendError(result.error?.message || 'Send failed');
+                }
+              } catch (err: any) {
+                console.error('Error sending clip:', err);
+                setLastSendError(err?.message || 'Network request failed');
+              }
+            } else {
+              setLastSendError('Could not read audio file');
+            }
+          } else {
+            setLastSendError('Could not get recording file');
+          }
+          setIsProcessing(false);
+          if (recordingLoopRef.current.cancelled) break;
         }
-      });
+        setIsRecording(false);
+      };
+      loop();
     } catch (err: any) {
       Alert.alert('Error', `Failed to start recording: ${err.message}`);
     }
   };
 
   const stopRecording = async () => {
-    if (!recording) return;
-
-    try {
-      await recording.stopAndUnloadAsync();
+    recordingLoopRef.current.cancelled = true;
+    if (recording) {
+      try {
+        await recording.stopAndUnloadAsync();
+      } catch (_) {}
+      setCurrentRecording(null);
       setRecording(null);
-      setIsRecording(false);
-      setRecordingDuration(0);
-      setCurrentDetection(null);
-    } catch (err: any) {
-      Alert.alert('Error', `Failed to stop recording: ${err.message}`);
     }
+    setIsRecording(false);
+    setRecordingDuration(0);
+    setCurrentDetection(null);
   };
 
   const formatDuration = (seconds: number) => {
@@ -245,10 +333,10 @@ export default function CryDetectionInterface({
               color={isRecording ? colors.error : colors.text}
             />
             <Text style={[styles.controlsTitle, { color: colors.text }]}>
-              Audio Recording
+              Cry Detection
             </Text>
           </View>
-          {isRecording && (
+          {effectivelyRecording && (
             <View style={[styles.recordingIndicator, { backgroundColor: colors.error }]}>
               <View style={[styles.recordingDot, { backgroundColor: colors.white }]} />
               <Text style={[styles.recordingText, { color: colors.white }]}>
@@ -257,6 +345,77 @@ export default function CryDetectionInterface({
             </View>
           )}
         </View>
+
+        <Text style={[styles.flowExplanation, { color: colors.textSecondary }]}>
+          {effectivelyRecording
+            ? 'Audio is sent to AI every 5 seconds. If crying is detected, an alert is sent to the parent and you.'
+            : 'Start recording to capture audio. Our AI analyzes it and sends alerts to you and the parent when crying is detected.'}
+        </Text>
+
+        <View style={[styles.howItWorksCard, { backgroundColor: colors.backgroundSecondary, borderColor: colors.border }]}>
+          <Text style={[styles.howItWorksTitle, { color: colors.text }]}>How it works</Text>
+          <Text style={[styles.howItWorksStep, { color: colors.textSecondary }]}>
+            1. Recording runs → 2. Every 5 s a clip is sent to our AI → 3. If crying is detected (confidence &gt; 60%), an alert is created → 4. You and the parent see it here and in Notifications / Track.
+          </Text>
+        </View>
+
+        {recordingStartedByMonitoring && (
+          <View style={[styles.monitoringActiveRow, { backgroundColor: colors.primary + '15' }]}>
+            <Ionicons name="checkmark-circle" size={18} color={colors.primary} />
+            <Text style={[styles.monitoringActiveText, { color: colors.primary }]}>
+              Listening… (started with Monitoring). Use "Stop Monitoring" above to stop.
+            </Text>
+          </View>
+        )}
+
+        {/* Audio transfer status: clear states so we never hang on "first clip" */}
+        {effectivelyRecording && (
+          <View style={[styles.transferStatusRow, { backgroundColor: colors.backgroundSecondary, borderColor: colors.border }]}>
+            <Ionicons name="cloud-upload-outline" size={18} color={colors.primary} />
+            <View style={styles.transferStatusText}>
+              {isProcessing ? (
+                <Text style={[styles.transferStatusLabel, { color: colors.primary }]}>
+                  Sending to AI…
+                </Text>
+              ) : lastChunkSentAt != null || lastChunkSentAtFromMonitoring != null ? (
+                <>
+                  <Text style={[styles.transferStatusLabel, { color: colors.text }]}>
+                    Last sent & checked: {formatDistanceToNow(new Date(Math.max(lastChunkSentAt ?? 0, lastChunkSentAtFromMonitoring ?? 0)), { addSuffix: true })}
+                  </Text>
+                  {chunksSentCount > 0 && (
+                    <Text style={[styles.transferStatusCount, { color: colors.textSecondary }]}>
+                      {chunksSentCount} clip{chunksSentCount !== 1 ? 's' : ''} sent & checked
+                    </Text>
+                  )}
+                  {currentDetection && (
+                    <Text style={[styles.transferStatusCount, { color: currentDetection.label === 'crying' ? colors.error : colors.textSecondary }]}>
+                      Last result: {currentDetection.label} ({(currentDetection.confidence * 100).toFixed(0)}%)
+                    </Text>
+                  )}
+                </>
+              ) : lastSendError ? (
+                <>
+                  <Text style={[styles.transferStatusLabel, { color: colors.error }]} numberOfLines={2}>
+                    {lastSendError}
+                  </Text>
+                  {(lastSendError.includes('Network') || lastSendError.includes('request failed') || lastSendError.includes('Send failed')) && (
+                    <Text style={[styles.transferStatusCount, { color: colors.error }]}>
+                      On phone: use computer IP in .env (e.g. EXPO_PUBLIC_AI_SERVICE_URL=http://192.168.x.x:8001)
+                    </Text>
+                  )}
+                </>
+              ) : lastActivityAt != null ? (
+                <Text style={[styles.transferStatusLabel, { color: colors.textSecondary }]}>
+                  Preparing audio…
+                </Text>
+              ) : (
+                <Text style={[styles.transferStatusLabel, { color: colors.textSecondary }]}>
+                  Capturing audio… first clip in ~5 s
+                </Text>
+              )}
+            </View>
+          </View>
+        )}
 
         {isRecording && (
           <View style={styles.recordingInfo}>
@@ -267,7 +426,7 @@ export default function CryDetectionInterface({
               <View style={styles.processingIndicator}>
                 <ActivityIndicator size="small" color={colors.primary} />
                 <Text style={[styles.processingText, { color: colors.textSecondary }]}>
-                  Processing...
+                  Sending to AI...
                 </Text>
               </View>
             )}
@@ -275,7 +434,7 @@ export default function CryDetectionInterface({
         )}
 
         <View style={styles.controlsButtons}>
-          {!isRecording ? (
+          {!effectivelyRecording ? (
             <TouchableOpacity
               style={[styles.recordButton, { backgroundColor: colors.error }]}
               onPress={startRecording}
@@ -286,7 +445,7 @@ export default function CryDetectionInterface({
                 Start Recording
               </Text>
             </TouchableOpacity>
-          ) : (
+          ) : recordingStartedByMonitoring ? null : (
             <TouchableOpacity
               style={[styles.stopButton, { backgroundColor: colors.textSecondary }]}
               onPress={stopRecording}
@@ -395,11 +554,15 @@ export default function CryDetectionInterface({
       )}
 
       {/* Recent Alerts */}
-      {recentAlerts.length > 0 && (
-        <Card style={styles.alertsCard}>
-          <Text style={[styles.alertsTitle, { color: colors.text }]}>
-            Recent Alerts ({recentAlerts.length})
+      <Card style={styles.alertsCard}>
+        <Text style={[styles.alertsTitle, { color: colors.text }]}>
+          Cry alerts {recentAlerts.length > 0 ? `(${recentAlerts.length})` : ''}
+        </Text>
+        {recentAlerts.length === 0 ? (
+          <Text style={[styles.noAlertsYet, { color: colors.textSecondary }]}>
+            When the AI detects crying, an alert is saved and sent to you and the parent. Alerts will appear here and in the Notifications tab.
           </Text>
+        ) : (
           <ScrollView style={styles.alertsList} nestedScrollEnabled>
             {recentAlerts.map((alert) => (
               <View
@@ -426,8 +589,8 @@ export default function CryDetectionInterface({
               </View>
             ))}
           </ScrollView>
-        </Card>
-      )}
+        )}
+      </Card>
     </View>
   );
 }
@@ -435,6 +598,7 @@ export default function CryDetectionInterface({
 const styles = StyleSheet.create({
   container: {
     gap: 16,
+    marginTop: 4,
   },
   controlsCard: {
     marginBottom: 0,
@@ -453,6 +617,65 @@ const styles = StyleSheet.create({
   controlsTitle: {
     fontSize: 18,
     fontWeight: '600',
+  },
+  flowExplanation: {
+    fontSize: 13,
+    lineHeight: 18,
+    marginBottom: 12,
+  },
+  howItWorksCard: {
+    padding: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    marginBottom: 12,
+  },
+  howItWorksTitle: {
+    fontSize: 12,
+    fontWeight: '600',
+    marginBottom: 6,
+  },
+  howItWorksStep: {
+    fontSize: 12,
+    lineHeight: 16,
+  },
+  noAlertsYet: {
+    fontSize: 13,
+    lineHeight: 18,
+    marginTop: 4,
+  },
+  monitoringActiveRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    marginBottom: 12,
+  },
+  monitoringActiveText: {
+    fontSize: 13,
+    flex: 1,
+  },
+  transferStatusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    marginBottom: 12,
+  },
+  transferStatusText: {
+    flex: 1,
+  },
+  transferStatusLabel: {
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  transferStatusCount: {
+    fontSize: 12,
+    marginTop: 2,
   },
   recordingIndicator: {
     flexDirection: 'row',

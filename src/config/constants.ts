@@ -129,7 +129,7 @@ export const API_ENDPOINTS = {
 } as const;
 
 // Audio monitoring constants
-export const AUDIO_CHUNK_DURATION = 3000; // 3 seconds in milliseconds
+export const AUDIO_CHUNK_DURATION = 5000; // 5 seconds in milliseconds
 export const CRYING_THRESHOLD = 0.7; // Default threshold for crying detection
 export const ALERT_DURATION = 10000; // 10 seconds of continuous crying
 
