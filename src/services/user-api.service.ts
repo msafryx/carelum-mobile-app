@@ -146,7 +146,8 @@ export async function getVerifiedSitters(
   requestMode?: 'invite' | 'nearby' | 'city' | 'nationwide',
   parentLocation?: { latitude?: number; longitude?: number; city?: string },
   maxDistanceKm?: number,
-  sitterId?: string
+  sitterId?: string,
+  sortByRating?: boolean
 ): Promise<ServiceResult<User[]>> {
   const params = new URLSearchParams();
   params.append('limit', limit.toString());
@@ -172,13 +173,22 @@ export async function getVerifiedSitters(
     params.append('sitter_id', sitterId);
   }
   
+  if (sortByRating) {
+    params.append('sort_by_rating', 'true');
+  }
+  
   const result = await apiRequest<any[]>(`/api/users/sitters/verified?${params.toString()}`);
   
   if (!result.success) {
     return result;
   }
 
-  const sitters = (result.data || []).map(apiResponseToUser);
+  const sitters = (result.data || []).map((r: any) => ({
+    ...apiResponseToUser(r),
+    rating: r.rating != null ? Number(r.rating) : undefined,
+    reviewCount: r.reviewCount != null ? Number(r.reviewCount) : undefined,
+    reviews: r.reviewCount != null ? Number(r.reviewCount) : undefined,
+  }));
   return {
     success: true,
     data: sitters,

@@ -14,20 +14,20 @@ import {
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
-  Alert,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/src/components/ui/ThemeProvider';
 import { Ionicons } from '@expo/vector-icons';
 import { askChildAssistant } from '@/src/services/chatbot.service';
 import { format } from 'date-fns';
 
-const QUICK_PROMPTS = [
-  'Allergies',
-  'Feeding instructions',
-  'Sleep routine',
-  'Medicine schedule',
-  'Emergency contacts',
-] as const;
+const QUICK_PROMPTS: { label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
+  { label: 'Allergies', icon: 'warning-outline' },
+  { label: 'Feeding instructions', icon: 'restaurant-outline' },
+  { label: 'Sleep routine', icon: 'moon-outline' },
+  { label: 'Medicine schedule', icon: 'medical-outline' },
+  { label: 'Emergency contacts', icon: 'call-outline' },
+];
 
 interface ChatbotInterfaceProps {
   sessionId: string;
@@ -48,6 +48,7 @@ export default function ChatbotInterface({
   onClose,
 }: ChatbotInterfaceProps) {
   const { colors } = useTheme();
+  const insets = useSafeAreaInsets();
   const [messages, setMessages] = useState<QAMessage[]>([]);
   const [inputText, setInputText] = useState('');
   const [sending, setSending] = useState(false);
@@ -79,7 +80,7 @@ export default function ChatbotInterface({
     } else {
       setError(result.error?.message || 'Failed to get answer');
       setMessages((prev) => prev.slice(0, -1));
-      Alert.alert('Error', result.error?.message || 'Failed to get answer');
+      // Show error in-app only (no duplicate Alert) for cleaner UX
     }
   };
 
@@ -94,24 +95,35 @@ export default function ChatbotInterface({
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
     >
-      <View style={[styles.header, { borderBottomColor: colors.border }]}>
+      <View
+        style={[
+          styles.header,
+          {
+            paddingTop: (insets.top || 0) + 20,
+            paddingBottom: 18,
+            paddingHorizontal: 20,
+            borderBottomColor: colors.border,
+            backgroundColor: colors.background,
+          },
+        ]}
+      >
         <View style={styles.headerLeft}>
-          <Ionicons name="reader-outline" size={24} color={colors.primary} />
+          <Ionicons name="reader-outline" size={20} color={colors.primary} />
           <Text style={[styles.headerTitle, { color: colors.text }]}>Child Assistant</Text>
         </View>
         {onClose && (
-          <TouchableOpacity onPress={onClose} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-            <Ionicons name="close" size={24} color={colors.text} />
+          <TouchableOpacity onPress={onClose} style={styles.closeBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <Ionicons name="close" size={20} color={colors.textSecondary} />
           </TouchableOpacity>
         )}
       </View>
 
       {error && (
-        <View style={[styles.errorBanner, { backgroundColor: (colors.error || '#dc2626') + '20' }]}>
+        <View style={[styles.errorBanner, { backgroundColor: (colors.error || '#dc2626') + '15', borderLeftColor: colors.error || '#dc2626' }]}>
           <Ionicons name="alert-circle" size={20} color={colors.error || '#dc2626'} />
-          <Text style={[styles.errorText, { color: colors.error || '#dc2626' }]}>{error}</Text>
-          <TouchableOpacity onPress={() => setError(null)}>
-            <Ionicons name="close" size={20} color={colors.error || '#dc2626'} />
+          <Text style={[styles.errorText, { color: colors.text }]} numberOfLines={2}>{error}</Text>
+          <TouchableOpacity onPress={() => setError(null)} style={styles.errorDismiss}>
+            <Ionicons name="close-circle" size={22} color={colors.textSecondary} />
           </TouchableOpacity>
         </View>
       )}
@@ -129,14 +141,16 @@ export default function ChatbotInterface({
               Get quick answers from the child’s profile and instructions.
             </Text>
             <View style={styles.quickPrompts}>
-              {QUICK_PROMPTS.map((label) => (
+              {QUICK_PROMPTS.map(({ label, icon }) => (
                 <TouchableOpacity
                   key={label}
-                  style={[styles.quickBtn, { backgroundColor: colors.primary + '20', borderColor: colors.primary }]}
+                  style={[styles.quickBtn, { backgroundColor: colors.backgroundSecondary || (colors.background + '99'), borderColor: colors.border }]}
                   onPress={() => ask(label)}
                   disabled={sending}
+                  activeOpacity={0.7}
                 >
-                  <Text style={[styles.quickBtnText, { color: colors.primary }]}>{label}</Text>
+                  <Ionicons name={icon} size={20} color={colors.primary} style={styles.quickBtnIcon} />
+                  <Text style={[styles.quickBtnText, { color: colors.text }]}>{label}</Text>
                 </TouchableOpacity>
               ))}
             </View>
@@ -233,19 +247,20 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
+    borderBottomWidth: StyleSheet.hairlineWidth,
   },
-  headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  headerTitle: { fontSize: 18, fontWeight: '600' },
+  headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  headerTitle: { fontSize: 16, fontWeight: '600' },
+  closeBtn: { padding: 6 },
   errorBanner: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 16,
+    paddingHorizontal: 14,
     paddingVertical: 12,
-    gap: 8,
+    gap: 10,
+    borderLeftWidth: 4,
   },
+  errorDismiss: { padding: 4 },
   errorText: { flex: 1, fontSize: 14 },
   scroll: { flex: 1 },
   scrollContent: { padding: 16, paddingBottom: 8 },
@@ -254,12 +269,15 @@ const styles = StyleSheet.create({
   emptySubtitle: { fontSize: 14, marginBottom: 20 },
   quickPrompts: { gap: 10 },
   quickBtn: {
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    borderRadius: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: 18,
+    borderRadius: 14,
     borderWidth: 1,
     alignSelf: 'flex-start',
   },
+  quickBtnIcon: { marginRight: 12 },
   quickBtnText: { fontSize: 15, fontWeight: '600' },
   bubbleWrap: { marginBottom: 12 },
   userWrap: { alignItems: 'flex-end' },

@@ -362,8 +362,9 @@ export default function SearchScreen() {
         
         if (rating) {
           const minRating = parseFloat(rating);
-          // For now, we don't have ratings in DB, so skip this filter
-          // TODO: Add ratings/reviews table later
+          if (!isNaN(minRating)) {
+            filtered = filtered.filter(s => (s.rating ?? 0) >= minRating);
+          }
         }
         
         if (price) {

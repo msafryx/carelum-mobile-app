@@ -720,14 +720,14 @@ async def get_session_emergency_info(
                 message="Database connection not available",
                 status_code=503
             )
-        session_resp = supabase.table("sessions").select("*").eq("id", session_id).single().execute()
-        if not session_resp.data:
+        session_resp = supabase.table("sessions").select("*").eq("id", session_id).limit(1).execute()
+        if not session_resp.data or len(session_resp.data) == 0:
             raise AppError(
                 code="SESSION_NOT_FOUND",
                 message="Session not found",
                 status_code=404
             )
-        session_data = session_resp.data
+        session_data = session_resp.data[0]
         if not verify_session_access(session_data, current_user):
             raise AppError(
                 code="FORBIDDEN",
@@ -744,23 +744,50 @@ async def get_session_emergency_info(
         child_emergency_phone = None
         doctor_contact = None
         doctor_phone = None
+        # Use limit(1) instead of .single() so RLS blocking (0 rows) doesn't raise PGRST116
+        # (e.g. sitter can read session but RLS may block reading parent user or child row)
         if sitter_id:
-            u = supabase.table("users").select("phone_number").eq("id", sitter_id).single().execute()
-            if u.data:
-                sitter_phone = u.data.get("phone_number")
+            u = supabase.table("users").select("phone_number").eq("id", sitter_id).limit(1).execute()
+            if u.data and len(u.data) > 0:
+                sitter_phone = u.data[0].get("phone_number")
         if parent_id:
-            u = supabase.table("users").select("phone_number").eq("id", parent_id).single().execute()
-            if u.data:
-                parent_phone = u.data.get("phone_number")
+            u = supabase.table("users").select("phone_number").eq("id", parent_id).limit(1).execute()
+            if u.data and len(u.data) > 0:
+                parent_phone = u.data[0].get("phone_number")
         if child_id:
             c = supabase.table("children").select(
                 "emergency_contact_name, emergency_contact_phone, doctor_contact, doctor_phone"
-            ).eq("id", child_id).single().execute()
-            if c.data:
-                child_emergency_name = c.data.get("emergency_contact_name")
-                child_emergency_phone = c.data.get("emergency_contact_phone")
-                doctor_contact = c.data.get("doctor_contact")
-                doctor_phone = c.data.get("doctor_phone")
+            ).eq("id", child_id).limit(1).execute()
+            if c.data and len(c.data) > 0:
+                row = c.data[0]
+                child_emergency_name = row.get("emergency_contact_name")
+                child_emergency_phone = row.get("emergency_contact_phone")
+                doctor_contact = row.get("doctor_contact")
+                doctor_phone = row.get("doctor_phone")
+            # Fallback: fetch from child_instructions (where parent sets emergency in Child Instructions)
+            # Use service-role so sitter can read for their session's child when RLS blocks children table
+            if not child_emergency_phone or not doctor_phone:
+                sb_svc = get_supabase_service_role() or _get_supabase_service()
+                if sb_svc:
+                    instr = sb_svc.table("child_instructions").select(
+                        "emergency_contacts, doctor_info"
+                    ).eq("child_id", child_id).limit(1).execute()
+                    if instr.data and len(instr.data) > 0:
+                        row = instr.data[0]
+                        ec = row.get("emergency_contacts")
+                        if ec and not child_emergency_phone:
+                            if isinstance(ec, list) and len(ec) > 0:
+                                first = ec[0]
+                                if isinstance(first, dict):
+                                    child_emergency_name = (child_emergency_name or first.get("name") or "").strip() or None
+                                    child_emergency_phone = (child_emergency_phone or first.get("phone") or "").strip() or None
+                            elif isinstance(ec, dict) and ec.get("phone"):
+                                child_emergency_name = (child_emergency_name or ec.get("name") or "").strip() or None
+                                child_emergency_phone = (child_emergency_phone or ec.get("phone") or "").strip() or None
+                        di = row.get("doctor_info")
+                        if di and isinstance(di, dict) and not doctor_phone:
+                            doctor_contact = doctor_contact or di.get("name")
+                            doctor_phone = doctor_phone or (di.get("phone") or "").strip() or None
         return EmergencyInfoResponse(
             emergencyNumber=emergency_number,
             sitterPhone=sitter_phone,

@@ -9,7 +9,7 @@ import CryDetectionIndicator from '@/src/components/session/CryDetectionIndicato
 import SessionControls from '@/src/components/session/SessionControls';
 import EmergencyCallButton from '@/src/components/session/EmergencyCallButton';
 import SessionTimeline from '@/src/components/session/SessionTimeline';
-import { createReview } from '@/src/services/review.service';
+import { createReview, getReviewForSession, type Review } from '@/src/services/review.service';
 import Card from '@/src/components/ui/Card';
 import ErrorDisplay from '@/src/components/ui/ErrorDisplay';
 import HamburgerMenu from '@/src/components/ui/HamburgerMenu';
@@ -49,10 +49,12 @@ import {
     Animated,
     Image,
     Linking,
+    Modal,
     RefreshControl,
     ScrollView,
     StyleSheet,
     Text,
+    TextInput,
     TouchableOpacity,
     View,
 } from 'react-native';
@@ -151,6 +153,14 @@ export default function SessionDetailScreen() {
   const sessionRef = useRef<Session | null>(null);
   const [paymentClientSecret, setPaymentClientSecret] = useState<string | null>(null);
   const [payButtonLoading, setPayButtonLoading] = useState(false);
+  const [sessionReview, setSessionReview] = useState<Review | null>(null);
+  const [showRateModal, setShowRateModal] = useState(false);
+  const [rateModalSessionId, setRateModalSessionId] = useState<string | null>(null);
+  const [rateModalSitterId, setRateModalSitterId] = useState<string | null>(null);
+  const [rateStars, setRateStars] = useState(0);
+  const [rateComment, setRateComment] = useState('');
+  const [rateSubmitting, setRateSubmitting] = useState(false);
+  const [justEndedSession, setJustEndedSession] = useState(false);
   const isExpoGo = Constants.appOwnership === 'expo';
   const LazyPaymentSheetFlow = React.useMemo(
     () => React.lazy(() => import('@/src/components/session/PaymentSheetFlow')),
@@ -409,6 +419,17 @@ export default function SessionDetailScreen() {
     };
   }, [id, loadSessionData]);
 
+  // Load review for completed session
+  useEffect(() => {
+    if (!id || !session || session.status !== 'completed') return;
+    let cancelled = false;
+    (async () => {
+      const res = await getReviewForSession(id);
+      if (!cancelled && res.success) setSessionReview(res.data ?? null);
+    })();
+    return () => { cancelled = true; };
+  }, [id, session?.status]);
+
   // Handle end session (payment required: charged for time used, then session ends)
   const handleEndSession = async () => {
     if (!session || !id) return;
@@ -430,7 +451,13 @@ export default function SessionDetailScreen() {
                 ? `Session ended. You were charged Rs. ${amount.toFixed(2)} for the time used.`
                 : 'Session ended successfully.';
               Alert.alert('Success', message);
-              router.back();
+              await loadSessionData();
+              setJustEndedSession(true);
+              setRateModalSessionId(id);
+              setRateModalSitterId(session.sitterId ?? null);
+              setRateStars(0);
+              setRateComment('');
+              setShowRateModal(true);
             } else {
               const errMsg = result.error?.message || 'Failed to end session';
               const isPaymentError = errMsg.toLowerCase().includes('payment') || errMsg.toLowerCase().includes('profile') || errMsg.toLowerCase().includes('card');
@@ -1072,33 +1099,50 @@ export default function SessionDetailScreen() {
                 </Text>
               </View>
             </View>
+            {sessionReview ? (
+              <View style={styles.reviewSummary}>
+                <View style={styles.infoRow}>
+                  <Ionicons name="star" size={16} color={colors.primary} />
+                  <Text style={[styles.infoText, { color: colors.text }]}>You rated: {sessionReview.rating} star{sessionReview.rating !== 1 ? 's' : ''}</Text>
+                </View>
+                {sessionReview.comment ? (
+                  <Text style={[styles.reviewComment, { color: colors.textSecondary }]}>{sessionReview.comment}</Text>
+                ) : null}
+              </View>
+            ) : (
+              <TouchableOpacity
+                style={[styles.rateButton, { backgroundColor: colors.primary, marginBottom: 8 }]}
+                onPress={() => {
+                  setRateModalSessionId(session.id);
+                  setRateModalSitterId(session.sitterId ?? null);
+                  setJustEndedSession(false);
+                  setRateStars(0);
+                  setRateComment('');
+                  setShowRateModal(true);
+                }}
+              >
+                <Ionicons name="star" size={20} color={colors.white} />
+                <Text style={[styles.rateButtonText, { color: colors.white }]}>Rate & feedback</Text>
+              </TouchableOpacity>
+            )}
             <TouchableOpacity
               style={[styles.rateButton, { backgroundColor: colors.primary }]}
               onPress={async () => {
-                if (!session.sitterId) {
-                  Alert.alert('Unavailable', 'Sitter information is missing for this session.');
-                  return;
-                }
-
                 const { getSessionReport } = await import('@/src/services/session.service');
                 const reportRes = await getSessionReport(session.id);
                 if (!reportRes.success || !reportRes.data) {
                   Alert.alert('Error', reportRes.error?.message || 'Failed to load session report.');
                   return;
                 }
-
                 const report = reportRes.data;
                 const lines = [
                   `Session: ${report.sessionId}`,
                   report.startedAt ? `Started: ${report.startedAt}` : null,
                   report.endedAt ? `Ended: ${report.endedAt}` : null,
-                  report.monitoringDurationMinutes != null
-                    ? `Monitoring: ${report.monitoringDurationMinutes} min`
-                    : null,
+                  report.monitoringDurationMinutes != null ? `Monitoring: ${report.monitoringDurationMinutes} min` : null,
                   `Cry alerts: ${report.cryAlertCount}`,
                   `GPS points: ${report.gpsPointCount}`,
                 ].filter(Boolean);
-
                 Alert.alert('Session report', lines.join('\n'));
               }}
             >
@@ -1161,6 +1205,62 @@ export default function SessionDetailScreen() {
           loading={actionLoading}
         />
       )}
+
+      {/* Rate & feedback modal (after end session or from completed card) */}
+      <Modal visible={showRateModal} transparent animationType="fade">
+        <View style={styles.rateModalOverlay}>
+          <View style={[styles.rateModalContent, { backgroundColor: (colors as any).card ?? colors.background }]}>
+            <Text style={[styles.rateModalTitle, { color: colors.text }]}>Rate this session</Text>
+            <View style={styles.starRow}>
+              {[1, 2, 3, 4, 5].map((n) => (
+                <TouchableOpacity key={n} onPress={() => setRateStars(n)} style={styles.starTouch}>
+                  <Ionicons name={rateStars >= n ? 'star' : 'star-outline'} size={36} color={colors.primary} />
+                </TouchableOpacity>
+              ))}
+            </View>
+            <TextInput
+              style={[styles.rateCommentInput, { color: colors.text, borderColor: colors.border }]}
+              placeholder="Optional feedback (e.g. how was the sitter?)"
+              placeholderTextColor={colors.textSecondary}
+              value={rateComment}
+              onChangeText={setRateComment}
+              multiline
+              numberOfLines={3}
+            />
+            <View style={styles.rateModalButtons}>
+              <TouchableOpacity style={[styles.rateModalButton, { backgroundColor: colors.border }]} onPress={() => { setShowRateModal(false); setRateModalSessionId(null); setRateModalSitterId(null); setRateStars(0); setRateComment(''); if (justEndedSession) router.back(); }}>
+                <Text style={[styles.rateModalButtonText, { color: colors.text }]}>{rateModalSessionId && rateModalSitterId ? 'Skip' : 'Close'}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.rateModalButton, { backgroundColor: colors.primary }]}
+                disabled={rateStars < 1 || rateSubmitting}
+                onPress={async () => {
+                  if (!rateModalSessionId || !rateModalSitterId || rateStars < 1) return;
+                  setRateSubmitting(true);
+                  const res = await createReview({ sessionId: rateModalSessionId, sitterId: rateModalSitterId, rating: rateStars, comment: rateComment.trim() || undefined });
+                  setRateSubmitting(false);
+                  if (res.success) {
+                    setSessionReview({ id: '', session_id: rateModalSessionId, reviewer_id: '', reviewee_id: rateModalSitterId, rating: rateStars, comment: rateComment.trim() || null, created_at: new Date().toISOString() });
+                    setShowRateModal(false);
+                    setRateModalSessionId(null);
+                    setRateModalSitterId(null);
+                    setRateStars(0);
+                    setRateComment('');
+                    const wasJustEnded = justEndedSession;
+                    setJustEndedSession(false);
+                    if (wasJustEnded) router.back();
+                    else Alert.alert('Thanks', 'Your feedback has been submitted.');
+                  } else {
+                    Alert.alert('Error', res.error?.message ?? 'Failed to submit review.');
+                  }
+                }}
+              >
+                <Text style={[styles.rateModalButtonText, { color: colors.white }]}>{rateSubmitting ? 'Submitting…' : 'Submit'}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -1239,6 +1339,65 @@ const styles = StyleSheet.create({
     marginTop: 16,
   },
   rateButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  reviewSummary: {
+    marginTop: 12,
+    gap: 6,
+  },
+  reviewComment: {
+    fontSize: 14,
+    marginTop: 4,
+    fontStyle: 'italic',
+  },
+  rateModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  rateModalContent: {
+    width: '100%',
+    maxWidth: 360,
+    borderRadius: 16,
+    padding: 24,
+  },
+  rateModalTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    marginBottom: 16,
+    textAlign: 'center',
+  },
+  starRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 8,
+    marginBottom: 16,
+  },
+  starTouch: {
+    padding: 4,
+  },
+  rateCommentInput: {
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 12,
+    minHeight: 80,
+    textAlignVertical: 'top',
+  },
+  rateModalButtons: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 20,
+  },
+  rateModalButton: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  rateModalButtonText: {
     fontSize: 16,
     fontWeight: '600',
   },

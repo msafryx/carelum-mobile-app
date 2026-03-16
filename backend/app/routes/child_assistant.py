@@ -10,7 +10,7 @@ from typing import Optional
 
 from app.utils.auth import verify_token, CurrentUser, security
 from app.utils.error_handler import handle_error, AppError
-from app.utils.database import get_supabase_with_auth
+from app.utils.database import get_supabase_with_auth, get_supabase_service_role
 from fastapi.security import HTTPAuthorizationCredentials
 
 router = APIRouter()
@@ -32,6 +32,17 @@ def _normalize(s: Optional[str]) -> str:
     return s.strip().lower()
 
 
+def _instr_str(val, default: str = "") -> str:
+    """Get a string from instruction field that may be str or list (JSONB)."""
+    if val is None:
+        return default
+    if isinstance(val, list):
+        return ", ".join(str(x).strip() for x in val if x is not None).strip() or default
+    if isinstance(val, str):
+        return val.strip() or default
+    return str(val).strip() or default
+
+
 def _build_rule_based_answer(
     child_name: str,
     child: dict,
@@ -45,12 +56,8 @@ def _build_rule_based_answer(
 
     # Allergies
     if "allerg" in q or "allergic" in q:
-        from_child = (child.get("allergies") or "").strip()
-        from_instr = ""
-        if instructions:
-            from_instr = (instructions.get("allergies") or "").strip()
-            if isinstance(from_instr, list):
-                from_instr = ", ".join(str(x) for x in from_instr)
+        from_child = _instr_str(child.get("allergies"))
+        from_instr = _instr_str(instructions.get("allergies") if instructions else None)
         combined = from_child or from_instr
         if combined:
             parts.append(f"{name} is allergic to: {combined}.")
@@ -59,9 +66,7 @@ def _build_rule_based_answer(
 
     # Medicine / medication
     elif "medic" in q or "medicine" in q or "medication" in q:
-        from_instr = ""
-        if instructions:
-            from_instr = (instructions.get("medication") or "").strip()
+        from_instr = _instr_str(instructions.get("medication") if instructions else None)
         if from_instr:
             parts.append(f"Medicine schedule: {from_instr}")
         else:
@@ -69,9 +74,7 @@ def _build_rule_based_answer(
 
     # Feeding / food / dinner / snack
     elif any(x in q for x in ["feed", "food", "dinner", "lunch", "breakfast", "snack", "eat"]):
-        from_instr = ""
-        if instructions:
-            from_instr = (instructions.get("feeding_schedule") or "").strip()
+        from_instr = _instr_str(instructions.get("feeding_schedule") if instructions else None)
         if from_instr:
             parts.append(f"Feeding instructions: {from_instr}")
         else:
@@ -83,9 +86,9 @@ def _build_rule_based_answer(
 
     # Sleep / nap / bedtime
     elif any(x in q for x in ["sleep", "nap", "bedtime", "bed time"]):
-        from_instr = ""
-        if instructions:
-            from_instr = (instructions.get("nap_schedule") or instructions.get("bedtime") or "").strip()
+        from_instr = _instr_str(
+            (instructions.get("nap_schedule") or instructions.get("bedtime")) if instructions else None
+        )
         if from_instr:
             parts.append(f"Sleep/nap: {from_instr}")
         else:
@@ -112,10 +115,10 @@ def _build_rule_based_answer(
 
     # Medical notes / special instructions
     elif "medical" in q or "special" in q or "instruction" in q:
-        medical = (child.get("medical_notes") or "").strip()
-        special = (child.get("special_instructions") or "").strip()
+        medical = _instr_str(child.get("medical_notes"))
+        special = _instr_str(child.get("special_instructions"))
         if instructions:
-            special = special or (instructions.get("special_instructions") or "").strip()
+            special = special or _instr_str(instructions.get("special_instructions"))
         if medical:
             parts.append(f"Medical notes: {medical}")
         if special:
@@ -125,9 +128,9 @@ def _build_rule_based_answer(
 
     # General / behavior / safety
     else:
-        special = (child.get("special_instructions") or "").strip()
+        special = _instr_str(child.get("special_instructions"))
         if instructions:
-            special = special or (instructions.get("special_instructions") or "").strip()
+            special = special or _instr_str(instructions.get("special_instructions"))
         for ci in care_instructions:
             itype = (ci.get("instruction_type") or "").lower()
             text = (ci.get("instruction_text") or "").strip()
@@ -173,15 +176,15 @@ async def post_child_assistant(
                 status_code=403,
             )
 
-        # Load session and verify access + child belongs to session
-        session_resp = supabase.table("sessions").select("id, parent_id, sitter_id, child_id, child_ids").eq("id", body.session_id).single().execute()
-        if not session_resp.data:
+        # Load session and verify access (use limit(1) to avoid PGRST116 when RLS returns 0 rows)
+        session_resp = supabase.table("sessions").select("id, parent_id, sitter_id, child_id, child_ids").eq("id", body.session_id).limit(1).execute()
+        if not session_resp.data or len(session_resp.data) == 0:
             raise AppError(
                 code="SESSION_NOT_FOUND",
                 message="Session not found",
                 status_code=404,
             )
-        session_data = session_resp.data
+        session_data = session_resp.data[0]
         if session_data.get("parent_id") != current_user.id and session_data.get("sitter_id") != current_user.id:
             raise AppError(
                 code="FORBIDDEN",
@@ -203,25 +206,44 @@ async def post_child_assistant(
                 status_code=403,
             )
 
-        # Load child
-        child_resp = supabase.table("children").select("*").eq("id", body.child_id).single().execute()
-        if not child_resp.data:
+        # Load child and child_instructions with service-role so sitter can read (RLS often blocks sitter on children/child_instructions)
+        sb_svc = get_supabase_service_role()
+        if not sb_svc:
+            sb_svc = supabase
+        child_resp = sb_svc.table("children").select("*").eq("id", body.child_id).limit(1).execute()
+        if not child_resp.data or len(child_resp.data) == 0:
             raise AppError(
                 code="CHILD_NOT_FOUND",
                 message="Child not found",
                 status_code=404,
             )
-        child_data = child_resp.data
+        child_data = child_resp.data[0]
         child_name = child_data.get("name") or "The child"
 
-        # Load child_instructions
-        instr_resp = supabase.table("child_instructions").select("*").eq("child_id", body.child_id).execute()
-        instructions = instr_resp.data[0] if instr_resp.data else None
+        # Merge emergency/doctor from child_instructions into child_data for _build_rule_based_answer
+        instr_resp = sb_svc.table("child_instructions").select("*").eq("child_id", body.child_id).limit(1).execute()
+        instructions = instr_resp.data[0] if instr_resp.data and len(instr_resp.data) > 0 else None
+        if instructions and instructions.get("emergency_contacts") and not (child_data.get("emergency_contact_phone") or child_data.get("emergency_contact_name")):
+            ec = instructions["emergency_contacts"]
+            if isinstance(ec, list) and len(ec) > 0 and isinstance(ec[0], dict):
+                child_data = dict(child_data)
+                child_data["emergency_contact_name"] = child_data.get("emergency_contact_name") or ec[0].get("name")
+                child_data["emergency_contact_phone"] = child_data.get("emergency_contact_phone") or ec[0].get("phone")
+            elif isinstance(ec, dict) and ec.get("phone"):
+                child_data = dict(child_data)
+                child_data["emergency_contact_name"] = child_data.get("emergency_contact_name") or ec.get("name")
+                child_data["emergency_contact_phone"] = child_data.get("emergency_contact_phone") or ec.get("phone")
+        if instructions and instructions.get("doctor_info") and isinstance(instructions["doctor_info"], dict):
+            di = instructions["doctor_info"]
+            if not child_data.get("doctor_phone") or not child_data.get("doctor_contact"):
+                child_data = dict(child_data)
+                child_data["doctor_contact"] = child_data.get("doctor_contact") or di.get("name")
+                child_data["doctor_phone"] = child_data.get("doctor_phone") or di.get("phone")
 
         # Optional: child_care_instructions (table may not exist on older DBs)
         care_instructions = []
         try:
-            care_resp = supabase.table("child_care_instructions").select("*").eq("child_id", body.child_id).execute()
+            care_resp = sb_svc.table("child_care_instructions").select("*").eq("child_id", body.child_id).execute()
             care_instructions = care_resp.data or []
         except Exception:
             pass

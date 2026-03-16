@@ -6,6 +6,7 @@ import { useTheme } from '@/src/components/ui/ThemeProvider';
 import { useAuth } from '@/src/hooks/useAuth';
 import { getAll, save, STORAGE_KEYS } from '@/src/services/local-storage.service';
 import { getUserSessions, cancelSession, subscribeToUserSessions } from '@/src/services/session.service';
+import { getVerifiedSitters } from '@/src/services/user-api.service';
 import CancelSessionModal from '@/src/components/session/CancelSessionModal';
 import EmergencyCallSheet from '@/src/components/session/EmergencyCallSheet';
 import { getParentChildren, getChildById } from '@/src/services/child.service';
@@ -15,7 +16,7 @@ import { Child } from '@/src/types/child.types';
 import { SESSION_STATUS } from '@/src/config/constants';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View, RefreshControl, ActivityIndicator, Alert, Image, Animated } from 'react-native';
 import { format } from 'date-fns';
 import { formatSearchDuration, getSearchingMessage, isDirectInvite } from '@/src/utils/sessionSearchUtils';
@@ -84,6 +85,8 @@ export default function ParentHomeScreen() {
   const [cancelling, setCancelling] = useState(false);
   const [emergencySheetVisible, setEmergencySheetVisible] = useState(false);
   const sessionSubscriptionRef = useRef<(() => void) | null>(null);
+  const [completedSessions, setCompletedSessions] = useState<SessionWithDetails[]>([]);
+  const [recommendedSitters, setRecommendedSitters] = useState<Array<{ id: string; displayName: string; profileImageUrl?: string; rating?: number; reviewCount?: number }>>([]);
 
   const loadSessions = useCallback(async (isRefresh = false) => {
     if (!user) return;
@@ -107,6 +110,8 @@ export default function ParentHomeScreen() {
       const upcomingResult = await getUserSessions(user.id, 'parent', 'accepted,payment_pending,booked');
       // Load requested sessions (newly created, waiting for sitter acceptance)
       const requestedResult = await getUserSessions(user.id, 'parent', SESSION_STATUS.REQUESTED);
+      // Load recently completed for Recent Activities
+      const completedResult = await getUserSessions(user.id, 'parent', 'completed');
 
       const loadSessionDetails = async (sessions: Session[]) => {
         return Promise.all(
@@ -168,17 +173,44 @@ export default function ParentHomeScreen() {
       } else {
         setRequestedSessions([]);
       }
+
+      if (completedResult.success && completedResult.data) {
+        const completedWithDetails = await loadSessionDetails(completedResult.data);
+        setCompletedSessions(completedWithDetails.slice(0, 10));
+      } else {
+        setCompletedSessions([]);
+      }
     } catch (error: any) {
       console.error('Failed to load sessions:', error);
       setActiveSessions([]);
       setUpcomingSessions([]);
       setRequestedSessions([]);
+      setCompletedSessions([]);
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
   }, [user]);
-  
+
+  const loadRecommendedSitters = useCallback(async () => {
+    try {
+      const res = await getVerifiedSitters(6, undefined, undefined, undefined, undefined, true);
+      if (res.success && res.data) {
+        setRecommendedSitters(res.data.map((s: any) => ({
+          id: s.id,
+          displayName: s.displayName || s.email?.split('@')[0] || 'Sitter',
+          profileImageUrl: s.profileImageUrl,
+          rating: s.rating,
+          reviewCount: s.reviewCount ?? s.reviews,
+        })));
+      } else {
+        setRecommendedSitters([]);
+      }
+    } catch {
+      setRecommendedSitters([]);
+    }
+  }, []);
+
   // Sync current user to AsyncStorage if not already there
   useEffect(() => {
     if (user && userProfile) {
@@ -190,11 +222,16 @@ export default function ParentHomeScreen() {
     loadSessions();
   }, [loadSessions]);
 
+  useEffect(() => {
+    if (user?.id) loadRecommendedSitters();
+  }, [user?.id, loadRecommendedSitters]);
+
   // Realtime: subscribe to parent's sessions (created, status changes, sitter accepts/declines)
   useEffect(() => {
     if (!user?.id) return;
     sessionSubscriptionRef.current = subscribeToUserSessions(user.id, 'parent', () => {
       loadSessions(true);
+      loadRecommendedSitters();
     });
     return () => {
       if (sessionSubscriptionRef.current) {
@@ -202,7 +239,7 @@ export default function ParentHomeScreen() {
         sessionSubscriptionRef.current = null;
       }
     };
-  }, [user?.id, loadSessions]);
+  }, [user?.id, loadSessions, loadRecommendedSitters]);
 
   // Real-time search duration updates for requested sessions
   useEffect(() => {
@@ -268,6 +305,19 @@ export default function ParentHomeScreen() {
     }
   };
 
+  const recentActivities = useMemo(() => {
+    const all: SessionWithDetails[] = [
+      ...activeSessions,
+      ...upcomingSessions,
+      ...requestedSessions,
+      ...completedSessions,
+    ];
+    const toDate = (s: SessionWithDetails) => {
+      const t = s.updatedAt ?? s.completedAt ?? s.startTime ?? s.createdAt;
+      return t instanceof Date ? t.getTime() : (typeof t === 'string' ? new Date(t).getTime() : 0);
+    };
+    return all.sort((a, b) => toDate(b) - toDate(a)).slice(0, 8);
+  }, [activeSessions, upcomingSessions, requestedSessions, completedSessions]);
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
@@ -287,7 +337,13 @@ export default function ParentHomeScreen() {
       <ScrollView 
         contentContainerStyle={styles.content}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={() => loadSessions(true)} />
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={() => {
+              loadSessions(true);
+              loadRecommendedSitters();
+            }}
+          />
         }
       >
         <TextInput
@@ -643,22 +699,75 @@ export default function ParentHomeScreen() {
         />
 
         <Text style={[styles.sectionTitle, { color: colors.text }]}>Recommended Sitters</Text>
-        <Card>
-          <EmptyState
-            icon="star-outline"
-            title="Coming soon"
-            message="Recommended babysitters will appear here"
-          />
-        </Card>
+        {recommendedSitters.length === 0 ? (
+          <Card>
+            <EmptyState
+              icon="star-outline"
+              title="No recommendations yet"
+              message="Top-rated sitters will appear here"
+            />
+          </Card>
+        ) : (
+          <Card>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.recommendedScroll}>
+              {recommendedSitters.map((sitter) => (
+                <TouchableOpacity
+                  key={sitter.id}
+                  style={[styles.recommendedSitterCard, { backgroundColor: (colors as any).card ?? colors.background }]}
+                  onPress={() => router.push({ pathname: '/(parent)/search', params: { sitterId: sitter.id } } as any)}
+                  activeOpacity={0.7}
+                >
+                  {sitter.profileImageUrl ? (
+                    <Image source={{ uri: sitter.profileImageUrl }} style={styles.recommendedSitterAvatar} />
+                  ) : (
+                    <View style={[styles.recommendedSitterAvatar, styles.recommendedSitterAvatarPlaceholder]}>
+                      <Ionicons name="person" size={28} color={colors.textSecondary} />
+                    </View>
+                  )}
+                  <Text style={[styles.recommendedSitterName, { color: colors.text }]} numberOfLines={1}>{sitter.displayName}</Text>
+                  <View style={styles.recommendedSitterRating}>
+                    <Ionicons name="star" size={14} color="#FFB800" />
+                    <Text style={[styles.recommendedSitterRatingText, { color: colors.textSecondary }]}>
+                      {sitter.rating != null ? sitter.rating.toFixed(1) : '—'} ({sitter.reviewCount ?? 0})
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </Card>
+        )}
 
         <Text style={[styles.sectionTitle, { color: colors.text }]}>Recent Activities</Text>
-        <Card>
-          <EmptyState
-            icon="time-outline"
-            title="Nothing yet"
-            message="Your recent activities will appear here"
-          />
-        </Card>
+        {recentActivities.length === 0 ? (
+          <Card>
+            <EmptyState
+              icon="time-outline"
+              title="Nothing yet"
+              message="Your recent activities will appear here"
+            />
+          </Card>
+        ) : (
+          <Card>
+            {recentActivities.map((session) => (
+              <TouchableOpacity
+                key={session.id}
+                style={styles.recentActivityRow}
+                onPress={() => router.push(`/(parent)/session/${session.id}` as any)}
+                activeOpacity={0.7}
+              >
+                <View style={styles.recentActivityContent}>
+                  <Text style={[styles.recentActivityTitle, { color: colors.text }]} numberOfLines={1}>
+                    {session.childNames?.length ? session.childNames.join(', ') : session.childName || 'Session'} {session.sitterName ? `with ${session.sitterName}` : ''}
+                  </Text>
+                  <Text style={[styles.recentActivityMeta, { color: colors.textSecondary }]}>
+                    {session.status === 'completed' ? 'Completed' : session.status === 'active' ? 'Active' : session.status === 'requested' ? 'Searching…' : format(session.startTime, 'MMM d, h:mm a')}
+                  </Text>
+                </View>
+                <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} />
+              </TouchableOpacity>
+            ))}
+          </Card>
+        )}
       </ScrollView>
 
       <TouchableOpacity
@@ -746,6 +855,59 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginBottom: 10,
     marginTop: 10,
+  },
+  recommendedScroll: {
+    marginHorizontal: -4,
+  },
+  recommendedSitterCard: {
+    width: 120,
+    marginHorizontal: 6,
+    padding: 12,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  recommendedSitterAvatar: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+  },
+  recommendedSitterAvatarPlaceholder: {
+    backgroundColor: '#e0e0e0',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  recommendedSitterName: {
+    fontSize: 14,
+    fontWeight: '600',
+    marginTop: 8,
+  },
+  recommendedSitterRating: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 4,
+  },
+  recommendedSitterRatingText: {
+    fontSize: 12,
+  },
+  recentActivityRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#eee',
+  },
+  recentActivityContent: {
+    flex: 1,
+  },
+  recentActivityTitle: {
+    fontSize: 15,
+    fontWeight: '500',
+  },
+  recentActivityMeta: {
+    fontSize: 13,
+    marginTop: 2,
   },
   chatbotButton: {
     position: 'absolute',
