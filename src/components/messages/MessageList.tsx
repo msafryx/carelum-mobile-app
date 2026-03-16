@@ -1,6 +1,6 @@
 /**
  * MessageList Component
- * Displays a list of conversations (sessions with messages)
+ * Displays a list of conversations (1 parent + 1 sitter = 1 conversation)
  */
 import React, { useState, useEffect, useCallback } from 'react';
 import {
@@ -14,37 +14,21 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/src/components/ui/ThemeProvider';
-import { getUserSessions } from '@/src/services/session.service';
-import { getMessages, ChatMessage } from '@/src/services/chat-messages.service';
-import { getChildById } from '@/src/services/child.service';
-import { getUserById } from '@/src/services/admin.service';
-import { Session } from '@/src/types/session.types';
-import { format, formatDistanceToNow } from 'date-fns';
-import { SESSION_STATUS } from '@/src/config/constants';
-
-interface Conversation {
-  sessionId: string;
-  session: Session;
-  otherUser: {
-    id: string;
-    name: string;
-    imageUrl?: string;
-  };
-  lastMessage?: ChatMessage;
-  unreadCount: number;
-  childName?: string;
-}
+import Card from '@/src/components/ui/Card';
+import EmptyState from '@/src/components/ui/EmptyState';
+import { getConversationsForUser, subscribeToConversationsList, ConversationWithMeta } from '@/src/services/chatService';
+import { formatDistanceToNow } from 'date-fns';
 
 interface MessageListProps {
   userId: string;
   userRole: 'parent' | 'sitter';
-  onConversationPress: (sessionId: string, otherUserId: string, otherUserName: string) => void;
+  onConversationPress: (conversationId: string, otherUserId: string, otherUserName: string) => void;
   onConversationsChange?: (hasConversations: boolean) => void;
 }
 
 export default function MessageList({ userId, userRole, onConversationPress, onConversationsChange }: MessageListProps) {
   const { colors } = useTheme();
-  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [conversations, setConversations] = useState<ConversationWithMeta[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -56,71 +40,19 @@ export default function MessageList({ userId, userRole, onConversationPress, onC
     }
 
     try {
-      // Get all sessions for this user (active, accepted, completed)
-      const [activeResult, acceptedResult, completedResult] = await Promise.all([
-        getUserSessions(userId, userRole, SESSION_STATUS.ACTIVE),
-        getUserSessions(userId, userRole, SESSION_STATUS.ACCEPTED),
-        getUserSessions(userId, userRole, SESSION_STATUS.COMPLETED),
-      ]);
-
-      const allSessions: Session[] = [
-        ...(activeResult.success ? activeResult.data || [] : []),
-        ...(acceptedResult.success ? acceptedResult.data || [] : []),
-        ...(completedResult.success ? completedResult.data || [] : []),
-      ];
-
-      // Build conversations from sessions
-      const conversationsData: Conversation[] = await Promise.all(
-        allSessions.map(async (session) => {
-          const otherUserId = userRole === 'parent' ? session.sitterId : session.parentId;
-          if (!otherUserId) return null;
-
-          const [otherUserResult, childResult, messagesResult] = await Promise.all([
-            getUserById(otherUserId),
-            session.childId ? getChildById(session.childId) : Promise.resolve({ success: false, data: null }),
-            getMessages(session.id, undefined, undefined, 30),
-          ]);
-
-          const otherUser = {
-            id: otherUserId,
-            name: otherUserResult.success && otherUserResult.data
-              ? otherUserResult.data.displayName || 'User'
-              : 'User',
-            imageUrl: otherUserResult.success && otherUserResult.data
-              ? otherUserResult.data.profileImageUrl
-              : undefined,
-          };
-          const childName = session.childId && childResult.success && childResult.data
-            ? childResult.data.name
-            : undefined;
-          const messages = messagesResult.success && messagesResult.data ? messagesResult.data : [];
-          const lastMessage = messages.length > 0 ? messages[0] : undefined;
-          const unreadCount = messages.filter(
-            (msg) => msg.receiverId === userId && !msg.readAt
-          ).length;
-
-          return {
-            sessionId: session.id,
-            session,
-            otherUser,
-            lastMessage,
-            unreadCount,
-            childName,
-          };
-        })
-      );
-
-      // Filter out nulls and sort by last message time
-      const validConversations = conversationsData.filter(
-        (conv): conv is Conversation => conv !== null
-      ).sort((a, b) => {
-        const aTime = a.lastMessage?.createdAt.getTime() || a.session.createdAt.getTime();
-        const bTime = b.lastMessage?.createdAt.getTime() || b.session.createdAt.getTime();
-        return bTime - aTime;
-      });
-
-      setConversations(validConversations);
-      onConversationsChange?.(validConversations.length > 0);
+      const result = await getConversationsForUser(userId, userRole);
+      if (result.success && result.data) {
+        const sorted = [...result.data].sort((a, b) => {
+          const aTime = a.lastMessage?.created_at ? new Date(a.lastMessage.created_at).getTime() : new Date(a.conversation.created_at).getTime();
+          const bTime = b.lastMessage?.created_at ? new Date(b.lastMessage.created_at).getTime() : new Date(b.conversation.created_at).getTime();
+          return bTime - aTime;
+        });
+        setConversations(sorted);
+        onConversationsChange?.(sorted.length > 0);
+      } else {
+        setConversations([]);
+        onConversationsChange?.(false);
+      }
     } catch (error: any) {
       console.error('Failed to load conversations:', error);
       setConversations([]);
@@ -135,28 +67,41 @@ export default function MessageList({ userId, userRole, onConversationPress, onC
     loadConversations();
   }, [loadConversations]);
 
-  const renderConversation = ({ item }: { item: Conversation }) => {
+  // Real-time: when any new message arrives in any conversation, refresh the list
+  const conversationIdsKey = conversations.length ? [...conversations.map((c) => c.conversation.id)].sort().join(',') : '';
+  useEffect(() => {
+    if (!conversationIdsKey) return;
+    const ids = conversationIdsKey.split(',');
+    const unsubscribe = subscribeToConversationsList(ids, () => loadConversations(true));
+    return () => unsubscribe();
+  }, [conversationIdsKey, loadConversations]);
+
+  const renderConversation = ({ item }: { item: ConversationWithMeta }) => {
     const timeText = item.lastMessage
-      ? formatDistanceToNow(item.lastMessage.createdAt, { addSuffix: true })
-      : format(item.session.createdAt, 'MMM dd, yyyy');
+      ? formatDistanceToNow(new Date(item.lastMessage.created_at), { addSuffix: true })
+      : formatDistanceToNow(new Date(item.conversation.created_at), { addSuffix: true });
+    const hasUnread = item.unreadCount > 0;
 
     return (
       <TouchableOpacity
-        style={[styles.conversationItem, { backgroundColor: colors.card }]}
-        onPress={() => onConversationPress(item.sessionId, item.otherUser.id, item.otherUser.name)}
-        activeOpacity={0.7}
+        style={[styles.conversationItem, { backgroundColor: (colors as any).card ?? colors.background }]}
+        onPress={() => onConversationPress(item.conversation.id, item.otherUser.id, item.otherUser.name)}
+        activeOpacity={0.8}
       >
-        {item.otherUser.imageUrl ? (
-          <Image
-            source={{ uri: item.otherUser.imageUrl }}
-            style={styles.avatar}
-            defaultSource={require('@/assets/images/adult.webp')}
-          />
-        ) : (
-          <View style={[styles.avatar, styles.avatarPlaceholder, { backgroundColor: colors.border }]}>
-            <Ionicons name="person" size={24} color={colors.textSecondary} />
-          </View>
-        )}
+        <View style={[styles.avatarWrap, hasUnread && styles.avatarWrapUnread]}>
+          {item.otherUser.imageUrl ? (
+            <Image
+              source={{ uri: item.otherUser.imageUrl }}
+              style={styles.avatar}
+              defaultSource={require('@/assets/images/adult.webp')}
+            />
+          ) : (
+            <View style={[styles.avatar, styles.avatarPlaceholder, { backgroundColor: colors.border }]}>
+              <Ionicons name="person" size={26} color={colors.textSecondary} />
+            </View>
+          )}
+          {hasUnread && <View style={[styles.unreadDot, { backgroundColor: colors.primary }]} />}
+        </View>
 
         <View style={styles.conversationContent}>
           <View style={styles.conversationHeader}>
@@ -167,22 +112,20 @@ export default function MessageList({ userId, userRole, onConversationPress, onC
               {timeText}
             </Text>
           </View>
-
           <View style={styles.conversationFooter}>
-            {item.childName && (
-              <Text style={[styles.childName, { color: colors.textSecondary }]}>
-                {item.childName} •{' '}
-              </Text>
-            )}
             <Text
-              style={[styles.lastMessage, { color: colors.textSecondary }]}
+              style={[
+                styles.lastMessage,
+                { color: colors.textSecondary },
+                hasUnread && styles.lastMessageUnread,
+              ]}
               numberOfLines={1}
             >
               {item.lastMessage?.message || 'No messages yet'}
             </Text>
-            {item.unreadCount > 0 && (
+            {hasUnread && (
               <View style={[styles.unreadBadge, { backgroundColor: colors.primary }]}>
-                <Text style={styles.unreadText}>{item.unreadCount}</Text>
+                <Text style={styles.unreadText}>{item.unreadCount > 99 ? '99+' : item.unreadCount}</Text>
               </View>
             )}
           </View>
@@ -202,14 +145,27 @@ export default function MessageList({ userId, userRole, onConversationPress, onC
   }
 
   if (conversations.length === 0) {
-    return null; // Empty state handled by parent
+    const emptyTitle = 'No messages yet';
+    const emptyMessage =
+      userRole === 'parent'
+        ? 'Your conversations with sitters will appear here after you book a session. Start a session from Home or Search to message a sitter.'
+        : 'Your conversations with parents will appear here once you accept or complete sessions.';
+    return (
+      <Card style={styles.emptyCard}>
+        <EmptyState
+          icon="chatbubble-ellipses-outline"
+          title={emptyTitle}
+          message={emptyMessage}
+        />
+      </Card>
+    );
   }
 
   return (
     <FlatList
       data={conversations}
       renderItem={renderConversation}
-      keyExtractor={(item) => item.sessionId}
+      keyExtractor={(item) => item.conversation.id}
       refreshing={refreshing}
       onRefresh={() => loadConversations(true)}
       contentContainerStyle={styles.listContent}
@@ -226,35 +182,57 @@ const styles = StyleSheet.create({
   },
   listContent: {
     padding: 16,
-    gap: 12,
+    paddingBottom: 24,
   },
   conversationItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 12,
-    borderRadius: 12,
-    gap: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    marginBottom: 2,
+    borderRadius: 16,
+    gap: 14,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 3,
+    elevation: 2,
   },
+  avatarWrap: {
+    position: 'relative',
+  },
+  avatarWrapUnread: {},
   avatar: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
+    width: 54,
+    height: 54,
+    borderRadius: 27,
   },
   avatarPlaceholder: {
     justifyContent: 'center',
     alignItems: 'center',
   },
+  unreadDot: {
+    position: 'absolute',
+    right: 0,
+    top: 0,
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    borderWidth: 2,
+    borderColor: '#fff',
+  },
   conversationContent: {
     flex: 1,
-    gap: 4,
+    minWidth: 0,
   },
   conversationHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    marginBottom: 2,
   },
   conversationName: {
-    fontSize: 16,
+    fontSize: 17,
     fontWeight: '600',
     flex: 1,
   },
@@ -265,14 +243,14 @@ const styles = StyleSheet.create({
   conversationFooter: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-  },
-  childName: {
-    fontSize: 14,
+    gap: 8,
   },
   lastMessage: {
     fontSize: 14,
     flex: 1,
+  },
+  lastMessageUnread: {
+    fontWeight: '500',
   },
   unreadBadge: {
     minWidth: 20,
@@ -281,11 +259,13 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: 6,
-    marginLeft: 8,
   },
   unreadText: {
     color: '#fff',
-    fontSize: 12,
-    fontWeight: 'bold',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  emptyCard: {
+    margin: 16,
   },
 });

@@ -1,6 +1,6 @@
 /**
  * ChatInterface Component
- * Displays a chat thread for a session with real-time messaging
+ * Conversation-based chat: 1 parent + 1 sitter = 1 conversation (real-time)
  */
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
@@ -16,24 +16,32 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/src/components/ui/ThemeProvider';
-import { getMessages, sendMessage, subscribeToMessages, ChatMessage, markMessageAsRead } from '@/src/services/chat-messages.service';
+import {
+  loadConversationMessages,
+  sendMessage as sendChatMessage,
+  subscribeToConversation,
+  markMessagesAsRead,
+  ChatMessageRow,
+} from '@/src/services/chatService';
 import { format } from 'date-fns';
 
 interface ChatInterfaceProps {
-  sessionId: string;
+  conversationId: string;
   userId: string;
+  userRole: 'parent' | 'sitter';
   otherUserName: string;
   onBack?: () => void;
 }
 
 export default function ChatInterface({
-  sessionId,
+  conversationId,
   userId,
+  userRole,
   otherUserName,
   onBack,
 }: ChatInterfaceProps) {
   const { colors } = useTheme();
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [messages, setMessages] = useState<ChatMessageRow[]>([]);
   const [inputText, setInputText] = useState('');
   const [sending, setSending] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -42,116 +50,74 @@ export default function ChatInterface({
   const loadMessages = useCallback(async () => {
     try {
       setLoading(true);
-      const result = await getMessages(sessionId, undefined, undefined, 100);
+      const result = await loadConversationMessages(conversationId, 100);
       if (result.success && result.data) {
-        // Sort by creation time (oldest first)
-        const sortedMessages = [...result.data].sort(
-          (a, b) => a.createdAt.getTime() - b.createdAt.getTime()
-        );
-        setMessages(sortedMessages);
-
-        // Mark unread messages as read
-        const unreadMessages = sortedMessages.filter(
-          (msg) => msg.receiverId === userId && !msg.readAt && msg.id
-        );
-        for (const msg of unreadMessages) {
-          if (msg.id) {
-            await markMessageAsRead(msg.id);
-          }
-        }
-
-        // Scroll to bottom after a short delay
-        setTimeout(() => {
-          flatListRef.current?.scrollToEnd({ animated: false });
-        }, 100);
+        setMessages(result.data);
+        await markMessagesAsRead(conversationId, userId);
+        setTimeout(() => flatListRef.current?.scrollToEnd({ animated: false }), 100);
       }
     } catch (error: any) {
       console.error('Failed to load messages:', error);
     } finally {
       setLoading(false);
     }
-  }, [sessionId, userId]);
+  }, [conversationId, userId]);
 
   useEffect(() => {
     loadMessages();
 
-    // Subscribe to new messages
-    const unsubscribe = subscribeToMessages(sessionId, userId, (newMessage) => {
+    const unsubscribe = subscribeToConversation(conversationId, (payload: ChatMessageRow) => {
+      const newMessage = payload as ChatMessageRow;
       setMessages((prev) => {
-        // Check if message already exists
-        if (prev.some((msg) => msg.id === newMessage.id)) {
-          return prev;
-        }
-        // Add new message and sort
+        if (prev.some((m) => m.id === newMessage.id)) return prev;
         const updated = [...prev, newMessage].sort(
-          (a, b) => a.createdAt.getTime() - b.createdAt.getTime()
+          (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
         );
-        // Scroll to bottom
-        setTimeout(() => {
-          flatListRef.current?.scrollToEnd({ animated: true });
-        }, 100);
+        setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
+        if (newMessage.sender_id !== userId && newMessage.id) {
+          markMessagesAsRead(conversationId, userId);
+        }
         return updated;
       });
-
-      // Mark as read if we're the receiver
-      if (newMessage.receiverId === userId && newMessage.id) {
-        markMessageAsRead(newMessage.id);
-      }
     });
 
-    return () => {
-      unsubscribe();
-    };
-  }, [sessionId, userId, loadMessages]);
+    return () => unsubscribe();
+  }, [conversationId, userId, loadMessages]);
 
   const handleSend = async () => {
     if (!inputText.trim() || sending) return;
 
-    const messageText = inputText.trim();
+    const text = inputText.trim();
     setInputText('');
     setSending(true);
 
     try {
-      // Determine receiver ID (the other user in the session)
-      // We need to get the session to find the other user
-      const { getSessionById } = await import('@/src/services/session.service');
-      const sessionResult = await getSessionById(sessionId);
-      
-      if (!sessionResult.success || !sessionResult.data) {
-        throw new Error('Session not found');
-      }
-
-      const session = sessionResult.data;
-      const receiverId = session.parentId === userId ? session.sitterId : session.parentId;
-
-      if (!receiverId) {
-        throw new Error('Receiver ID not found');
-      }
-
-      const result = await sendMessage({
-        sessionId,
-        senderId: userId,
-        receiverId,
-        message: messageText,
-        messageType: 'text',
-      });
-
+      const result = await sendChatMessage(conversationId, userId, userRole, text, 'text');
       if (!result.success) {
-        // Restore input text on error
-        setInputText(messageText);
+        setInputText(text);
         console.error('Failed to send message:', result.error);
       }
     } catch (error: any) {
+      setInputText(text);
       console.error('Failed to send message:', error);
-      setInputText(messageText);
     } finally {
       setSending(false);
     }
   };
 
-  const renderMessage = ({ item }: { item: ChatMessage }) => {
-    const isSent = item.senderId === userId;
-    const showTime = true; // Always show time for now
+  const renderMessage = ({ item }: { item: ChatMessageRow }) => {
+    const isSystem = item.sender_role === 'system';
+    const isSent = item.sender_id === userId;
+
+    if (isSystem) {
+      return (
+        <View style={styles.systemMessageWrap}>
+          <View style={[styles.systemBubble, { backgroundColor: (colors as any).card ?? colors.background, borderColor: colors.border }]}>
+            <Text style={[styles.systemText, { color: colors.textSecondary }]}>{item.message}</Text>
+          </View>
+        </View>
+      );
+    }
 
     return (
       <View
@@ -163,9 +129,9 @@ export default function ChatInterface({
         <View
           style={[
             styles.messageBubble,
+            isSent ? styles.messageBubbleSent : styles.messageBubbleReceived,
             {
-              backgroundColor: isSent ? colors.primary : colors.card,
-              borderColor: colors.border,
+              backgroundColor: isSent ? colors.primary : (colors as any).card ?? colors.background,
             },
           ]}
         >
@@ -177,26 +143,24 @@ export default function ChatInterface({
           >
             {item.message}
           </Text>
-          {showTime && (
-            <View style={styles.messageFooter}>
-              <Text
-                style={[
-                  styles.messageTime,
-                  { color: isSent ? colors.white + 'CC' : colors.textSecondary },
-                ]}
-              >
-                {format(item.createdAt, 'h:mm a')}
-              </Text>
-              {isSent && item.readAt && (
-                <Ionicons
-                  name="checkmark-done"
-                  size={14}
-                  color={colors.white + 'CC'}
-                  style={styles.readIcon}
-                />
-              )}
-            </View>
-          )}
+          <View style={styles.messageFooter}>
+            <Text
+              style={[
+                styles.messageTime,
+                { color: isSent ? colors.white + 'CC' : colors.textSecondary },
+              ]}
+            >
+              {format(new Date(item.created_at), 'h:mm a')}
+            </Text>
+            {isSent && item.read_at && (
+              <Ionicons
+                name="checkmark-done"
+                size={14}
+                color={colors.white + 'CC'}
+                style={styles.readIcon}
+              />
+            )}
+          </View>
         </View>
       </View>
     );
@@ -217,11 +181,11 @@ export default function ChatInterface({
       keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
     >
       {onBack && (
-        <View style={[styles.header, { backgroundColor: colors.card, borderBottomColor: colors.border }]}>
-          <TouchableOpacity onPress={onBack} style={styles.backButton}>
-            <Ionicons name="arrow-back" size={24} color={colors.text} />
+        <View style={[styles.header, styles.headerShadow, { backgroundColor: (colors as any).card ?? colors.background }]}>
+          <TouchableOpacity onPress={onBack} style={styles.backButton} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
+            <Ionicons name="arrow-back" size={26} color={colors.text} />
           </TouchableOpacity>
-          <Text style={[styles.headerTitle, { color: colors.text }]}>{otherUserName}</Text>
+          <Text style={[styles.headerTitle, { color: colors.text }]} numberOfLines={1}>{otherUserName}</Text>
           <View style={styles.backButton} />
         </View>
       )}
@@ -230,12 +194,9 @@ export default function ChatInterface({
         ref={flatListRef}
         data={messages}
         renderItem={renderMessage}
-        keyExtractor={(item, index) => item.id || `message-${index}`}
+        keyExtractor={(item) => item.id}
         contentContainerStyle={styles.messagesList}
-        inverted={false}
-        onContentSizeChange={() => {
-          flatListRef.current?.scrollToEnd({ animated: false });
-        }}
+        onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: false })}
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
             <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
@@ -245,9 +206,9 @@ export default function ChatInterface({
         }
       />
 
-      <View style={[styles.inputContainer, { backgroundColor: colors.card, borderTopColor: colors.border }]}>
+      <View style={[styles.inputContainer, styles.inputContainerShadow, { backgroundColor: (colors as any).card ?? colors.background }]}>
         <TextInput
-          style={[styles.input, { backgroundColor: colors.background, color: colors.text }]}
+          style={[styles.input, { backgroundColor: colors.background, color: colors.text, borderColor: colors.border }]}
           placeholder="Type a message..."
           placeholderTextColor={colors.textSecondary}
           value={inputText}
@@ -268,7 +229,7 @@ export default function ChatInterface({
           {sending ? (
             <ActivityIndicator size="small" color={colors.white} />
           ) : (
-            <Ionicons name="send" size={20} color={colors.white} />
+            <Ionicons name="send" size={22} color={colors.white} />
           )}
         </TouchableOpacity>
       </View>
@@ -287,13 +248,19 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 14,
+  },
+  headerShadow: {
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 4,
+    elevation: 3,
   },
   backButton: {
-    width: 40,
-    height: 40,
+    width: 44,
+    height: 44,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -302,13 +269,15 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '600',
     textAlign: 'center',
+    marginHorizontal: 8,
   },
   messagesList: {
-    padding: 16,
-    gap: 8,
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 12,
   },
   messageContainer: {
-    marginBottom: 8,
+    marginBottom: 10,
   },
   sentMessage: {
     alignItems: 'flex-end',
@@ -317,14 +286,30 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
   },
   messageBubble: {
-    maxWidth: '75%',
-    padding: 12,
-    borderRadius: 16,
-    borderWidth: 1,
+    maxWidth: '80%',
+    paddingVertical: 11,
+    paddingHorizontal: 14,
+    borderRadius: 18,
+  },
+  messageBubbleSent: {
+    borderBottomRightRadius: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.08,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  messageBubbleReceived: {
+    borderBottomLeftRadius: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 1,
   },
   messageText: {
-    fontSize: 15,
-    lineHeight: 20,
+    fontSize: 16,
+    lineHeight: 22,
   },
   messageFooter: {
     flexDirection: 'row',
@@ -336,36 +321,58 @@ const styles = StyleSheet.create({
     fontSize: 11,
   },
   readIcon: {
-    marginLeft: 4,
+    marginLeft: 2,
+  },
+  systemMessageWrap: {
+    alignItems: 'center',
+    marginVertical: 10,
+  },
+  systemBubble: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 14,
+    borderWidth: 1,
+    maxWidth: '90%',
+  },
+  systemText: {
+    fontSize: 13,
+    textAlign: 'center',
   },
   emptyContainer: {
-    padding: 40,
+    padding: 48,
     alignItems: 'center',
   },
   emptyText: {
-    fontSize: 14,
+    fontSize: 15,
     textAlign: 'center',
   },
   inputContainer: {
     flexDirection: 'row',
     alignItems: 'flex-end',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderTopWidth: 1,
-    gap: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    gap: 10,
+  },
+  inputContainerShadow: {
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 4,
+    elevation: 8,
   },
   input: {
     flex: 1,
-    borderRadius: 20,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
+    borderRadius: 22,
+    borderWidth: 1,
+    paddingHorizontal: 18,
+    paddingVertical: 12,
     maxHeight: 100,
-    fontSize: 15,
+    fontSize: 16,
   },
   sendButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     justifyContent: 'center',
     alignItems: 'center',
   },

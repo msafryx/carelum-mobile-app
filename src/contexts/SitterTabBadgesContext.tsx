@@ -5,7 +5,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import { useAuth } from '@/src/hooks/useAuth';
 import { discoverAvailableSessions } from '@/src/services/session.service';
-import { getUserAlerts } from '@/src/services/alert.service';
+import { getUserAlerts, subscribeToUserAlerts } from '@/src/services/alert.service';
 
 interface SitterTabBadgesContextValue {
   requestCount: number;
@@ -62,6 +62,15 @@ export function SitterTabBadgesProvider({ children }: { children: React.ReactNod
     refreshRequestCount();
     refreshNotificationCount();
   }, [user?.id, refreshRequestCount, refreshNotificationCount]);
+
+  // Realtime: when alerts change, refresh notification badge so tab updates without pull
+  useEffect(() => {
+    if (!user?.id) return;
+    const unsubscribe = subscribeToUserAlerts(user.id, 'sitter', () => {
+      refreshNotificationCount();
+    });
+    return () => unsubscribe();
+  }, [user?.id, refreshNotificationCount]);
 
   const value: SitterTabBadgesContextValue = {
     requestCount,

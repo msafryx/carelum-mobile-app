@@ -4,7 +4,7 @@
  */
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import { useAuth } from '@/src/hooks/useAuth';
-import { getUserAlerts } from '@/src/services/alert.service';
+import { getUserAlerts, subscribeToUserAlerts } from '@/src/services/alert.service';
 
 interface ParentTabBadgesContextValue {
   notificationCount: number;
@@ -38,6 +38,15 @@ export function ParentTabBadgesProvider({ children }: { children: React.ReactNod
       return;
     }
     refreshNotificationCount();
+  }, [user?.id, refreshNotificationCount]);
+
+  // Realtime: when alerts change, refresh badge count so tab updates without pull
+  useEffect(() => {
+    if (!user?.id) return;
+    const unsubscribe = subscribeToUserAlerts(user.id, 'parent', () => {
+      refreshNotificationCount();
+    });
+    return () => unsubscribe();
   }, [user?.id, refreshNotificationCount]);
 
   const value: ParentTabBadgesContextValue = {

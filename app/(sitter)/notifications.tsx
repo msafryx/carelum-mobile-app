@@ -17,7 +17,7 @@ import SitterHamburgerMenu from '@/src/components/ui/SitterHamburgerMenu';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { useAuth } from '@/src/hooks/useAuth';
 import { useSitterTabBadges } from '@/src/contexts/SitterTabBadgesContext';
-import { getUserAlerts, markAlertAsViewed } from '@/src/services/alert.service';
+import { getUserAlerts, markAlertAsViewed, subscribeToUserAlerts } from '@/src/services/alert.service';
 import type { Alert } from '@/src/services/alert.service';
 import { formatDistanceToNow } from 'date-fns';
 
@@ -72,6 +72,13 @@ export default function SitterNotificationsScreen() {
       loadAlerts();
     }, [loadAlerts])
   );
+
+  // Realtime: when alerts change (new or updated), reload list so no pull needed
+  useEffect(() => {
+    if (!user?.id) return;
+    const unsubscribe = subscribeToUserAlerts(user.id, 'sitter', () => loadAlerts(true));
+    return () => unsubscribe();
+  }, [user?.id, loadAlerts]);
 
   const handleAlertPress = async (alert: Alert) => {
     if (alert.id && alert.status === 'new') {

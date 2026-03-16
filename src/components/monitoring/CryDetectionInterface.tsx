@@ -34,10 +34,16 @@ interface CryDetectionInterfaceProps {
   sitterId: string;
   isEnabled: boolean;
   onToggle?: (enabled: boolean) => void;
-  /** When true, recording was started by "Start Monitoring" – show active state and hide Start button */
+  /** When true, recording was started by "Start Monitoring" – show active state */
   recordingStartedByMonitoring?: boolean;
   /** Timestamp (ms) when session last sent audio to AI (for monitoring flow) – so user sees "audio transferred" */
   lastChunkSentAtFromMonitoring?: number | null;
+  /** When true, monitoring is on (sitter). Use to always show Start/Stop Recording when monitoring is on. */
+  isMonitoringActive?: boolean;
+  /** When monitoring is on and user taps Start Recording, call this to start the session's chunked loop (sitter only). */
+  onStartMonitoringRecording?: () => void | Promise<void>;
+  /** When monitoring recording is active and user taps Stop Recording, call this to stop the loop only (sitter only). */
+  onStopMonitoringRecording?: () => void;
 }
 
 export default function CryDetectionInterface({
@@ -49,6 +55,9 @@ export default function CryDetectionInterface({
   onToggle,
   recordingStartedByMonitoring = false,
   lastChunkSentAtFromMonitoring = null,
+  isMonitoringActive = false,
+  onStartMonitoringRecording,
+  onStopMonitoringRecording,
 }: CryDetectionInterfaceProps) {
   const { colors, spacing } = useTheme();
   const [recording, setRecording] = useState<Recording | null>(null);
@@ -403,7 +412,9 @@ export default function CryDetectionInterface({
           <View style={[styles.monitoringActiveRow, { backgroundColor: colors.primary + '15' }]}>
             <Ionicons name="checkmark-circle" size={18} color={colors.primary} />
             <Text style={[styles.monitoringActiveText, { color: colors.primary }]}>
-              Listening… (started with Monitoring). Use "Stop Monitoring" above to stop.
+              {onStopMonitoringRecording
+                ? 'Listening… (started with Monitoring). Tap "Stop Recording" below to stop, or "Stop Monitoring" above to stop everything.'
+                : 'Listening… (started with Monitoring). Use "Stop Monitoring" above to stop.'}
             </Text>
           </View>
         )}
@@ -477,7 +488,13 @@ export default function CryDetectionInterface({
           {!effectivelyRecording ? (
             <TouchableOpacity
               style={[styles.recordButton, { backgroundColor: colors.error }]}
-              onPress={startRecording}
+              onPress={async () => {
+                if (isMonitoringActive && onStartMonitoringRecording) {
+                  await onStartMonitoringRecording();
+                } else {
+                  startRecording();
+                }
+              }}
               disabled={!hasPermission}
             >
               <Ionicons name="mic" size={24} color={colors.white} />
@@ -485,7 +502,17 @@ export default function CryDetectionInterface({
                 Start Recording
               </Text>
             </TouchableOpacity>
-          ) : recordingStartedByMonitoring ? null : (
+          ) : recordingStartedByMonitoring && onStopMonitoringRecording ? (
+            <TouchableOpacity
+              style={[styles.stopButton, { backgroundColor: colors.textSecondary }]}
+              onPress={onStopMonitoringRecording}
+            >
+              <Ionicons name="stop" size={24} color={colors.white} />
+              <Text style={[styles.stopButtonText, { color: colors.white }]}>
+                Stop Recording
+              </Text>
+            </TouchableOpacity>
+          ) : !recordingStartedByMonitoring ? (
             <TouchableOpacity
               style={[styles.stopButton, { backgroundColor: colors.textSecondary }]}
               onPress={stopRecording}
@@ -495,7 +522,7 @@ export default function CryDetectionInterface({
                 Stop Recording
               </Text>
             </TouchableOpacity>
-          )}
+          ) : null}
         </View>
 
         {!hasPermission && (

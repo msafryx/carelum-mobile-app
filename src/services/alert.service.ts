@@ -440,3 +440,36 @@ export function subscribeToSessionAlerts(
     supabase.removeChannel(channel);
   };
 }
+
+/**
+ * Subscribe to alerts for a user (parent or sitter) so notifications and badge update in realtime.
+ * Call onUpdate() when any alert is inserted or updated for this user.
+ */
+export function subscribeToUserAlerts(
+  userId: string,
+  role: 'parent' | 'sitter',
+  onUpdate: () => void
+): () => void {
+  if (!isSupabaseConfigured() || !supabase) {
+    return () => {};
+  }
+
+  const column = role === 'parent' ? 'parent_id' : 'sitter_id';
+  const channel = supabase
+    .channel(`user-alerts-${role}-${userId}`)
+    .on(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        table: 'alerts',
+        filter: `${column}=eq.${userId}`,
+      },
+      () => onUpdate()
+    )
+    .subscribe();
+
+  return () => {
+    supabase.removeChannel(channel);
+  };
+}

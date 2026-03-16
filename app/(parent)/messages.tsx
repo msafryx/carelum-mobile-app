@@ -3,8 +3,6 @@ import { View, StyleSheet, TouchableOpacity, Modal } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/src/components/ui/ThemeProvider';
 import Header from '@/src/components/ui/Header';
-import Card from '@/src/components/ui/Card';
-import EmptyState from '@/src/components/ui/EmptyState';
 import HamburgerMenu from '@/src/components/ui/HamburgerMenu';
 import MessageList from '@/src/components/messages/MessageList';
 import ChatInterface from '@/src/components/messages/ChatInterface';
@@ -16,19 +14,19 @@ export default function MessagesScreen() {
   const { user, userProfile } = useAuth();
   const router = useRouter();
   const [menuVisible, setMenuVisible] = useState(false);
-  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
   const [selectedOtherUserId, setSelectedOtherUserId] = useState<string | null>(null);
   const [selectedOtherUserName, setSelectedOtherUserName] = useState<string | null>(null);
   const [hasConversations, setHasConversations] = useState(false);
 
-  const handleConversationPress = (sessionId: string, otherUserId: string, otherUserName: string) => {
-    setSelectedSessionId(sessionId);
+  const handleConversationPress = (conversationId: string, otherUserId: string, otherUserName: string) => {
+    setSelectedConversationId(conversationId);
     setSelectedOtherUserId(otherUserId);
     setSelectedOtherUserName(otherUserName);
   };
 
   const handleCloseChat = () => {
-    setSelectedSessionId(null);
+    setSelectedConversationId(null);
     setSelectedOtherUserId(null);
     setSelectedOtherUserName(null);
   };
@@ -54,27 +52,19 @@ export default function MessagesScreen() {
           onConversationPress={handleConversationPress}
           onConversationsChange={setHasConversations}
         />
-        {selectedSessionId === null && !hasConversations && (
-          <Card style={styles.emptyCard}>
-          <EmptyState
-            icon="chatbubble-ellipses-outline"
-            title="No Messages"
-              message="Your conversations will appear here. Start a session to begin messaging."
-          />
-        </Card>
-        )}
       </View>
 
       <Modal
-        visible={selectedSessionId !== null}
+        visible={selectedConversationId !== null}
         animationType="slide"
         presentationStyle="pageSheet"
         onRequestClose={handleCloseChat}
       >
-        {selectedSessionId && selectedOtherUserId && selectedOtherUserName && (
+        {selectedConversationId && selectedOtherUserId && selectedOtherUserName && (
           <ChatInterface
-            sessionId={selectedSessionId}
+            conversationId={selectedConversationId}
             userId={user.id}
+            userRole="parent"
             otherUserName={selectedOtherUserName}
             onBack={handleCloseChat}
           />
@@ -102,8 +92,5 @@ const styles = StyleSheet.create({
   },
   content: {
     flex: 1,
-  },
-  emptyCard: {
-    margin: 16,
   },
 });

@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   StyleSheet,
@@ -17,7 +17,7 @@ import HamburgerMenu from '@/src/components/ui/HamburgerMenu';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { useAuth } from '@/src/hooks/useAuth';
 import { useParentTabBadges } from '@/src/contexts/ParentTabBadgesContext';
-import { getUserAlerts, markAlertAsViewed } from '@/src/services/alert.service';
+import { getUserAlerts, markAlertAsViewed, subscribeToUserAlerts } from '@/src/services/alert.service';
 import type { Alert } from '@/src/services/alert.service';
 import { formatDistanceToNow } from 'date-fns';
 
@@ -73,6 +73,13 @@ export default function ParentNotificationsScreen() {
       loadAlerts();
     }, [loadAlerts])
   );
+
+  // Realtime: when alerts change (new or updated), reload list so no pull needed
+  useEffect(() => {
+    if (!user?.id) return;
+    const unsubscribe = subscribeToUserAlerts(user.id, 'parent', () => loadAlerts(true));
+    return () => unsubscribe();
+  }, [user?.id, loadAlerts]);
 
   const handleAlertPress = async (alert: Alert) => {
     if (alert.id && alert.status === 'new') {
