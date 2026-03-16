@@ -310,7 +310,6 @@ export default function SitterSessionDetailScreen() {
   const lastAudioErrorLogRef = useRef<number>(0);
   const AUDIO_ERROR_LOG_INTERVAL_MS = 30000;
   const cryDetectionLoopRef = useRef<{ cancelled: boolean }>({ cancelled: false });
-  const cryDetectionLoopGenerationRef = useRef(0);
   const isMonitoringActiveRef = useRef(false);
   useEffect(() => {
     if (!session?.location || !id) return;
@@ -461,7 +460,18 @@ export default function SitterSessionDetailScreen() {
     handleToggleGPS(true);
     handleToggleCryDetection(true);
 
-    // Don't auto-start cry detection: user taps "Start Recording" in the Cry Detection card when ready
+    // Start cry detection (sets isRecording true after previous loop exits so REC shows reliably after Stop → Start)
+    try {
+      await startCryDetection();
+    } catch (err: any) {
+      setIsRecording(false);
+      setActionLoading(false);
+      Alert.alert(
+        'Cry detection could not start',
+        err?.message || 'Microphone or recording failed. GPS tracking is still on.'
+      );
+      return;
+    }
     setActionLoading(false);
   };
 
@@ -504,19 +514,7 @@ export default function SitterSessionDetailScreen() {
     // (Backend state already updated via /monitoring)
   };
 
-  // Stop only the cry detection loop (recording); monitoring stays on. Lets user see "Start Recording" again.
-  const handleStopCryDetectionOnly = () => {
-    cryDetectionLoopRef.current.cancelled = true;
-    if (recording) {
-      recording.stopAndUnloadAsync().catch(() => {});
-      setCurrentRecording(null);
-      setRecording(null);
-    }
-    setIsRecording(false);
-    setLastAudioChunkSentAt(null);
-  };
-
-  // Start cry detection: chunked recording every 5s. Show REC when user taps Start Recording (monitoring on).
+  // Start cry detection: chunked recording every 5s. Show REC when monitoring starts (including after Stop → Start).
   const startCryDetection = async () => {
     try {
       const { status } = await requestAudioPermissionsAsync();
@@ -535,28 +533,17 @@ export default function SitterSessionDetailScreen() {
       cryDetectionLoopRef.current.cancelled = true;
       await new Promise((r) => setTimeout(r, 400));
       cryDetectionLoopRef.current = { cancelled: false };
-      cryDetectionLoopGenerationRef.current += 1;
-      const thisLoopGeneration = cryDetectionLoopGenerationRef.current;
       setIsRecording(true);
 
       const CHUNK_SEC = 5;
       const loop = async () => {
-        try {
-          while (!cryDetectionLoopRef.current.cancelled && session && user && id) {
-            const sess = session;
-            let chunkRecording: Recording;
-            try {
-              const result = await Recording.createAsync(
-                RecordingOptionsPresets.HIGH_QUALITY
-              );
-              chunkRecording = result.recording;
-            } catch (createErr: any) {
-              console.warn('Cry detection: failed to start recording chunk', createErr?.message ?? createErr);
-              setIsRecording(false);
-              return;
-            }
-            setCurrentRecording(chunkRecording);
-            setRecording(chunkRecording);
+        while (!cryDetectionLoopRef.current.cancelled && session && user && id) {
+          const sess = session;
+          const { recording: chunkRecording } = await Recording.createAsync(
+            RecordingOptionsPresets.HIGH_QUALITY
+          );
+          setCurrentRecording(chunkRecording);
+          setRecording(chunkRecording);
 
           await new Promise<void>((resolve) => {
             const t = setTimeout(resolve, CHUNK_SEC * 1000);
@@ -658,20 +645,11 @@ export default function SitterSessionDetailScreen() {
             }
           }
         }
-        } catch (err: any) {
-          // Loop exited due to error – clear state so Start Recording is visible again after toggle off/on
-          console.warn('Cry detection loop error', err?.message ?? err);
-          setIsRecording(false);
-        } finally {
-          // Only clear when this loop is still the active one (avoids old loop clearing after new loop started)
-          if (cryDetectionLoopGenerationRef.current === thisLoopGeneration) {
-            setIsRecording(false);
-          }
-        }
+        // Only clear REC when this loop exited because monitoring was stopped (not when a new loop took over)
+        if (cryDetectionLoopRef.current.cancelled) setIsRecording(false);
       };
       loop();
     } catch (err: any) {
-      setIsRecording(false);
       Alert.alert('Error', `Failed to start recording: ${err.message}`);
     }
   };
@@ -1259,9 +1237,6 @@ export default function SitterSessionDetailScreen() {
                 onToggle={handleToggleCryDetection}
                 recordingStartedByMonitoring={isMonitoringActive && isRecording}
                 lastChunkSentAtFromMonitoring={lastAudioChunkSentAt}
-                isMonitoringActive={isMonitoringActive}
-                onStartMonitoringRecording={startCryDetection}
-                onStopMonitoringRecording={handleStopCryDetectionOnly}
               />
             )}
 

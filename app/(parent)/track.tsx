@@ -23,7 +23,8 @@ import CryDetectionIndicator from '@/src/components/session/CryDetectionIndicato
 import EmergencyCallButton from '@/src/components/session/EmergencyCallButton';
 import { useAuth } from '@/src/hooks/useAuth';
 import { getUserSessions } from '@/src/services/session.service';
-import { getSessionById, getSessionGPSTracking, subscribeToGPSUpdates } from '@/src/services/monitoring.service';
+import { getSessionById } from '@/src/services/session.service';
+import { getSessionGPSTracking, subscribeToGPSUpdates } from '@/src/services/monitoring.service';
 import { getSessionAlerts, subscribeToSessionAlerts, Alert as AlertType } from '@/src/services/alert.service';
 import { Session } from '@/src/types/session.types';
 import { LocationUpdate } from '@/src/types/session.types';
