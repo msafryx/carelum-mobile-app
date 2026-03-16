@@ -72,14 +72,15 @@ export default function MessageList({ userId, userRole, onConversationPress, onC
       // Build conversations from sessions
       const conversationsData: Conversation[] = await Promise.all(
         allSessions.map(async (session) => {
-          // Get the other user (parent or sitter)
           const otherUserId = userRole === 'parent' ? session.sitterId : session.parentId;
-          if (!otherUserId) {
-            return null;
-          }
+          if (!otherUserId) return null;
 
-          // Get other user details
-          const otherUserResult = await getUserById(otherUserId);
+          const [otherUserResult, childResult, messagesResult] = await Promise.all([
+            getUserById(otherUserId),
+            session.childId ? getChildById(session.childId) : Promise.resolve({ success: false, data: null }),
+            getMessages(session.id, undefined, undefined, 30),
+          ]);
+
           const otherUser = {
             id: otherUserId,
             name: otherUserResult.success && otherUserResult.data
@@ -89,29 +90,14 @@ export default function MessageList({ userId, userRole, onConversationPress, onC
               ? otherUserResult.data.profileImageUrl
               : undefined,
           };
-
-          // Get child name
-          let childName: string | undefined;
-          if (session.childId) {
-            const childResult = await getChildById(session.childId);
-            if (childResult.success && childResult.data) {
-              childName = childResult.data.name;
-            }
-          }
-
-          // Get last message
-          const messagesResult = await getMessages(session.id, undefined, undefined, 1);
-          const lastMessage = messagesResult.success && messagesResult.data && messagesResult.data.length > 0
-            ? messagesResult.data[0]
+          const childName = session.childId && childResult.success && childResult.data
+            ? childResult.data.name
             : undefined;
-
-          // Count unread messages (messages not read by current user)
-          const allMessagesResult = await getMessages(session.id, undefined, undefined, 100);
-          const unreadCount = allMessagesResult.success && allMessagesResult.data
-            ? allMessagesResult.data.filter(
-                (msg) => msg.receiverId === userId && !msg.readAt
-              ).length
-            : 0;
+          const messages = messagesResult.success && messagesResult.data ? messagesResult.data : [];
+          const lastMessage = messages.length > 0 ? messages[0] : undefined;
+          const unreadCount = messages.filter(
+            (msg) => msg.receiverId === userId && !msg.readAt
+          ).length;
 
           return {
             sessionId: session.id,

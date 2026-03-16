@@ -45,18 +45,15 @@ export default function SitterNotificationsScreen() {
         // Mark all as viewed when user opens Notifications so badge count goes down
         const newAlerts = sorted.filter((a) => a.status === 'new');
         if (newAlerts.length > 0) {
-          // Optimistic: clear badge immediately so tab bar updates
           badges?.setNotificationCount?.(0);
-          for (const a of newAlerts) {
-            if (a.id) await markAlertAsViewed(a.id);
-          }
-          // Update local state so list shows items as read
           setAlerts((prev) =>
             prev.map((a) => (a.status === 'new' ? { ...a, status: 'viewed' as const } : a))
           );
+          await Promise.all(
+            newAlerts.map((a) => (a.id ? markAlertAsViewed(a.id) : Promise.resolve()))
+          );
         }
-        // Always sync badge with server so count is correct (e.g. after opening tab or when all were already read)
-        await badges?.refreshNotificationCount?.();
+        badges?.refreshNotificationCount?.().catch(() => {});
       } else {
         setAlerts([]);
         badges?.setNotificationCount?.(0);

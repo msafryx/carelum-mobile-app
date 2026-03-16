@@ -8,7 +8,7 @@ from decimal import Decimal
 
 from app.utils.auth import verify_token, CurrentUser, security
 from app.utils.error_handler import handle_error, AppError
-from app.utils.database import get_supabase, get_supabase_with_auth
+from app.utils.database import get_supabase, get_supabase_with_auth, get_supabase_service_role
 from fastapi.security import HTTPAuthorizationCredentials
 
 router = APIRouter()
@@ -36,6 +36,8 @@ class UserProfileResponse(BaseModel):
     lastActiveAt: Optional[str] = None  # Last active timestamp
     latitude: Optional[float] = None  # Current location latitude
     longitude: Optional[float] = None  # Current location longitude
+    rating: Optional[float] = None  # Average rating (sitters only, from reviews)
+    reviewCount: Optional[int] = None  # Number of reviews (sitters only)
     createdAt: str
     updatedAt: str
 
@@ -396,7 +398,8 @@ async def get_verified_sitters(
     parent_longitude: Optional[float] = Query(None, description="Parent's longitude (for nearby search)"),
     parent_city: Optional[str] = Query(None, description="Parent's city (for city search)"),
     max_distance_km: Optional[float] = Query(None, description="Maximum distance in km (for nearby search)"),
-    sitter_id: Optional[str] = Query(None, description="Specific sitter ID (for invite mode)")
+    sitter_id: Optional[str] = Query(None, description="Specific sitter ID (for invite mode)"),
+    sort_by_rating: bool = Query(False, description="Sort by average rating descending (for recommended sitters)")
 ):
     """
     Get list of verified sitters (for parents to browse and select)
@@ -491,6 +494,23 @@ async def get_verified_sitters(
                 )
             raise
         
+        # Fetch review stats for all sitter ids (service role so we can read all reviews for listing)
+        sitter_ids = [u["id"] for u in (response.data or [])]
+        review_stats = {}  # reviewee_id -> {"avg": float, "count": int}
+        if sitter_ids:
+            try:
+                sb_svc = get_supabase_service_role()
+                if sb_svc:
+                    rev_res = sb_svc.table("reviews").select("reviewee_id, rating").in_("reviewee_id", sitter_ids).execute()
+                    from collections import defaultdict
+                    by_reviewee = defaultdict(list)
+                    for row in (rev_res.data or []):
+                        by_reviewee[row["reviewee_id"]].append(float(row["rating"]))
+                    for reviewee_id, ratings in by_reviewee.items():
+                        review_stats[reviewee_id] = {"avg": round(sum(ratings) / len(ratings), 1), "count": len(ratings)}
+            except Exception as rev_err:
+                print(f"⚠️ Could not fetch review stats: {rev_err}")
+
         # Convert to response format and apply distance filtering for nearby mode
         sitters = []
         for user_data in (response.data or []):
@@ -548,10 +568,14 @@ async def get_verified_sitters(
                 lastActiveAt=user_data.get("last_active_at"),
                 latitude=float(user_data["latitude"]) if user_data.get("latitude") else None,
                 longitude=float(user_data["longitude"]) if user_data.get("longitude") else None,
+                rating=review_stats.get(user_data["id"], {}).get("avg"),
+                reviewCount=review_stats.get(user_data["id"], {}).get("count"),
                 createdAt=user_data["created_at"],
                 updatedAt=user_data.get("updated_at", user_data["created_at"])
             ))
         
+        if sort_by_rating:
+            sitters.sort(key=lambda s: (s.rating is None, -(s.rating or 0)), reverse=False)
         # Limit results after filtering
         sitters = sitters[:limit]
         
